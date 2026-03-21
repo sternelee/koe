@@ -78,6 +78,7 @@ All config files live in `~/.koe/` and are auto-generated on first launch:
 ~/.koe/
 ├── config.yaml          # Main configuration
 ├── dictionary.txt       # User dictionary (hotwords + LLM correction)
+├── history.db           # Usage statistics (SQLite, auto-created)
 ├── system_prompt.txt    # LLM system prompt (customizable)
 └── user_prompt.txt      # LLM user prompt template (customizable)
 ```
@@ -143,6 +144,40 @@ The LLM correction behavior is fully customizable via:
 - `~/.koe/user_prompt.txt` — template with `{{asr_text}}` and `{{dictionary_entries}}` placeholders
 
 The default prompts are tuned for software developers working in mixed Chinese-English, but you can adapt them for any language or domain.
+
+## Usage Statistics
+
+Koe automatically tracks your voice input usage in a local SQLite database at `~/.koe/history.db`. You can view a summary directly in the menu bar dropdown — it shows total characters, words, recording time, session count, and input speed.
+
+### Database Schema
+
+```sql
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,   -- Unix timestamp
+    duration_ms INTEGER NOT NULL, -- Recording duration in milliseconds
+    text TEXT NOT NULL,            -- Final transcribed text
+    char_count INTEGER NOT NULL,  -- CJK character count
+    word_count INTEGER NOT NULL   -- English word count
+);
+```
+
+### Querying Your Data
+
+You can query the database directly with `sqlite3`:
+
+```bash
+# View all sessions
+sqlite3 ~/.koe/history.db "SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 10;"
+
+# Total stats
+sqlite3 ~/.koe/history.db "SELECT COUNT(*) as sessions, SUM(duration_ms)/1000 as total_seconds, SUM(char_count) as chars, SUM(word_count) as words FROM sessions;"
+
+# Daily breakdown
+sqlite3 ~/.koe/history.db "SELECT date(timestamp, 'unixepoch', 'localtime') as day, COUNT(*) as sessions, SUM(char_count) as chars, SUM(word_count) as words FROM sessions GROUP BY day ORDER BY day DESC;"
+```
+
+You can also build your own dashboard or visualization on top of this database — it's just a standard SQLite file.
 
 ## Architecture
 

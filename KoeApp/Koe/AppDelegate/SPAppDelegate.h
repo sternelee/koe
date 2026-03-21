@@ -8,6 +8,7 @@
 @class SPPasteManager;
 @class SPCuePlayer;
 @class SPStatusBarManager;
+@class SPHistoryManager;
 
 @interface SPAppDelegate : NSObject <NSApplicationDelegate>
 

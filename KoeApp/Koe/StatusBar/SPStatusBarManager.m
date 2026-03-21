@@ -1,5 +1,6 @@
 #import "SPStatusBarManager.h"
 #import "SPPermissionManager.h"
+#import "SPHistoryManager.h"
 #import <Cocoa/Cocoa.h>
 #import <ServiceManagement/ServiceManagement.h>
 
@@ -15,6 +16,9 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, strong) NSMenuItem *micPermissionItem;
 @property (nonatomic, strong) NSMenuItem *accessibilityPermissionItem;
 @property (nonatomic, strong) NSMenuItem *inputMonitoringPermissionItem;
+@property (nonatomic, strong) NSMenuItem *statsCountItem;
+@property (nonatomic, strong) NSMenuItem *statsTimeItem;
+@property (nonatomic, strong) NSMenuItem *statsSpeedItem;
 @property (nonatomic, strong) NSTimer *animationTimer;
 @property (nonatomic, assign) NSInteger animationFrame;
 @property (nonatomic, copy) NSString *currentState;
@@ -51,6 +55,33 @@ static const CGFloat kIconSize = 18.0;
                                              keyEquivalent:@""];
     self.statusMenuItem.enabled = NO;
     [menu addItem:self.statusMenuItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    // Statistics section
+    NSMenuItem *statsHeader = [[NSMenuItem alloc] initWithTitle:@"Statistics"
+                                                        action:nil
+                                                 keyEquivalent:@""];
+    statsHeader.enabled = NO;
+    [menu addItem:statsHeader];
+
+    self.statsCountItem = [[NSMenuItem alloc] initWithTitle:@"  ..."
+                                                    action:nil
+                                             keyEquivalent:@""];
+    self.statsCountItem.enabled = NO;
+    [menu addItem:self.statsCountItem];
+
+    self.statsTimeItem = [[NSMenuItem alloc] initWithTitle:@"  ..."
+                                                   action:nil
+                                            keyEquivalent:@""];
+    self.statsTimeItem.enabled = NO;
+    [menu addItem:self.statsTimeItem];
+
+    self.statsSpeedItem = [[NSMenuItem alloc] initWithTitle:@"  ..."
+                                                    action:nil
+                                             keyEquivalent:@""];
+    self.statsSpeedItem.enabled = NO;
+    [menu addItem:self.statsSpeedItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -114,6 +145,7 @@ static const CGFloat kIconSize = 18.0;
 
 - (void)menuWillOpen:(NSMenu *)menu {
     [self refreshPermissionStatus];
+    [self refreshStats];
 }
 
 - (void)refreshPermissionStatus {
@@ -127,6 +159,52 @@ static const CGFloat kIconSize = 18.0;
                                               accessibility ? @"Granted" : @"Not Granted"];
     self.inputMonitoringPermissionItem.title = [NSString stringWithFormat:@"  Input Monitoring: %@",
                                                 inputMonitoring ? @"Granted" : @"Not Granted"];
+}
+
+- (void)refreshStats {
+    SPHistoryStats *stats = [[SPHistoryManager sharedManager] aggregateStats];
+
+    // Count display
+    NSMutableArray *parts = [NSMutableArray array];
+    if (stats.totalCharCount > 0) {
+        [parts addObject:[NSString stringWithFormat:@"%ld chars", (long)stats.totalCharCount]];
+    }
+    if (stats.totalWordCount > 0) {
+        [parts addObject:[NSString stringWithFormat:@"%ld words", (long)stats.totalWordCount]];
+    }
+    if (parts.count > 0) {
+        self.statsCountItem.title = [NSString stringWithFormat:@"  Total: %@",
+                                     [parts componentsJoinedByString:@" / "]];
+    } else {
+        self.statsCountItem.title = @"  Total: No data yet";
+    }
+
+    // Time + session count
+    NSInteger totalSec = stats.totalDurationMs / 1000;
+    NSInteger min = totalSec / 60;
+    NSInteger sec = totalSec % 60;
+    if (stats.sessionCount > 0) {
+        self.statsTimeItem.title = [NSString stringWithFormat:@"  Time: %ld min %ld sec | %ld sessions",
+                                    (long)min, (long)sec, (long)stats.sessionCount];
+    } else {
+        self.statsTimeItem.title = @"  Time: --";
+    }
+
+    // Typing speed
+    if (stats.totalDurationMs > 0 && (stats.totalCharCount + stats.totalWordCount) > 0) {
+        double minutes = (double)stats.totalDurationMs / 60000.0;
+        if (stats.totalCharCount > stats.totalWordCount) {
+            // Primarily Chinese
+            double speed = (double)stats.totalCharCount / minutes;
+            self.statsSpeedItem.title = [NSString stringWithFormat:@"  Speed: %.0f chars/min", speed];
+        } else {
+            // Primarily English
+            double speed = (double)stats.totalWordCount / minutes;
+            self.statsSpeedItem.title = [NSString stringWithFormat:@"  Speed: %.0f words/min", speed];
+        }
+    } else {
+        self.statsSpeedItem.title = @"  Speed: --";
+    }
 }
 
 #pragma mark - Custom Icon Drawing

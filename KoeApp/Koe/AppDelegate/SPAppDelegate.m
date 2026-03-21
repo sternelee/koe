@@ -7,6 +7,11 @@
 #import "SPPasteManager.h"
 #import "SPCuePlayer.h"
 #import "SPStatusBarManager.h"
+#import "SPHistoryManager.h"
+
+@interface SPAppDelegate ()
+@property (nonatomic, strong) NSDate *recordingStartTime;
+@end
 
 @implementation SPAppDelegate
 
@@ -60,6 +65,7 @@
 
 - (void)hotkeyMonitorDidDetectHoldStart {
     NSLog(@"[Koe] Hold start detected");
+    self.recordingStartTime = [NSDate date];
     [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
@@ -86,6 +92,7 @@
 
 - (void)hotkeyMonitorDidDetectTapStart {
     NSLog(@"[Koe] Tap start detected");
+    self.recordingStartTime = [NSDate date];
     [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
@@ -117,6 +124,15 @@
 
 - (void)rustBridgeDidReceiveFinalText:(NSString *)text {
     NSLog(@"[Koe] Final text received (%lu chars)", (unsigned long)text.length);
+
+    // Record history
+    NSInteger durationMs = 0;
+    if (self.recordingStartTime) {
+        durationMs = (NSInteger)(-[self.recordingStartTime timeIntervalSinceNow] * 1000);
+        self.recordingStartTime = nil;
+    }
+    [[SPHistoryManager sharedManager] recordSessionWithDurationMs:durationMs text:text];
+
     [self.statusBarManager updateState:@"pasting"];
 
     // Backup clipboard, write text, paste, restore
