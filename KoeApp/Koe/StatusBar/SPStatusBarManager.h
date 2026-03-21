@@ -1,4 +1,6 @@
-#import <Foundation/Foundation.h>
+#import <Cocoa/Cocoa.h>
+
+@class SPPermissionManager;
 
 @protocol SPStatusBarDelegate <NSObject>
 @optional
@@ -6,9 +8,10 @@
 - (void)statusBarDidSelectQuit;
 @end
 
-@interface SPStatusBarManager : NSObject
+@interface SPStatusBarManager : NSObject <NSMenuDelegate>
 
-- (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate;
+- (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate
+               permissionManager:(SPPermissionManager *)permissionManager;
 
 /// Update the status bar icon and status text.
 /// state: "idle", "recording_hold", "recording_toggle", "connecting_asr",

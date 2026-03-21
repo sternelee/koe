@@ -10,12 +10,6 @@ pub struct Config {
     #[serde(default)]
     pub llm: LlmSection,
     #[serde(default)]
-    pub hotkey: HotkeySection,
-    #[serde(default)]
-    pub audio: AudioSection,
-    #[serde(default)]
-    pub paste: PasteSection,
-    #[serde(default)]
     pub feedback: FeedbackSection,
     #[serde(default)]
     pub dictionary: DictionarySection,
@@ -68,34 +62,6 @@ pub struct LlmSection {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct HotkeySection {
-    #[serde(default = "default_hotkey")]
-    pub key: String,
-    #[serde(default = "default_threshold")]
-    pub tap_max_ms: u64,
-    #[serde(default = "default_threshold")]
-    pub hold_threshold_ms: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct AudioSection {
-    #[serde(default = "default_sample_rate")]
-    pub sample_rate_hz: u32,
-    #[serde(default = "default_frame_ms")]
-    pub frame_ms: u32,
-    #[serde(default = "default_max_session_ms")]
-    pub max_session_ms: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct PasteSection {
-    #[serde(default = "default_true")]
-    pub restore_clipboard: bool,
-    #[serde(default = "default_restore_delay")]
-    pub restore_delay_ms: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct FeedbackSection {
     #[serde(default = "default_true")]
     pub start_sound: bool,
@@ -140,24 +106,6 @@ fn default_max_output_tokens() -> u32 {
 fn default_dictionary_max_candidates() -> usize {
     200
 }
-fn default_hotkey() -> String {
-    "fn".into()
-}
-fn default_threshold() -> u64 {
-    180
-}
-fn default_sample_rate() -> u32 {
-    16000
-}
-fn default_frame_ms() -> u32 {
-    200
-}
-fn default_max_session_ms() -> u64 {
-    120000
-}
-fn default_restore_delay() -> u64 {
-    1500
-}
 fn default_dictionary_path() -> String {
     "dictionary.txt".into()
 }
@@ -179,21 +127,6 @@ impl Default for AsrSection {
     }
 }
 impl Default for LlmSection {
-    fn default() -> Self {
-        serde_yaml::from_str("{}").unwrap()
-    }
-}
-impl Default for HotkeySection {
-    fn default() -> Self {
-        serde_yaml::from_str("{}").unwrap()
-    }
-}
-impl Default for AudioSection {
-    fn default() -> Self {
-        serde_yaml::from_str("{}").unwrap()
-    }
-}
-impl Default for PasteSection {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
     }
@@ -357,20 +290,6 @@ llm:
   dictionary_max_candidates: 200
   system_prompt_path: "system_prompt.txt"  # relative to ~/.koe/
   user_prompt_path: "user_prompt.txt"      # relative to ~/.koe/
-
-hotkey:
-  key: "fn"
-  tap_max_ms: 180
-  hold_threshold_ms: 180
-
-audio:
-  sample_rate_hz: 16000
-  frame_ms: 200
-  max_session_ms: 120000
-
-paste:
-  restore_clipboard: true
-  restore_delay_ms: 1500
 
 feedback:
   start_sound: true

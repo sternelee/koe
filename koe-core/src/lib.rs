@@ -14,8 +14,8 @@ use crate::asr::doubao_ws::DoubaoWsProvider;
 use crate::asr::{AsrConfig, AsrEvent, AsrProvider};
 use crate::config::Config;
 use crate::ffi::{
-    cstr_to_str, invoke_final_text_ready, invoke_session_error,
-    invoke_session_ready, invoke_state_changed, SPCallbacks, SPSessionContext, SPSessionMode,
+    cstr_to_str, invoke_final_text_ready, invoke_session_error, invoke_session_ready,
+    invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPSessionContext, SPSessionMode,
 };
 use crate::llm::openai_compatible::OpenAiCompatibleProvider;
 use crate::llm::{CorrectionRequest, LlmProvider};
@@ -214,7 +214,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
         app_key: cfg.asr.app_key.clone(),
         access_key: cfg.asr.access_key.clone(),
         resource_id: cfg.asr.resource_id.clone(),
-        sample_rate_hz: cfg.audio.sample_rate_hz,
+        sample_rate_hz: 16000,
         connect_timeout_ms: cfg.asr.connect_timeout_ms,
         final_wait_timeout_ms: cfg.asr.final_wait_timeout_ms,
         enable_ddc: cfg.asr.enable_ddc,
@@ -283,6 +283,25 @@ pub extern "C" fn sp_core_session_end() -> i32 {
         core.audio_tx = None;
     }
     0
+}
+
+/// Query current feedback configuration.
+#[no_mangle]
+pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
+    let global = CORE.lock().unwrap();
+    if let Some(ref core) = *global {
+        SPFeedbackConfig {
+            start_sound: core.config.feedback.start_sound,
+            stop_sound: core.config.feedback.stop_sound,
+            error_sound: core.config.feedback.error_sound,
+        }
+    } else {
+        SPFeedbackConfig {
+            start_sound: true,
+            stop_sound: true,
+            error_sound: true,
+        }
+    }
 }
 
 // ─── Session Task ───────────────────────────────────────────────────

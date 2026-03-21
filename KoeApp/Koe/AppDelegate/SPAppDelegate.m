@@ -25,7 +25,8 @@
     [self.rustBridge initializeCore];
 
     // Initialize status bar
-    self.statusBarManager = [[SPStatusBarManager alloc] initWithDelegate:self];
+    self.statusBarManager = [[SPStatusBarManager alloc] initWithDelegate:self
+                                                       permissionManager:self.permissionManager];
 
     // Check permissions
     [self.permissionManager checkAllPermissionsWithCompletion:^(BOOL micGranted, BOOL accessibilityGranted, BOOL inputMonitoringGranted) {
@@ -59,6 +60,7 @@
 
 - (void)hotkeyMonitorDidDetectHoldStart {
     NSLog(@"[Koe] Hold start detected");
+    [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
 
@@ -84,6 +86,7 @@
 
 - (void)hotkeyMonitorDidDetectTapStart {
     NSLog(@"[Koe] Tap start detected");
+    [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
 

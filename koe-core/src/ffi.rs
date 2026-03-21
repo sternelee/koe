@@ -94,6 +94,15 @@ pub fn invoke_state_changed(state: &str) {
     }
 }
 
+/// Feedback configuration exposed to the Obj-C layer
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SPFeedbackConfig {
+    pub start_sound: bool,
+    pub stop_sound: bool,
+    pub error_sound: bool,
+}
+
 /// Helper to convert a C string pointer to a Rust &str
 ///
 /// # Safety

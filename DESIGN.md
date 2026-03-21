@@ -684,118 +684,56 @@ Conclusion:
 ### 14.1 Example
 
 ```yaml
-version: 1
-
-app:
-  bundle_id: "com.example.speechpaste"
-  log_level: "info"
-  redact_transcript_in_logs: true
-  start_at_login: true
-
-hotkey:
-  key: "fn"
-  enabled_modes:
-    hold_to_talk: true
-    tap_to_toggle: true
-  fallback_keys:
-    - "right_option"
-    - "right_command"
-  debounce_ms: 30
-  tap_max_ms: 180
-  hold_threshold_ms: 180
-  toggle_stop_on_keydown: true
-  consume_keyup_after_toggle_stop: true
-
-audio:
-  sample_rate_hz: 16000
-  channels: 1
-  sample_format: "pcm_s16le"
-  frame_ms: 20
-  input_device: "default"
-  startup_buffer_ms: 300
-  max_session_ms: 120000
-
 asr:
-  provider: "doubao_ws"
-  url: "wss://your-asr-endpoint"
-  api_key: "${DOUBAO_API_KEY}"
-  app_id: "your-app-id"
-  access_token: "${DOUBAO_ACCESS_TOKEN}"
-  model: "streaming-asr"
-  language: "zh-CN"
-  interim_results: true
+  url: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
+  app_key: ""              # Volcengine App ID
+  access_key: ""           # Volcengine Access Token
+  resource_id: "volc.bigasr.sauc.duration"
   connect_timeout_ms: 3000
   final_wait_timeout_ms: 5000
-  close_timeout_ms: 1000
+  enable_ddc: true         # 语义顺滑
+  enable_itn: true         # 文本规范化
+  enable_punc: true        # 自动标点
 
 llm:
-  provider: "openai_compatible"
-  base_url: "https://your-llm-endpoint"
+  base_url: ""             # OpenAI-compatible endpoint
   api_key: "${LLM_API_KEY}"
-  model: "your-correction-model"
+  model: ""
   temperature: 0
   top_p: 1
   timeout_ms: 8000
   max_output_tokens: 1024
-  remove_disfluencies: true
-  preserve_meaning: true
-  preserve_line_breaks: false
   dictionary_max_candidates: 200
-
-dictionary:
-  path: "dictionary.txt"
-  encoding: "utf-8"
-  reload_on_change: true
-
-paste:
-  strategy: "clipboard_cmd_v"
-  restore_clipboard: true
-  restore_delay_ms: 1500
-  require_same_frontmost_app: true
-  verify_focused_text_input: true
-  deny_secure_text_field: true
+  system_prompt_path: "system_prompt.txt"
+  user_prompt_path: "user_prompt.txt"
 
 feedback:
   start_sound: true
   stop_sound: true
   error_sound: true
 
-doctor:
-  fail_if_input_monitoring_missing: true
-  fail_if_accessibility_missing: true
+dictionary:
+  path: "dictionary.txt"
 ```
+
+> **Note:** Hotkey (Fn, 180ms threshold), audio (16kHz, 200ms frames), and paste (clipboard restore after 1500ms) parameters are hardcoded and not user-configurable.
 
 ### 14.2 Configuration Rules
 
 - Use UTF-8
 - Support environment variable substitution, e.g., `${LLM_API_KEY}`
 - All relative paths are relative to the configuration directory
-- Unknown fields should error by default, not be silently ignored
+- Unknown fields are silently ignored for forward/backward compatibility
 - If configuration loading fails, the application must not enter standby state
 
-### 14.3 Hotkey Configuration Semantics
+### 14.3 Hotkey Behavior
 
-The rules for `hotkey.enabled_modes` are as follows:
+The hotkey is hardcoded to the **Fn** key with a **180ms** threshold for distinguishing tap from hold. Both modes are always enabled:
 
-- `hold_to_talk=true`: supports hold to start, release to end
-- `tap_to_toggle=true`: supports tap to start, tap again to end
+- **Hold to talk:** hold Fn to start, release to end
+- **Tap to toggle:** tap Fn to start, tap again to end
 
-Recommended default:
-
-- Both modes enabled simultaneously
-
-This way, users do not need to switch modes; they express intent directly through key press duration.
-
-Relationship between `tap_max_ms` and `hold_threshold_ms`:
-
-- Recommended to set them to the same value
-- This fixes the tap/hold boundary at a single threshold
-
-Meaning of `toggle_stop_on_keydown=true`:
-
-- When the system is already in the hands-free recording state initiated by tap
-- The next `Fn keyDown` immediately ends the current session
-- No need to wait for this key release
+The tap/hold boundary is fixed at a single 180ms threshold. When the system is already in hands-free recording (tap mode), the next Fn keyDown immediately ends the session without waiting for key release.
 
 ## 15. `dictionary.txt` Design
 
@@ -1291,9 +1229,9 @@ Recommended default:
 
 ### 20.13 Restore Clipboard
 
-If `restore_clipboard=true`:
+After pasting:
 
-1. Wait for `restore_delay_ms`
+1. Wait for 1500ms
 2. Check whether the current clipboard still contains the content written by this application
 3. If the user copied new content during this period, do not restore, to avoid overwriting the user's new clipboard contents
 4. If the clipboard is unchanged, restore to the pre-session contents

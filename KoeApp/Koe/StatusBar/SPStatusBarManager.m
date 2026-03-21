@@ -1,4 +1,5 @@
 #import "SPStatusBarManager.h"
+#import "SPPermissionManager.h"
 #import <Cocoa/Cocoa.h>
 #import <ServiceManagement/ServiceManagement.h>
 
@@ -8,8 +9,12 @@ static const CGFloat kIconSize = 18.0;
 @interface SPStatusBarManager ()
 
 @property (nonatomic, weak) id<SPStatusBarDelegate> delegate;
+@property (nonatomic, strong) SPPermissionManager *permissionManager;
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) NSMenuItem *statusMenuItem;
+@property (nonatomic, strong) NSMenuItem *micPermissionItem;
+@property (nonatomic, strong) NSMenuItem *accessibilityPermissionItem;
+@property (nonatomic, strong) NSMenuItem *inputMonitoringPermissionItem;
 @property (nonatomic, strong) NSTimer *animationTimer;
 @property (nonatomic, assign) NSInteger animationFrame;
 @property (nonatomic, copy) NSString *currentState;
@@ -18,10 +23,12 @@ static const CGFloat kIconSize = 18.0;
 
 @implementation SPStatusBarManager
 
-- (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate {
+- (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate
+               permissionManager:(SPPermissionManager *)permissionManager {
     self = [super init];
     if (self) {
         _delegate = delegate;
+        _permissionManager = permissionManager;
         _currentState = @"idle";
         _animationFrame = 0;
         [self setupStatusBar];
@@ -36,6 +43,7 @@ static const CGFloat kIconSize = 18.0;
 
     // Build menu
     NSMenu *menu = [[NSMenu alloc] init];
+    menu.delegate = self;
 
     // Status display
     self.statusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Ready"
@@ -43,6 +51,33 @@ static const CGFloat kIconSize = 18.0;
                                              keyEquivalent:@""];
     self.statusMenuItem.enabled = NO;
     [menu addItem:self.statusMenuItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    // Permissions section
+    NSMenuItem *permHeader = [[NSMenuItem alloc] initWithTitle:@"Permissions"
+                                                       action:nil
+                                                keyEquivalent:@""];
+    permHeader.enabled = NO;
+    [menu addItem:permHeader];
+
+    self.micPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Microphone: Checking..."
+                                                       action:nil
+                                                keyEquivalent:@""];
+    self.micPermissionItem.enabled = NO;
+    [menu addItem:self.micPermissionItem];
+
+    self.accessibilityPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Accessibility: Checking..."
+                                                                 action:nil
+                                                          keyEquivalent:@""];
+    self.accessibilityPermissionItem.enabled = NO;
+    [menu addItem:self.accessibilityPermissionItem];
+
+    self.inputMonitoringPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Input Monitoring: Checking..."
+                                                                   action:nil
+                                                            keyEquivalent:@""];
+    self.inputMonitoringPermissionItem.enabled = NO;
+    [menu addItem:self.inputMonitoringPermissionItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -73,6 +108,25 @@ static const CGFloat kIconSize = 18.0;
     [menu addItem:quit];
 
     self.statusItem.menu = menu;
+}
+
+#pragma mark - NSMenuDelegate
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    [self refreshPermissionStatus];
+}
+
+- (void)refreshPermissionStatus {
+    BOOL mic = [self.permissionManager isMicrophoneGranted];
+    BOOL accessibility = [self.permissionManager isAccessibilityGranted];
+    BOOL inputMonitoring = [self.permissionManager isInputMonitoringGranted];
+
+    self.micPermissionItem.title = [NSString stringWithFormat:@"  Microphone: %@",
+                                    mic ? @"Granted" : @"Not Granted"];
+    self.accessibilityPermissionItem.title = [NSString stringWithFormat:@"  Accessibility: %@",
+                                              accessibility ? @"Granted" : @"Not Granted"];
+    self.inputMonitoringPermissionItem.title = [NSString stringWithFormat:@"  Input Monitoring: %@",
+                                                inputMonitoring ? @"Granted" : @"Not Granted"];
 }
 
 #pragma mark - Custom Icon Drawing
