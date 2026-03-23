@@ -26,4 +26,7 @@
 - (void)start;
 - (void)stop;
 
+/// Temporarily suppress hotkey detection (e.g. while a menu is open).
+@property (nonatomic, assign) BOOL suspended;
+
 @end

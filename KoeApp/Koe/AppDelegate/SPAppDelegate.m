@@ -286,4 +286,19 @@
     [self.overlayPanel updateState:state];
 }
 
+#pragma mark - SPStatusBarDelegate (menu)
+
+- (void)statusBarMenuDidOpen {
+    self.hotkeyMonitor.suspended = YES;
+}
+
+- (void)statusBarMenuDidClose {
+    self.hotkeyMonitor.suspended = NO;
+}
+
+- (void)statusBarDidSelectQuit {
+    [self.hotkeyMonitor stop];
+    [NSApp terminate:nil];
+}
+
 @end

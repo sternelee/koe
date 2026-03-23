@@ -151,6 +151,15 @@ static const CGFloat kIconSize = 18.0;
 - (void)menuWillOpen:(NSMenu *)menu {
     [self refreshPermissionStatus];
     [self refreshStats];
+    if ([self.delegate respondsToSelector:@selector(statusBarMenuDidOpen)]) {
+        [self.delegate statusBarMenuDidOpen];
+    }
+}
+
+- (void)menuDidClose:(NSMenu *)menu {
+    if ([self.delegate respondsToSelector:@selector(statusBarMenuDidClose)]) {
+        [self.delegate statusBarMenuDidClose];
+    }
 }
 
 - (void)refreshPermissionStatus {
@@ -477,7 +486,11 @@ static const CGFloat kIconSize = 18.0;
 }
 
 - (void)quitApp:(id)sender {
-    [NSApp terminate:nil];
+    if ([self.delegate respondsToSelector:@selector(statusBarDidSelectQuit)]) {
+        [self.delegate statusBarDidSelectQuit];
+    } else {
+        [NSApp terminate:nil];
+    }
 }
 
 - (void)dealloc {

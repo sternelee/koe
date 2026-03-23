@@ -41,6 +41,8 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         return event;
     }
 
+    if (monitor.suspended) return event;
+
     if (type == kCGEventFlagsChanged) {
         [monitor handleFlagsChangedEvent:event];
     } else if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
@@ -118,6 +120,8 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 }
 
 - (void)handleNSEvent:(NSEvent *)event {
+    if (self.suspended) return;
+
     if (event.type == NSEventTypeFlagsChanged) {
         NSUInteger flags = event.modifierFlags;
         NSInteger keyCode = event.keyCode;

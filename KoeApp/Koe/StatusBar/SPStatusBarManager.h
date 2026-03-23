@@ -6,6 +6,8 @@
 @optional
 - (void)statusBarDidSelectReloadConfig;
 - (void)statusBarDidSelectQuit;
+- (void)statusBarMenuDidOpen;
+- (void)statusBarMenuDidClose;
 @end
 
 @interface SPStatusBarManager : NSObject <NSMenuDelegate>
