@@ -102,21 +102,21 @@ static const CGFloat kIconSize = 18.0;
     [menu addItem:self.micPermissionItem];
 
     self.accessibilityPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Accessibility: Checking..."
-                                                                 action:nil
+                                                                 action:@selector(requestAccessibilityPermission:)
                                                           keyEquivalent:@""];
-    self.accessibilityPermissionItem.enabled = NO;
+    self.accessibilityPermissionItem.target = self;
     [menu addItem:self.accessibilityPermissionItem];
 
     self.inputMonitoringPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Input Monitoring: Checking..."
-                                                                   action:nil
+                                                                   action:@selector(openInputMonitoringSettings:)
                                                             keyEquivalent:@""];
-    self.inputMonitoringPermissionItem.enabled = NO;
+    self.inputMonitoringPermissionItem.target = self;
     [menu addItem:self.inputMonitoringPermissionItem];
 
     self.notificationPermissionItem = [[NSMenuItem alloc] initWithTitle:@"  Notifications: Checking..."
-                                                                action:nil
+                                                                action:@selector(requestNotificationPermission:)
                                                          keyEquivalent:@""];
-    self.notificationPermissionItem.enabled = NO;
+    self.notificationPermissionItem.target = self;
     [menu addItem:self.notificationPermissionItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
@@ -573,6 +573,22 @@ static const CGFloat kIconSize = 18.0;
             NSLog(@"[Koe] Launch at login toggle failed: %@", error.localizedDescription);
         }
     }
+}
+
+#pragma mark - Permission Actions
+
+- (void)requestAccessibilityPermission:(id)sender {
+    [self.permissionManager requestAccessibilityPermission];
+}
+
+- (void)openInputMonitoringSettings:(id)sender {
+    // Open System Settings > Privacy & Security > Input Monitoring
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)requestNotificationPermission:(id)sender {
+    [self.permissionManager requestNotificationPermission];
 }
 
 - (void)quitApp:(id)sender {
