@@ -1,0 +1,566 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		14BEE4D041F50AB2B59E8AF7 /* SPAudioDeviceManager.m in Sources */ = {isa = PBXBuildFile; fileRef = BB1D0A7129629E669997A7E0 /* SPAudioDeviceManager.m */; };
+		257AA50F338FC3C6C8352A04 /* SPOverlayPanel.m in Sources */ = {isa = PBXBuildFile; fileRef = 3627298C8E0D0C3A4AB2908F /* SPOverlayPanel.m */; };
+		2D4AAD7835C0DE2473ACE3B2 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 2D234D4C93F683E5E9CD2141 /* main.m */; };
+		47C473E27E66263A574CF164 /* SPAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = B585F7A706C40AEA3462AA70 /* SPAppDelegate.m */; };
+		4F610DB86FB65728317D9A2F /* SPAccessibilityManager.m in Sources */ = {isa = PBXBuildFile; fileRef = BDA4FF798CF309F9C62AB42D /* SPAccessibilityManager.m */; };
+		5408282A685B8817AA303FF7 /* SPSetupWizardWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 12144A3778B26130CCC95CF7 /* SPSetupWizardWindowController.m */; };
+		5ED94827428EE7678AB24FC3 /* SPAudioCaptureManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 3BA638A27F78EA8512392E08 /* SPAudioCaptureManager.m */; };
+		68C653EC35610AA15F55EB5E /* SPStatusBarManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 629860C26F8507E85B2FC3FA /* SPStatusBarManager.m */; };
+		726BF22BC148514AFCFB9C55 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = C2E88C16E22CB7FBA7BEE927 /* AppIcon.icon */; };
+		8508C1CE3412FD4D76CCA829 /* SPHistoryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 8471C9C5079D4440091B33BC /* SPHistoryManager.m */; };
+		8CF1574543EA38C0B8605B48 /* SPRustBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 2A2A428A9DEB32E73621910B /* SPRustBridge.m */; };
+		98D430D396DA19D31F2EA418 /* SPPasteManager.m in Sources */ = {isa = PBXBuildFile; fileRef = F1498B744B79A6AF2F28C3F7 /* SPPasteManager.m */; };
+		B48AFACEB2F6F81C76DD8DA0 /* SPClipboardManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 4928C4C9CAB8384DAC24066D /* SPClipboardManager.m */; };
+		B5FFDABB3C4DDAB7E7E703D3 /* SPHotkeyMonitor.m in Sources */ = {isa = PBXBuildFile; fileRef = 49071906D72F18C5DCCBCCCB /* SPHotkeyMonitor.m */; };
+		C9E1B6FDCDD6ECA60DCA201A /* SPPermissionManager.m in Sources */ = {isa = PBXBuildFile; fileRef = F8344567F041819A8B49007B /* SPPermissionManager.m */; };
+		F14D09F1BE75BB42EC3D14B5 /* SPCuePlayer.m in Sources */ = {isa = PBXBuildFile; fileRef = C56C4DC0D3F6F6B9A5CB1439 /* SPCuePlayer.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		01D10C289B916B41508F20E0 /* SPPermissionManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPPermissionManager.h; sourceTree = "<group>"; };
+		12144A3778B26130CCC95CF7 /* SPSetupWizardWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPSetupWizardWindowController.m; sourceTree = "<group>"; };
+		1CD30520247FC4AD5F4B0F63 /* SPStatusBarManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPStatusBarManager.h; sourceTree = "<group>"; };
+		2A2A428A9DEB32E73621910B /* SPRustBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPRustBridge.m; sourceTree = "<group>"; };
+		2D234D4C93F683E5E9CD2141 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		3627298C8E0D0C3A4AB2908F /* SPOverlayPanel.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPOverlayPanel.m; sourceTree = "<group>"; };
+		3BA638A27F78EA8512392E08 /* SPAudioCaptureManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPAudioCaptureManager.m; sourceTree = "<group>"; };
+		49071906D72F18C5DCCBCCCB /* SPHotkeyMonitor.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPHotkeyMonitor.m; sourceTree = "<group>"; };
+		4928C4C9CAB8384DAC24066D /* SPClipboardManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPClipboardManager.m; sourceTree = "<group>"; };
+		4AE52228F278EA868D2568C6 /* SPHotkeyMonitor.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPHotkeyMonitor.h; sourceTree = "<group>"; };
+		4B4DAB2B36C306843ED46D8B /* Koe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Koe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		57FE3F433580254418958777 /* SPOverlayPanel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPOverlayPanel.h; sourceTree = "<group>"; };
+		629860C26F8507E85B2FC3FA /* SPStatusBarManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPStatusBarManager.m; sourceTree = "<group>"; };
+		6D31284C9E1FDDC3CCAD3764 /* SPAccessibilityManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPAccessibilityManager.h; sourceTree = "<group>"; };
+		8471C9C5079D4440091B33BC /* SPHistoryManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPHistoryManager.m; sourceTree = "<group>"; };
+		8B212F513C88E73AB051EEFB /* SPAudioDeviceManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPAudioDeviceManager.h; sourceTree = "<group>"; };
+		A2B8EB6B64F0C5594521C2ED /* SPPasteManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPPasteManager.h; sourceTree = "<group>"; };
+		B585F7A706C40AEA3462AA70 /* SPAppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPAppDelegate.m; sourceTree = "<group>"; };
+		B6C545D3575400E5DCF5D273 /* SPAppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPAppDelegate.h; sourceTree = "<group>"; };
+		B988F7564950547630F394FF /* SPHistoryManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPHistoryManager.h; sourceTree = "<group>"; };
+		BB1D0A7129629E669997A7E0 /* SPAudioDeviceManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPAudioDeviceManager.m; sourceTree = "<group>"; };
+		BDA4FF798CF309F9C62AB42D /* SPAccessibilityManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPAccessibilityManager.m; sourceTree = "<group>"; };
+		C2E88C16E22CB7FBA7BEE927 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		C56C4DC0D3F6F6B9A5CB1439 /* SPCuePlayer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPCuePlayer.m; sourceTree = "<group>"; };
+		CE05E39ED948557E06742489 /* SPAudioCaptureManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPAudioCaptureManager.h; sourceTree = "<group>"; };
+		D0A7F8DAE3246C291693B5B7 /* SPClipboardManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPClipboardManager.h; sourceTree = "<group>"; };
+		D0B890F086B8B254B9644DFA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		DA1BEBB915B9B5B3A134B445 /* SPRustBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPRustBridge.h; sourceTree = "<group>"; };
+		E6A9F1CBDA4EF711CE403101 /* SPCuePlayer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPCuePlayer.h; sourceTree = "<group>"; };
+		F1498B744B79A6AF2F28C3F7 /* SPPasteManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPPasteManager.m; sourceTree = "<group>"; };
+		F8344567F041819A8B49007B /* SPPermissionManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SPPermissionManager.m; sourceTree = "<group>"; };
+		F9F634FCF7E17E745DF0671C /* SPSetupWizardWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPSetupWizardWindowController.h; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		236291E5B4C80B1647141821 /* Koe */ = {
+			isa = PBXGroup;
+			children = (
+				C2E88C16E22CB7FBA7BEE927 /* AppIcon.icon */,
+				D0B890F086B8B254B9644DFA /* Info.plist */,
+				2D234D4C93F683E5E9CD2141 /* main.m */,
+				B72F245C190A8B4A8C20B93C /* Accessibility */,
+				AB1464744B4BC4FF6F7B1223 /* AppDelegate */,
+				B955B9AA7B26DDB3B89E464F /* Audio */,
+				9A7F63D1D4602CE4A07AF79F /* Bridge */,
+				D2875E410C4D6167064463B4 /* Clipboard */,
+				4D048471DAD8FD264CFE3A1C /* Feedback */,
+				7807F949545F42E3C2B2A15C /* History */,
+				87920EB2294BB15D35ED75E6 /* Hotkey */,
+				73E46841C49E9AF8D0CB5BF8 /* Overlay */,
+				3EEA673FB6794D4D6BD8D190 /* Paste */,
+				9838A6C56D9CE75C0671C319 /* Permissions */,
+				F6F530DAAE6C6ABAEDB1E375 /* SetupWizard */,
+				9FF7EC54EFFCAD149FC957A9 /* StatusBar */,
+			);
+			path = Koe;
+			sourceTree = "<group>";
+		};
+		3EEA673FB6794D4D6BD8D190 /* Paste */ = {
+			isa = PBXGroup;
+			children = (
+				A2B8EB6B64F0C5594521C2ED /* SPPasteManager.h */,
+				F1498B744B79A6AF2F28C3F7 /* SPPasteManager.m */,
+			);
+			path = Paste;
+			sourceTree = "<group>";
+		};
+		4D048471DAD8FD264CFE3A1C /* Feedback */ = {
+			isa = PBXGroup;
+			children = (
+				E6A9F1CBDA4EF711CE403101 /* SPCuePlayer.h */,
+				C56C4DC0D3F6F6B9A5CB1439 /* SPCuePlayer.m */,
+			);
+			path = Feedback;
+			sourceTree = "<group>";
+		};
+		73E46841C49E9AF8D0CB5BF8 /* Overlay */ = {
+			isa = PBXGroup;
+			children = (
+				57FE3F433580254418958777 /* SPOverlayPanel.h */,
+				3627298C8E0D0C3A4AB2908F /* SPOverlayPanel.m */,
+			);
+			path = Overlay;
+			sourceTree = "<group>";
+		};
+		7807F949545F42E3C2B2A15C /* History */ = {
+			isa = PBXGroup;
+			children = (
+				B988F7564950547630F394FF /* SPHistoryManager.h */,
+				8471C9C5079D4440091B33BC /* SPHistoryManager.m */,
+			);
+			path = History;
+			sourceTree = "<group>";
+		};
+		87920EB2294BB15D35ED75E6 /* Hotkey */ = {
+			isa = PBXGroup;
+			children = (
+				4AE52228F278EA868D2568C6 /* SPHotkeyMonitor.h */,
+				49071906D72F18C5DCCBCCCB /* SPHotkeyMonitor.m */,
+			);
+			path = Hotkey;
+			sourceTree = "<group>";
+		};
+		9838A6C56D9CE75C0671C319 /* Permissions */ = {
+			isa = PBXGroup;
+			children = (
+				01D10C289B916B41508F20E0 /* SPPermissionManager.h */,
+				F8344567F041819A8B49007B /* SPPermissionManager.m */,
+			);
+			path = Permissions;
+			sourceTree = "<group>";
+		};
+		9A7F63D1D4602CE4A07AF79F /* Bridge */ = {
+			isa = PBXGroup;
+			children = (
+				DA1BEBB915B9B5B3A134B445 /* SPRustBridge.h */,
+				2A2A428A9DEB32E73621910B /* SPRustBridge.m */,
+			);
+			path = Bridge;
+			sourceTree = "<group>";
+		};
+		9FF7EC54EFFCAD149FC957A9 /* StatusBar */ = {
+			isa = PBXGroup;
+			children = (
+				1CD30520247FC4AD5F4B0F63 /* SPStatusBarManager.h */,
+				629860C26F8507E85B2FC3FA /* SPStatusBarManager.m */,
+			);
+			path = StatusBar;
+			sourceTree = "<group>";
+		};
+		AB1464744B4BC4FF6F7B1223 /* AppDelegate */ = {
+			isa = PBXGroup;
+			children = (
+				B6C545D3575400E5DCF5D273 /* SPAppDelegate.h */,
+				B585F7A706C40AEA3462AA70 /* SPAppDelegate.m */,
+			);
+			path = AppDelegate;
+			sourceTree = "<group>";
+		};
+		B72F245C190A8B4A8C20B93C /* Accessibility */ = {
+			isa = PBXGroup;
+			children = (
+				6D31284C9E1FDDC3CCAD3764 /* SPAccessibilityManager.h */,
+				BDA4FF798CF309F9C62AB42D /* SPAccessibilityManager.m */,
+			);
+			path = Accessibility;
+			sourceTree = "<group>";
+		};
+		B955B9AA7B26DDB3B89E464F /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				CE05E39ED948557E06742489 /* SPAudioCaptureManager.h */,
+				3BA638A27F78EA8512392E08 /* SPAudioCaptureManager.m */,
+				8B212F513C88E73AB051EEFB /* SPAudioDeviceManager.h */,
+				BB1D0A7129629E669997A7E0 /* SPAudioDeviceManager.m */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		BCB5D93540A2093763BEE9A1 = {
+			isa = PBXGroup;
+			children = (
+				236291E5B4C80B1647141821 /* Koe */,
+				DCAED6271EA27370B344D452 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D2875E410C4D6167064463B4 /* Clipboard */ = {
+			isa = PBXGroup;
+			children = (
+				D0A7F8DAE3246C291693B5B7 /* SPClipboardManager.h */,
+				4928C4C9CAB8384DAC24066D /* SPClipboardManager.m */,
+			);
+			path = Clipboard;
+			sourceTree = "<group>";
+		};
+		DCAED6271EA27370B344D452 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4B4DAB2B36C306843ED46D8B /* Koe.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F6F530DAAE6C6ABAEDB1E375 /* SetupWizard */ = {
+			isa = PBXGroup;
+			children = (
+				F9F634FCF7E17E745DF0671C /* SPSetupWizardWindowController.h */,
+				12144A3778B26130CCC95CF7 /* SPSetupWizardWindowController.m */,
+			);
+			path = SetupWizard;
+			sourceTree = "<group>";
+		};
+		"TEMP_542DEF44-3AE6-4EE9-859B-6EB603306028" /* defaults */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = defaults;
+			sourceTree = "<group>";
+		};
+		"TEMP_6B9F1D57-A9B4-4F56-8421-DDD4766BE11D" /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		3BAF886740CB96D509EC9EC3 /* Koe */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 97267E18672A4925968517C6 /* Build configuration list for PBXNativeTarget "Koe" */;
+			buildPhases = (
+				8C81731E86D26C1A2973DEF4 /* Build Rust Library */,
+				9C1A51471912C1D7BC97C43A /* Sources */,
+				94EE63702224A8A4ADE28AF2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Koe;
+			packageProductDependencies = (
+			);
+			productName = Koe;
+			productReference = 4B4DAB2B36C306843ED46D8B /* Koe.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		147F84EDE1426B6A609CE119 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 1B06E32D5428516BCDA73115 /* Build configuration list for PBXProject "Koe" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = BCB5D93540A2093763BEE9A1;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = DCAED6271EA27370B344D452 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				3BAF886740CB96D509EC9EC3 /* Koe */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		94EE63702224A8A4ADE28AF2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				726BF22BC148514AFCFB9C55 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		8C81731E86D26C1A2973DEF4 /* Build Rust Library */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Library";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"${SRCROOT}/..\"\nif [ \"$ARCHS\" = \"x86_64\" ]; then\n  RUST_TARGET=\"x86_64-apple-darwin\"\nelse\n  RUST_TARGET=\"aarch64-apple-darwin\"\nfi\ncargo build --manifest-path koe-core/Cargo.toml --release --target \"$RUST_TARGET\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		9C1A51471912C1D7BC97C43A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4F610DB86FB65728317D9A2F /* SPAccessibilityManager.m in Sources */,
+				47C473E27E66263A574CF164 /* SPAppDelegate.m in Sources */,
+				5ED94827428EE7678AB24FC3 /* SPAudioCaptureManager.m in Sources */,
+				14BEE4D041F50AB2B59E8AF7 /* SPAudioDeviceManager.m in Sources */,
+				B48AFACEB2F6F81C76DD8DA0 /* SPClipboardManager.m in Sources */,
+				F14D09F1BE75BB42EC3D14B5 /* SPCuePlayer.m in Sources */,
+				8508C1CE3412FD4D76CCA829 /* SPHistoryManager.m in Sources */,
+				B5FFDABB3C4DDAB7E7E703D3 /* SPHotkeyMonitor.m in Sources */,
+				257AA50F338FC3C6C8352A04 /* SPOverlayPanel.m in Sources */,
+				98D430D396DA19D31F2EA418 /* SPPasteManager.m in Sources */,
+				C9E1B6FDCDD6ECA60DCA201A /* SPPermissionManager.m in Sources */,
+				8CF1574543EA38C0B8605B48 /* SPRustBridge.m in Sources */,
+				5408282A685B8817AA303FF7 /* SPSetupWizardWindowController.m in Sources */,
+				68C653EC35610AA15F55EB5E /* SPStatusBarManager.m in Sources */,
+				2D4AAD7835C0DE2473ACE3B2 /* main.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		44B563D6CE433CCE0A83C46A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_ENTITLEMENTS = Koe/Koe.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../koe-core/target",
+				);
+				INFOPLIST_FILE = Koe/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../target/aarch64-apple-darwin/release",
+					"$(SRCROOT)/../target/x86_64-apple-darwin/release",
+					"$(SRCROOT)/../target/release",
+				);
+				OTHER_LDFLAGS = (
+					"-lkoe_core",
+					"-lSystem",
+					"-lresolv",
+					"-framework Security",
+					"-framework CoreFoundation",
+					"-framework UserNotifications",
+				);
+				PRODUCT_NAME = Koe;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5E307589B8997484E77C3AB7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.owo.koe;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		BC79F00D28ECA5958E4BD819 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = nz.owo.koe;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F38425A5D12BBFB155CE9CCA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_ENTITLEMENTS = Koe/Koe.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../koe-core/target",
+				);
+				INFOPLIST_FILE = Koe/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../target/aarch64-apple-darwin/release",
+					"$(SRCROOT)/../target/x86_64-apple-darwin/release",
+					"$(SRCROOT)/../target/release",
+				);
+				OTHER_LDFLAGS = (
+					"-lkoe_core",
+					"-lSystem",
+					"-lresolv",
+					"-framework Security",
+					"-framework CoreFoundation",
+					"-framework UserNotifications",
+				);
+				PRODUCT_NAME = Koe;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1B06E32D5428516BCDA73115 /* Build configuration list for PBXProject "Koe" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5E307589B8997484E77C3AB7 /* Debug */,
+				BC79F00D28ECA5958E4BD819 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		97267E18672A4925968517C6 /* Build configuration list for PBXNativeTarget "Koe" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F38425A5D12BBFB155CE9CCA /* Debug */,
+				44B563D6CE433CCE0A83C46A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 147F84EDE1426B6A609CE119 /* Project object */;
+}
