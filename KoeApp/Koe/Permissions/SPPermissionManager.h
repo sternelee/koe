@@ -7,6 +7,9 @@ typedef void (^SPPermissionCheckCompletion)(BOOL micGranted, BOOL accessibilityG
 - (void)checkAllPermissionsWithCompletion:(SPPermissionCheckCompletion)completion;
 - (BOOL)isMicrophoneGranted;
 - (BOOL)isAccessibilityGranted;
+
+/// Request accessibility permission (shows system dialog). Call this when user clicks to request permission.
+- (void)requestAccessibilityPermission;
 - (BOOL)isInputMonitoringGranted;
 
 /// Request notification permission from the user.

@@ -35,9 +35,14 @@
 }
 
 - (BOOL)isAccessibilityGranted {
-    // AXIsProcessTrustedWithOptions with prompt
+    // Check without prompting - use requestAccessibilityPermission to request with prompt
+    return AXIsProcessTrusted();
+}
+
+- (void)requestAccessibilityPermission {
+    // Request with prompt - shows system dialog
     NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
 }
 
 static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
