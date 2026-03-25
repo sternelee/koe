@@ -114,6 +114,12 @@ pub struct HotkeySection {
     /// Default: "fn"
     #[serde(default = "default_trigger_key")]
     pub trigger_key: String,
+
+    /// Cancel key for aborting the current voice input session.
+    /// Options: "fn", "left_option", "right_option", "left_command", "right_command"
+    /// Default: "left_option"
+    #[serde(default = "default_cancel_key")]
+    pub cancel_key: String,
 }
 
 /// Resolved hotkey parameters for the native side
@@ -127,29 +133,67 @@ pub struct HotkeyParams {
     pub modifier_flag: u64,
 }
 
+/// Resolved trigger/cancel hotkey parameters for the native side.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedHotkeyConfig {
+    pub trigger: HotkeyParams,
+    pub cancel: HotkeyParams,
+}
+
 impl HotkeySection {
-    /// Resolve the trigger_key string into concrete key codes and modifier flags.
-    pub fn resolve(&self) -> HotkeyParams {
-        match self.trigger_key.as_str() {
+    /// Resolve the configured trigger/cancel hotkeys into concrete key codes
+    /// and modifier flags. If both hotkeys are configured to the same key,
+    /// keep the trigger key and fall back the cancel key to a distinct default.
+    pub fn resolve(&self) -> ResolvedHotkeyConfig {
+        let trigger_key = self.normalized_trigger_key();
+        let cancel_key = self.normalized_cancel_key(&trigger_key);
+        ResolvedHotkeyConfig {
+            trigger: Self::resolve_key(&trigger_key),
+            cancel: Self::resolve_key(&cancel_key),
+        }
+    }
+
+    fn normalized_trigger_key(&self) -> String {
+        Self::normalize_key_name(&self.trigger_key)
+    }
+
+    fn normalized_cancel_key(&self, trigger_key: &str) -> String {
+        let cancel_key = Self::normalize_key_name(&self.cancel_key);
+        if cancel_key == trigger_key {
+            default_cancel_key_for_trigger(trigger_key).into()
+        } else {
+            cancel_key
+        }
+    }
+
+    fn normalize_key_name(value: &str) -> String {
+        match value {
+            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => value.into(),
+            _ => default_trigger_key(),
+        }
+    }
+
+    fn resolve_key(key: &str) -> HotkeyParams {
+        match key {
             "left_option" => HotkeyParams {
                 key_code: 58,       // kVK_Option
                 alt_key_code: 0,
-                modifier_flag: 0x00080000,  // NSEventModifierFlagOption
+                modifier_flag: 0x00000020,  // NX_DEVICELALTKEYMASK
             },
             "right_option" => HotkeyParams {
                 key_code: 61,       // kVK_RightOption
                 alt_key_code: 0,
-                modifier_flag: 0x00080000,  // NSEventModifierFlagOption
+                modifier_flag: 0x00000040,  // NX_DEVICERALTKEYMASK
             },
             "left_command" => HotkeyParams {
                 key_code: 55,       // kVK_Command
                 alt_key_code: 0,
-                modifier_flag: 0x00100000,  // NSEventModifierFlagCommand
+                modifier_flag: 0x00000008,  // NX_DEVICELCMDKEYMASK
             },
             "right_command" => HotkeyParams {
                 key_code: 54,       // kVK_RightCommand
                 alt_key_code: 0,
-                modifier_flag: 0x00100000,  // NSEventModifierFlagCommand
+                modifier_flag: 0x00000010,  // NX_DEVICERCMDKEYMASK
             },
             // "fn" or anything else defaults to Fn/Globe
             _ => HotkeyParams {
@@ -204,6 +248,21 @@ fn default_system_prompt_path() -> String {
 }
 fn default_trigger_key() -> String {
     "fn".into()
+}
+
+fn default_cancel_key() -> String {
+    "left_option".into()
+}
+
+fn default_cancel_key_for_trigger(trigger_key: &str) -> &'static str {
+    match trigger_key {
+        "fn" => "left_option",
+        "left_option" => "right_option",
+        "right_option" => "left_command",
+        "left_command" => "right_command",
+        "right_command" => "fn",
+        _ => "left_option",
+    }
 }
 fn default_user_prompt_path() -> String {
     "user_prompt.txt".into()
@@ -521,6 +580,8 @@ dictionary:
 hotkey:
   # 触发键：fn | left_option | right_option | left_command | right_command
   trigger_key: "fn"
+  # 取消键：不能与触发键重复
+  cancel_key: "left_option"
 "#;
 
 const DEFAULT_DICTIONARY_TXT: &str = r#"# Koe User Dictionary

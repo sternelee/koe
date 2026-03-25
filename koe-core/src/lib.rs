@@ -292,7 +292,7 @@ pub extern "C" fn sp_core_session_end() -> i32 {
     0
 }
 
-/// Cancel the current session (user pressed ESC). No text will be output.
+/// Cancel the current session. No text will be output.
 #[no_mangle]
 pub extern "C" fn sp_core_session_cancel() -> i32 {
     log::info!("sp_core_session_cancel called");
@@ -327,24 +327,28 @@ pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
 }
 
 /// Query current hotkey configuration.
-/// Returns key codes and modifier flags for the configured trigger key.
-/// If not configured, defaults to Fn key (keyCode 63/179).
+/// Returns key codes and modifier flags for the configured trigger/cancel keys.
 #[no_mangle]
 pub extern "C" fn sp_core_get_hotkey_config() -> SPHotkeyConfig {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
         let params = core.config.hotkey.resolve();
         SPHotkeyConfig {
-            key_code: params.key_code,
-            alt_key_code: params.alt_key_code,
-            modifier_flag: params.modifier_flag,
+            trigger_key_code: params.trigger.key_code,
+            trigger_alt_key_code: params.trigger.alt_key_code,
+            trigger_modifier_flag: params.trigger.modifier_flag,
+            cancel_key_code: params.cancel.key_code,
+            cancel_alt_key_code: params.cancel.alt_key_code,
+            cancel_modifier_flag: params.cancel.modifier_flag,
         }
     } else {
-        // Default to Fn key
         SPHotkeyConfig {
-            key_code: 63,
-            alt_key_code: 179,
-            modifier_flag: 0x00800000,
+            trigger_key_code: 63,
+            trigger_alt_key_code: 179,
+            trigger_modifier_flag: 0x00800000,
+            cancel_key_code: 58,
+            cancel_alt_key_code: 0,
+            cancel_modifier_flag: 0x00000020,
         }
     }
 }

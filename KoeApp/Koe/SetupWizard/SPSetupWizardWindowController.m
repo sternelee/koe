@@ -240,6 +240,30 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     return [lines componentsJoinedByString:@"\n"];
 }
 
+static NSString *normalizedHotkeyValue(NSString *value) {
+    static NSSet<NSString *> *validValues;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        validValues = [NSSet setWithArray:@[
+            @"fn",
+            @"left_option",
+            @"right_option",
+            @"left_command",
+            @"right_command",
+        ]];
+    });
+    return [validValues containsObject:value] ? value : @"fn";
+}
+
+static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
+    NSString *normalizedTrigger = normalizedHotkeyValue(triggerKey);
+    if ([normalizedTrigger isEqualToString:@"fn"]) return @"left_option";
+    if ([normalizedTrigger isEqualToString:@"left_option"]) return @"right_option";
+    if ([normalizedTrigger isEqualToString:@"right_option"]) return @"left_command";
+    if ([normalizedTrigger isEqualToString:@"left_command"]) return @"right_command";
+    return @"fn";
+}
+
 // ─── Window Controller ──────────────────────────────────────────────
 
 @interface SPSetupWizardWindowController () <NSToolbarDelegate>
@@ -270,6 +294,7 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
 
 // Hotkey
 @property (nonatomic, strong) NSPopUpButton *hotkeyPopup;
+@property (nonatomic, strong) NSPopUpButton *cancelHotkeyPopup;
 @property (nonatomic, strong) NSButton *startSoundCheckbox;
 @property (nonatomic, strong) NSButton *stopSoundCheckbox;
 @property (nonatomic, strong) NSButton *errorSoundCheckbox;
@@ -535,11 +560,11 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     [self.maxTokenParamPopup itemAtIndex:0].representedObject = @"max_completion_tokens";
     [self.maxTokenParamPopup itemAtIndex:1].representedObject = @"max_tokens";
     [pane addSubview:self.maxTokenParamPopup];
-    y -= 36;
+    y -= 42;
 
     // Hint text
     NSTextField *tokenHint = [self descriptionLabel:@"GPT-4o and older models use max_tokens. GPT-5 and reasoning models (o1/o3) use max_completion_tokens."];
-    tokenHint.frame = NSMakeRect(fieldX, y, fieldW, 32);
+    tokenHint.frame = NSMakeRect(fieldX, y - 2, fieldW, 32);
     [pane addSubview:tokenHint];
     y -= 44;
 
@@ -569,13 +594,13 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     CGFloat fieldX = labelW + 24;
     CGFloat rowH = 32;
 
-    CGFloat contentHeight = 320;
+    CGFloat contentHeight = 360;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
     CGFloat y = contentHeight - 48;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"Choose which key triggers voice input. Hold to record or double-press to toggle."];
+    NSTextField *desc = [self descriptionLabel:@"Choose a trigger key for voice input and a separate cancel key to abort the current session."];
     desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
     [pane addSubview:desc];
     y -= 52;
@@ -598,6 +623,30 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     [self.hotkeyPopup itemAtIndex:4].representedObject = @"right_command";
     [pane addSubview:self.hotkeyPopup];
     y -= rowH + 16;
+
+    // Cancel Key
+    [pane addSubview:[self formLabel:@"Cancel Key" frame:NSMakeRect(16, y, labelW, 22)]];
+
+    self.cancelHotkeyPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 220, 26) pullsDown:NO];
+    [self.cancelHotkeyPopup addItemsWithTitles:@[
+        @"Fn (Globe)",
+        @"Left Option (\u2325)",
+        @"Right Option (\u2325)",
+        @"Left Command (\u2318)",
+        @"Right Command (\u2318)",
+    ]];
+    [self.cancelHotkeyPopup itemAtIndex:0].representedObject = @"fn";
+    [self.cancelHotkeyPopup itemAtIndex:1].representedObject = @"left_option";
+    [self.cancelHotkeyPopup itemAtIndex:2].representedObject = @"right_option";
+    [self.cancelHotkeyPopup itemAtIndex:3].representedObject = @"left_command";
+    [self.cancelHotkeyPopup itemAtIndex:4].representedObject = @"right_command";
+    [pane addSubview:self.cancelHotkeyPopup];
+    y -= rowH + 8;
+
+    NSTextField *hotkeyHint = [self descriptionLabel:@"Trigger Key and Cancel Key must be different."];
+    hotkeyHint.frame = NSMakeRect(fieldX, y + 2, paneWidth - fieldX - 32, 24);
+    [pane addSubview:hotkeyHint];
+    y -= 30;
 
     // Feedback sounds
     [pane addSubview:[self formLabel:@"Feedback Sounds" frame:NSMakeRect(16, y, labelW, 22)]];
@@ -624,9 +673,9 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     y -= 32;
 
     NSTextField *feedbackHint = [self descriptionLabel:@"These toggle the built-in cue sounds for start, stop, and error events."];
-    feedbackHint.frame = NSMakeRect(fieldX, y - 6, paneWidth - fieldX - 32, 32);
+    feedbackHint.frame = NSMakeRect(fieldX, y - 2, paneWidth - fieldX - 32, 24);
     [pane addSubview:feedbackHint];
-    y -= 44;
+    y -= 34;
 
     // Save / Cancel buttons
     [self addButtonsToPane:pane atY:y width:paneWidth];
@@ -858,11 +907,20 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
         self.llmTestResultLabel.stringValue = @"";
         [self updateLlmFieldsEnabled];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
-        NSString *triggerKey = yamlRead(yaml, @"hotkey.trigger_key");
-        if (triggerKey.length == 0) triggerKey = @"fn";
+        NSString *triggerKey = normalizedHotkeyValue(yamlRead(yaml, @"hotkey.trigger_key"));
+        NSString *cancelKey = normalizedHotkeyValue(yamlRead(yaml, @"hotkey.cancel_key"));
+        if (cancelKey.length == 0 || [cancelKey isEqualToString:triggerKey]) {
+            cancelKey = defaultCancelKeyForTrigger(triggerKey);
+        }
         for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
             if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
                 [self.hotkeyPopup selectItemAtIndex:i];
+                break;
+            }
+        }
+        for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
+            if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
+                [self.cancelHotkeyPopup selectItemAtIndex:i];
                 break;
             }
         }
@@ -920,8 +978,15 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
 
     // Update hotkey
     if (self.hotkeyPopup) {
-        NSString *selectedHotkey = self.hotkeyPopup.selectedItem.representedObject ?: @"fn";
-        yaml = yamlWrite(yaml, @"hotkey.trigger_key", selectedHotkey);
+        NSString *selectedTriggerHotkey = self.hotkeyPopup.selectedItem.representedObject ?: @"fn";
+        NSString *selectedCancelHotkey = self.cancelHotkeyPopup.selectedItem.representedObject ?: defaultCancelKeyForTrigger(selectedTriggerHotkey);
+        if ([selectedTriggerHotkey isEqualToString:selectedCancelHotkey]) {
+            [self showAlert:@"Trigger and Cancel keys must be different"
+                       info:@"Choose two different keys for starting and cancelling voice input."];
+            return;
+        }
+        yaml = yamlWrite(yaml, @"hotkey.trigger_key", selectedTriggerHotkey);
+        yaml = yamlWrite(yaml, @"hotkey.cancel_key", selectedCancelHotkey);
     }
     if (self.startSoundCheckbox) {
         NSString *startSound = (self.startSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";

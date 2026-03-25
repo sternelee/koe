@@ -9,7 +9,7 @@
     "Add built-in app update checks and a manual Check for Updates action in the menu bar.",
     "Show the current version and build number directly in the menu bar status UI.",
     "Handle microphone disconnects during recording and recover gracefully.",
-    "Add ESC session cancel support and migrate ASR config to the provider-based v2 format.",
+    "Add a configurable session cancel hotkey and migrate ASR config to the provider-based v2 format.",
     "Improve the interim transcription overlay with auto-wrapping and less layout jitter.",
     "Add an ASR provider selector in Settings, defaulting to Doubao."
   ]

@@ -255,6 +255,9 @@ hotkey:
   # Trigger key for voice input.
   # Options: fn | left_option | right_option | left_command | right_command
   trigger_key: "fn"
+  # Cancel key for aborting the current session.
+  # Must be different from trigger_key.
+  cancel_key: "left_option"
 ```
 
 | Option | Key | Notes |
@@ -265,7 +268,7 @@ hotkey:
 | `left_command` | Left Command | May conflict with system shortcuts |
 | `right_command` | Right Command | Less conflict-prone than left Command |
 
-Hotkey changes take effect automatically within a few seconds — no restart needed.
+Hotkey changes take effect automatically within a few seconds. The trigger key starts voice input, and the cancel key aborts the current session without output.
 
 #### Dictionary
 

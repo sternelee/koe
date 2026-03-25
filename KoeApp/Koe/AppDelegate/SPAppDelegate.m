@@ -23,6 +23,32 @@
 
 @implementation SPAppDelegate
 
+- (void)applyHotkeyConfig:(struct SPHotkeyConfig)hotkeyConfig restartMonitorIfNeeded:(BOOL)restartIfNeeded {
+    BOOL changed = self.hotkeyMonitor.targetKeyCode != hotkeyConfig.trigger_key_code ||
+                   self.hotkeyMonitor.altKeyCode != hotkeyConfig.trigger_alt_key_code ||
+                   self.hotkeyMonitor.targetModifierFlag != hotkeyConfig.trigger_modifier_flag ||
+                   self.hotkeyMonitor.cancelKeyCode != hotkeyConfig.cancel_key_code ||
+                   self.hotkeyMonitor.cancelAltKeyCode != hotkeyConfig.cancel_alt_key_code ||
+                   self.hotkeyMonitor.cancelModifierFlag != hotkeyConfig.cancel_modifier_flag;
+
+    if (!changed) return;
+
+    if (restartIfNeeded) {
+        [self.hotkeyMonitor stop];
+    }
+
+    self.hotkeyMonitor.targetKeyCode = hotkeyConfig.trigger_key_code;
+    self.hotkeyMonitor.altKeyCode = hotkeyConfig.trigger_alt_key_code;
+    self.hotkeyMonitor.targetModifierFlag = hotkeyConfig.trigger_modifier_flag;
+    self.hotkeyMonitor.cancelKeyCode = hotkeyConfig.cancel_key_code;
+    self.hotkeyMonitor.cancelAltKeyCode = hotkeyConfig.cancel_alt_key_code;
+    self.hotkeyMonitor.cancelModifierFlag = hotkeyConfig.cancel_modifier_flag;
+
+    if (restartIfNeeded) {
+        [self.hotkeyMonitor start];
+    }
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSLog(@"[Koe] Application launching...");
 
@@ -78,9 +104,7 @@
 
         // Apply hotkey configuration from config.yaml
         struct SPHotkeyConfig hotkeyConfig = sp_core_get_hotkey_config();
-        self.hotkeyMonitor.targetKeyCode = hotkeyConfig.key_code;
-        self.hotkeyMonitor.altKeyCode = hotkeyConfig.alt_key_code;
-        self.hotkeyMonitor.targetModifierFlag = hotkeyConfig.modifier_flag;
+        [self applyHotkeyConfig:hotkeyConfig restartMonitorIfNeeded:NO];
 
         [self.hotkeyMonitor start];
         NSLog(@"[Koe] Ready — hotkey monitor active");
@@ -167,25 +191,14 @@
     // Read new hotkey config
     struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
 
-    // Check if hotkey settings actually changed
-    if (self.hotkeyMonitor.targetKeyCode != newConfig.key_code ||
-        self.hotkeyMonitor.altKeyCode != newConfig.alt_key_code ||
-        self.hotkeyMonitor.targetModifierFlag != newConfig.modifier_flag) {
-
-        NSLog(@"[Koe] Hotkey changed: keyCode %ld→%d altKeyCode %ld→%d modifierFlag 0x%lx→0x%llx",
-              (long)self.hotkeyMonitor.targetKeyCode, newConfig.key_code,
-              (long)self.hotkeyMonitor.altKeyCode, newConfig.alt_key_code,
-              (unsigned long)self.hotkeyMonitor.targetModifierFlag, (unsigned long long)newConfig.modifier_flag);
-
-        // Stop, update, restart
-        [self.hotkeyMonitor stop];
-        self.hotkeyMonitor.targetKeyCode = newConfig.key_code;
-        self.hotkeyMonitor.altKeyCode = newConfig.alt_key_code;
-        self.hotkeyMonitor.targetModifierFlag = newConfig.modifier_flag;
-        [self.hotkeyMonitor start];
-
-        NSLog(@"[Koe] Hotkey monitor restarted with new trigger key");
-    }
+    NSLog(@"[Koe] Reloaded hotkey config: trigger=%d/%d flag=0x%llx cancel=%d/%d flag=0x%llx",
+          newConfig.trigger_key_code,
+          newConfig.trigger_alt_key_code,
+          (unsigned long long)newConfig.trigger_modifier_flag,
+          newConfig.cancel_key_code,
+          newConfig.cancel_alt_key_code,
+          (unsigned long long)newConfig.cancel_modifier_flag);
+    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
 }
 
 #pragma mark - SPHotkeyMonitorDelegate
@@ -248,7 +261,7 @@
 }
 
 - (void)hotkeyMonitorDidDetectCancel {
-    NSLog(@"[Koe] Cancel detected (ESC)");
+    NSLog(@"[Koe] Cancel detected");
     [self.audioCaptureManager stopCapture];
     [self.rustBridge cancelSession];
     self.recordingStartTime = nil;
@@ -435,16 +448,8 @@
 
     // Re-apply hotkey config
     struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
-    if (self.hotkeyMonitor.targetKeyCode != newConfig.key_code ||
-        self.hotkeyMonitor.altKeyCode != newConfig.alt_key_code ||
-        self.hotkeyMonitor.targetModifierFlag != newConfig.modifier_flag) {
-        [self.hotkeyMonitor stop];
-        self.hotkeyMonitor.targetKeyCode = newConfig.key_code;
-        self.hotkeyMonitor.altKeyCode = newConfig.alt_key_code;
-        self.hotkeyMonitor.targetModifierFlag = newConfig.modifier_flag;
-        [self.hotkeyMonitor start];
-        NSLog(@"[Koe] Hotkey monitor restarted after setup wizard save");
-    }
+    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
+    NSLog(@"[Koe] Hotkey monitor reloaded after setup wizard save");
 }
 
 @end

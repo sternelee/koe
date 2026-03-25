@@ -30,6 +30,22 @@ static const CGFloat kIconSize = 18.0;
 
 @end
 
+static NSString *displayNameForHotkeyValue(NSString *value) {
+    if ([value isEqualToString:@"left_option"]) {
+        return @"Left Option (⌥)";
+    }
+    if ([value isEqualToString:@"right_option"]) {
+        return @"Right Option (⌥)";
+    }
+    if ([value isEqualToString:@"left_command"]) {
+        return @"Left Command (⌘)";
+    }
+    if ([value isEqualToString:@"right_command"]) {
+        return @"Right Command (⌘)";
+    }
+    return @"Fn (Globe)";
+}
+
 @implementation SPStatusBarManager
 
 - (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate
@@ -68,7 +84,7 @@ static const CGFloat kIconSize = 18.0;
     self.statusMenuItem.enabled = NO;
     [menu addItem:self.statusMenuItem];
 
-    self.hotkeyDisplayItem = [[NSMenuItem alloc] initWithTitle:@"Hotkey: Fn"
+    self.hotkeyDisplayItem = [[NSMenuItem alloc] initWithTitle:@"Hotkeys: Fn / Left Option"
                                                         action:nil
                                                  keyEquivalent:@""];
     self.hotkeyDisplayItem.enabled = NO;
@@ -269,8 +285,8 @@ static const CGFloat kIconSize = 18.0;
     NSString *configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".koe/config.yaml"];
     NSString *yaml = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
 
-    // Simple extraction of trigger_key value from config
     NSString *triggerKey = @"fn";
+    NSString *cancelKey = @"left_option";
     if (yaml) {
         NSArray<NSString *> *lines = [yaml componentsSeparatedByString:@"\n"];
         for (NSString *line in lines) {
@@ -289,26 +305,29 @@ static const CGFloat kIconSize = 18.0;
                              stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
                 }
                 if (value.length > 0) triggerKey = value;
-                break;
+            } else if ([trimmed hasPrefix:@"cancel_key:"]) {
+                NSString *value = [trimmed substringFromIndex:@"cancel_key:".length];
+                value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                    value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+                }
+                NSRange commentRange = [value rangeOfString:@" #"];
+                if (commentRange.location != NSNotFound) {
+                    value = [[value substringToIndex:commentRange.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                }
+                if (value.length > 0) cancelKey = value;
             }
         }
     }
 
-    // Map config value to display name
-    NSString *displayName;
-    if ([triggerKey isEqualToString:@"left_option"]) {
-        displayName = @"Left Option (⌥)";
-    } else if ([triggerKey isEqualToString:@"right_option"]) {
-        displayName = @"Right Option (⌥)";
-    } else if ([triggerKey isEqualToString:@"left_command"]) {
-        displayName = @"Left Command (⌘)";
-    } else if ([triggerKey isEqualToString:@"right_command"]) {
-        displayName = @"Right Command (⌘)";
-    } else {
-        displayName = @"Fn (Globe)";
+    if ([triggerKey isEqualToString:cancelKey]) {
+        cancelKey = [triggerKey isEqualToString:@"fn"] ? @"left_option" : @"fn";
     }
 
-    self.hotkeyDisplayItem.title = [NSString stringWithFormat:@"Hotkey: %@", displayName];
+    self.hotkeyDisplayItem.title = [NSString stringWithFormat:@"Hotkeys: %@ / %@",
+                                    displayNameForHotkeyValue(triggerKey),
+                                    displayNameForHotkeyValue(cancelKey)];
 }
 
 #pragma mark - Microphone Selection
