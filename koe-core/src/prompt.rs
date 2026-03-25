@@ -86,6 +86,76 @@ fn build_default_user_prompt_template() -> String {
     include_str!("default_user_prompt.txt").trim().to_string()
 }
 
+/// Built-in default translation system prompt.
+/// cbindgen:ignore
+fn build_default_translation_system_prompt() -> String {
+    include_str!("default_translation_system_prompt.txt").trim().to_string()
+}
+
+/// Built-in default translation user prompt template.
+/// cbindgen:ignore
+fn build_default_translation_user_prompt_template() -> String {
+    include_str!("default_translation_user_prompt.txt").trim().to_string()
+}
+
+/// Load translation system prompt from file, or return built-in default.
+/// cbindgen:ignore
+pub fn load_translation_system_prompt(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                log::warn!("translation system prompt file is empty, using built-in default");
+                build_default_translation_system_prompt()
+            } else {
+                log::info!("loaded translation system prompt from {}", path.display());
+                trimmed.to_string()
+            }
+        }
+        Err(e) => {
+            log::warn!("failed to load translation system prompt from {}: {e}, using built-in default", path.display());
+            build_default_translation_system_prompt()
+        }
+    }
+}
+
+/// Load translation user prompt template from file, or return built-in default.
+/// The template should contain {{asr_text}} placeholder.
+/// cbindgen:ignore
+pub fn load_translation_user_prompt_template(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                log::warn!("translation user prompt file is empty, using built-in default");
+                build_default_translation_user_prompt_template()
+            } else {
+                log::info!("loaded translation user prompt from {}", path.display());
+                trimmed.to_string()
+            }
+        }
+        Err(e) => {
+            log::warn!("failed to load translation user prompt from {}: {e}, using built-in default", path.display());
+            build_default_translation_user_prompt_template()
+        }
+    }
+}
+
+/// Render translation prompts with target language and ASR text.
+/// cbindgen:ignore
+pub fn render_translation_prompts(
+    system_template: &str,
+    user_template: &str,
+    asr_text: &str,
+    target_language: &str,
+) -> (String, String) {
+    let user_prompt = user_template
+        .replace("{{asr_text}}", asr_text)
+        .replace("{{target_language}}", target_language);
+    let system_prompt = system_template.replace("{{target_language}}", target_language);
+    (system_prompt, user_prompt)
+}
+
 /// Filter dictionary candidates to reduce prompt size.
 /// When `max_candidates` is 0, all entries are sent without filtering.
 /// When dictionary has more than `max_candidates` entries,

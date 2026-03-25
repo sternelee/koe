@@ -1,0 +1,5 @@
+Translate the following text to {{target_language}}:
+
+{{asr_text}}
+
+Output the {{target_language}} translation only.

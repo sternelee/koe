@@ -65,6 +65,9 @@ pub struct LlmSection {
     pub system_prompt_path: String,
     #[serde(default = "default_user_prompt_path")]
     pub user_prompt_path: String,
+    /// Target language for translation (e.g., "en", "es", "ja"). Empty means no translation.
+    #[serde(default)]
+    pub translate_to: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -360,6 +363,7 @@ llm:
   dictionary_max_candidates: 0    # 0 = send all entries to LLM
   system_prompt_path: "system_prompt.txt"  # relative to ~/.koe/
   user_prompt_path: "user_prompt.txt"      # relative to ~/.koe/
+  translate_to: ""      # target language: "en", "es", "ja", etc. empty = no translation
 
 feedback:
   start_sound: true

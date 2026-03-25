@@ -34,6 +34,8 @@ struct Core {
     dictionary: Vec<String>,
     system_prompt: String,
     user_prompt_template: String,
+    translation_system_prompt: String,
+    translation_user_prompt_template: String,
 }
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
@@ -79,6 +81,14 @@ pub extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
     let system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&cfg));
     let user_prompt_template = prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
 
+    // Load translation prompts (use built-in defaults)
+    let translation_system_prompt = prompt::load_translation_system_prompt(
+        &config::config_dir().join("translation_system_prompt.txt"),
+    );
+    let translation_user_prompt_template = prompt::load_translation_user_prompt_template(
+        &config::config_dir().join("translation_user_prompt.txt"),
+    );
+
     let runtime = match Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -95,6 +105,8 @@ pub extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         dictionary,
         system_prompt,
         user_prompt_template,
+        translation_system_prompt,
+        translation_user_prompt_template,
     };
 
     let mut global = CORE.lock().unwrap();
@@ -186,6 +198,13 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
         }
         core.system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&new_cfg));
         core.user_prompt_template = prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&new_cfg));
+        // Also reload translation prompts
+        core.translation_system_prompt = prompt::load_translation_system_prompt(
+            &config::config_dir().join("translation_system_prompt.txt"),
+        );
+        core.translation_user_prompt_template = prompt::load_translation_user_prompt_template(
+            &config::config_dir().join("translation_user_prompt.txt"),
+        );
         core.config = new_cfg;
     }
 
@@ -225,6 +244,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let dictionary_max_candidates = cfg.llm.dictionary_max_candidates;
     let system_prompt = core.system_prompt.clone();
     let user_prompt_template = core.user_prompt_template.clone();
+    let translation_system_prompt = core.translation_system_prompt.clone();
+    let translation_user_prompt_template = core.translation_user_prompt_template.clone();
 
     // Spawn the session task
     core.runtime.spawn(async move {
@@ -239,6 +260,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             dictionary_max_candidates,
             system_prompt,
             user_prompt_template,
+            translation_system_prompt,
+            translation_user_prompt_template,
         )
         .await;
     });
@@ -338,6 +361,8 @@ async fn run_session(
     dictionary_max_candidates: usize,
     system_prompt: String,
     user_prompt_template: String,
+    translation_system_prompt: String,
+    translation_user_prompt_template: String,
 ) {
     let final_wait_timeout_ms = asr_config.final_wait_timeout_ms;
 
@@ -467,10 +492,12 @@ async fn run_session(
         }
     }
 
-    // --- LLM Correction ---
+    // --- LLM Correction or Translation ---
     let llm_enabled = llm_config.enabled
         && !llm_config.base_url.is_empty()
         && !llm_config.api_key.is_empty();
+    let target_lang = llm_config.translate_to.clone();
+    let translate_mode = !target_lang.is_empty();
 
     let final_text = if llm_enabled {
         {
@@ -479,7 +506,7 @@ async fn run_session(
                 let _ = session.transition(SessionState::Correcting);
             }
         }
-        invoke_state_changed("correcting");
+        invoke_state_changed(if translate_mode { "translating" } else { "correcting" });
 
         let llm = OpenAiCompatibleProvider::new(
             llm_config.base_url,
@@ -491,35 +518,49 @@ async fn run_session(
             llm_config.timeout_ms,
         );
 
-        // Filter dictionary candidates for prompt
-        let candidates = prompt::filter_dictionary_candidates(
-            &dictionary,
-            &asr_text,
-            dictionary_max_candidates,
-        );
-
-        log::info!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
-        log::info!("[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
-            candidates.len(), interim_history.len());
-
-        let user_prompt = prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, &interim_history);
-        log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
+        // Select prompts based on translation mode
+        let (system_prompt_for_llm, user_prompt_for_llm, dict_entries_for_llm) = if translate_mode {
+            log::info!("[{session_id}] Translation mode enabled");
+            let (system_prompt, user_prompt) = prompt::render_translation_prompts(
+                &translation_system_prompt,
+                &translation_user_prompt_template,
+                &asr_text,
+                &target_lang,
+            );
+            log::debug!("[{}] Translation system prompt:\n{}", session_id, system_prompt);
+            log::debug!("[{}] Translation user prompt:\n{}", session_id, user_prompt);
+            (system_prompt, user_prompt, vec![])
+        } else {
+            // Filter dictionary candidates for correction prompt
+            let candidates = prompt::filter_dictionary_candidates(
+                &dictionary,
+                &asr_text,
+                dictionary_max_candidates,
+            );
+            log::info!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
+            log::info!("[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
+                candidates.len(), interim_history.len());
+            let user_prompt = prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, &interim_history);
+            log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
+            (system_prompt.clone(), user_prompt, candidates)
+        };
 
         let request = CorrectionRequest {
             asr_text: asr_text.clone(),
-            dictionary_entries: candidates,
-            system_prompt,
-            user_prompt,
+            dictionary_entries: dict_entries_for_llm,
+            system_prompt: system_prompt_for_llm,
+            user_prompt: user_prompt_for_llm,
         };
 
         match llm.correct(&request).await {
-            Ok(corrected) => {
-                log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
-                corrected
+            Ok(result) => {
+                let action = if translate_mode { "translated" } else { "corrected" };
+                log::info!("[{session_id}] LLM {}: {} chars", action, result.len());
+                result
             }
             Err(e) => {
                 log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
-                invoke_session_warning(&format!("LLM correction failed: {e}"));
+                invoke_session_warning(&format!("LLM {} failed: {}", if translate_mode { "translation" } else { "correction" }, e));
                 asr_text
             }
         }
