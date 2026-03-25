@@ -176,7 +176,7 @@ fn default_dictionary_max_candidates() -> usize {
     0
 }
 fn default_llm_max_token_parameter() -> LlmMaxTokenParameter {
-    LlmMaxTokenParameter::MaxTokens
+    LlmMaxTokenParameter::MaxCompletionTokens
 }
 fn default_dictionary_path() -> String {
     "dictionary.txt".into()
@@ -362,14 +362,14 @@ asr:
 llm:
   enabled: true        # set to false to skip LLM correction entirely
   # OpenAI-compatible endpoint for text correction
-  base_url: ""         # e.g. "https://api.openai.com/v1"
+  base_url: "https://api.openai.com/v1"
   api_key: ""          # or use ${LLM_API_KEY}
-  model: ""            # e.g. "gpt-4o-mini"
+  model: "gpt-5.4-nano"
   temperature: 0
   top_p: 1
   timeout_ms: 8000
   max_output_tokens: 1024
-  max_token_parameter: "max_tokens"        # use "max_completion_tokens" for GPT-5/reasoning-compatible endpoints
+  max_token_parameter: "max_completion_tokens"  # use "max_tokens" for older model endpoints
   dictionary_max_candidates: 0             # 0 = send all entries to LLM
   system_prompt_path: "system_prompt.txt"  # relative to ~/.koe/
   user_prompt_path: "user_prompt.txt"      # relative to ~/.koe/

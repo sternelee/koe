@@ -181,7 +181,7 @@ llm:
   #   OpenAI:    "https://api.openai.com/v1"
   #   Anthropic: "https://api.anthropic.com/v1"  (needs compatible proxy)
   #   Local:     "http://localhost:8080/v1"
-  base_url: ""
+  base_url: "https://api.openai.com/v1"
 
   # API key. Supports environment variable substitution with ${VAR_NAME} syntax.
   # Examples:
@@ -190,8 +190,8 @@ llm:
   api_key: ""
 
   # Model name. Use a fast, cheap model — latency matters here.
-  # Recommended: "gpt-4o-mini" or any similar fast model.
-  model: ""
+  # Recommended: "gpt-5.4-nano" or any similar fast model.
+  model: "gpt-5.4-nano"
 
   # LLM sampling parameters. temperature: 0 = deterministic, best for correction tasks.
   temperature: 0
@@ -204,8 +204,8 @@ llm:
   max_output_tokens: 1024
 
   # Token limit field sent to the OpenAI-compatible API.
-  # Use "max_completion_tokens" for GPT-5/reasoning-compatible endpoints.
-  max_token_parameter: "max_tokens"
+  # Use "max_tokens" for older model endpoints.
+  max_token_parameter: "max_completion_tokens"
 
   # How many dictionary entries to include in the LLM prompt.
   # 0 = send all entries (recommended for dictionaries under ~500 entries).
