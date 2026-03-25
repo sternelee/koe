@@ -11,6 +11,7 @@
 @class SPStatusBarManager;
 @class SPHistoryManager;
 @class SPOverlayPanel;
+@class SPSetupWizardWindowController;
 
 @interface SPAppDelegate : NSObject <NSApplicationDelegate>
 
@@ -25,5 +26,6 @@
 @property (nonatomic, strong) SPStatusBarManager *statusBarManager;
 @property (nonatomic, strong) SPOverlayPanel *overlayPanel;
 @property (nonatomic, strong) dispatch_source_t configWatcher;
+@property (nonatomic, strong) SPSetupWizardWindowController *setupWizard;
 
 @end

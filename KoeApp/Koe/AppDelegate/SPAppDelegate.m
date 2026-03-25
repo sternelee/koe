@@ -10,6 +10,7 @@
 #import "SPStatusBarManager.h"
 #import "SPOverlayPanel.h"
 #import "SPHistoryManager.h"
+#import "SPSetupWizardWindowController.h"
 #import "koe_core.h"
 #import <sys/stat.h>
 #import <UserNotifications/UserNotifications.h>
@@ -332,6 +333,34 @@
 
 - (void)statusBarDidSelectAudioDeviceWithUID:(NSString *)uid {
     NSLog(@"[Koe] Audio input device changed: %@", uid ?: @"System Default");
+}
+
+- (void)statusBarDidSelectSetupWizard {
+    if (!self.setupWizard) {
+        self.setupWizard = [[SPSetupWizardWindowController alloc] init];
+        self.setupWizard.delegate = self;
+    }
+    [self.setupWizard showWindow:nil];
+}
+
+#pragma mark - SPSetupWizardDelegate
+
+- (void)setupWizardDidSaveConfig {
+    NSLog(@"[Koe] Setup wizard saved config, reloading...");
+    [self.rustBridge reloadConfig];
+
+    // Re-apply hotkey config
+    struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
+    if (self.hotkeyMonitor.targetKeyCode != newConfig.key_code ||
+        self.hotkeyMonitor.altKeyCode != newConfig.alt_key_code ||
+        self.hotkeyMonitor.targetModifierFlag != newConfig.modifier_flag) {
+        [self.hotkeyMonitor stop];
+        self.hotkeyMonitor.targetKeyCode = newConfig.key_code;
+        self.hotkeyMonitor.altKeyCode = newConfig.alt_key_code;
+        self.hotkeyMonitor.targetModifierFlag = newConfig.modifier_flag;
+        [self.hotkeyMonitor start];
+        NSLog(@"[Koe] Hotkey monitor restarted after setup wizard save");
+    }
 }
 
 @end

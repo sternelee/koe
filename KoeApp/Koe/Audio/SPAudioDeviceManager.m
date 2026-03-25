@@ -185,22 +185,9 @@ static NSString *const kSelectedDeviceNameKey = @"SPSelectedAudioDeviceName";
         NSLog(@"[Koe] Selected audio device %@ not found, falling back to system default", selectedUID);
     }
 
-    // Return system default input device
-    AudioObjectPropertyAddress defaultAddress = {
-        .mSelector = kAudioHardwarePropertyDefaultInputDevice,
-        .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMain
-    };
-
-    AudioDeviceID defaultDevice = kAudioObjectUnknown;
-    UInt32 size = sizeof(AudioDeviceID);
-    OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddress, 0, NULL, &size, &defaultDevice);
-    if (status != noErr) {
-        NSLog(@"[Koe] Failed to get default input device: %d", (int)status);
-        return kAudioObjectUnknown;
-    }
-
-    return defaultDevice;
+    // Return kAudioObjectUnknown so SPAudioCaptureManager lets AVAudioEngine
+    // use its own default device handling instead of explicitly setting one.
+    return kAudioObjectUnknown;
 }
 
 @end

@@ -20,6 +20,7 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, strong) NSMenuItem *accessibilityPermissionItem;
 @property (nonatomic, strong) NSMenuItem *inputMonitoringPermissionItem;
 @property (nonatomic, strong) NSMenuItem *notificationPermissionItem;
+@property (nonatomic, strong) NSMenuItem *hotkeyDisplayItem;
 @property (nonatomic, strong) NSMenuItem *statsCountItem;
 @property (nonatomic, strong) NSMenuItem *statsTimeItem;
 @property (nonatomic, strong) NSMenuItem *statsSpeedItem;
@@ -62,6 +63,12 @@ static const CGFloat kIconSize = 18.0;
                                              keyEquivalent:@""];
     self.statusMenuItem.enabled = NO;
     [menu addItem:self.statusMenuItem];
+
+    self.hotkeyDisplayItem = [[NSMenuItem alloc] initWithTitle:@"Hotkey: Fn"
+                                                        action:nil
+                                                 keyEquivalent:@""];
+    self.hotkeyDisplayItem.enabled = NO;
+    [menu addItem:self.hotkeyDisplayItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -131,6 +138,12 @@ static const CGFloat kIconSize = 18.0;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    NSMenuItem *setupWizard = [[NSMenuItem alloc] initWithTitle:@"Setup Wizard..."
+                                                        action:@selector(openSetupWizard:)
+                                                 keyEquivalent:@","];
+    setupWizard.target = self;
+    [menu addItem:setupWizard];
+
     NSMenuItem *openConfig = [[NSMenuItem alloc] initWithTitle:@"Open Config Folder..."
                                                        action:@selector(openConfigFolder:)
                                                 keyEquivalent:@""];
@@ -163,6 +176,7 @@ static const CGFloat kIconSize = 18.0;
 #pragma mark - NSMenuDelegate
 
 - (void)menuWillOpen:(NSMenu *)menu {
+    [self refreshHotkeyDisplay];
     [self refreshPermissionStatus];
     [self refreshStats];
     [self refreshMicrophoneSubmenu:menu];
@@ -239,6 +253,52 @@ static const CGFloat kIconSize = 18.0;
     } else {
         self.statsSpeedItem.title = @"  Speed: --";
     }
+}
+
+- (void)refreshHotkeyDisplay {
+    NSString *configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".koe/config.yaml"];
+    NSString *yaml = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
+
+    // Simple extraction of trigger_key value from config
+    NSString *triggerKey = @"fn";
+    if (yaml) {
+        NSArray<NSString *> *lines = [yaml componentsSeparatedByString:@"\n"];
+        for (NSString *line in lines) {
+            NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([trimmed hasPrefix:@"trigger_key:"]) {
+                NSString *value = [trimmed substringFromIndex:@"trigger_key:".length];
+                value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                // Strip quotes
+                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                    value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+                }
+                // Strip inline comment for unquoted values
+                NSRange commentRange = [value rangeOfString:@" #"];
+                if (commentRange.location != NSNotFound) {
+                    value = [[value substringToIndex:commentRange.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                }
+                if (value.length > 0) triggerKey = value;
+                break;
+            }
+        }
+    }
+
+    // Map config value to display name
+    NSString *displayName;
+    if ([triggerKey isEqualToString:@"left_option"]) {
+        displayName = @"Left Option (⌥)";
+    } else if ([triggerKey isEqualToString:@"right_option"]) {
+        displayName = @"Right Option (⌥)";
+    } else if ([triggerKey isEqualToString:@"left_command"]) {
+        displayName = @"Left Command (⌘)";
+    } else if ([triggerKey isEqualToString:@"right_command"]) {
+        displayName = @"Right Command (⌘)";
+    } else {
+        displayName = @"Fn (Globe)";
+    }
+
+    self.hotkeyDisplayItem.title = [NSString stringWithFormat:@"Hotkey: %@", displayName];
 }
 
 #pragma mark - Microphone Selection
@@ -542,6 +602,12 @@ static const CGFloat kIconSize = 18.0;
 }
 
 #pragma mark - Actions
+
+- (void)openSetupWizard:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(statusBarDidSelectSetupWizard)]) {
+        [self.delegate statusBarDidSelectSetupWizard];
+    }
+}
 
 - (void)openConfigFolder:(id)sender {
     NSString *path = [NSString stringWithFormat:@"%@/.koe", NSHomeDirectory()];

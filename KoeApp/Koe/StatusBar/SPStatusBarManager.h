@@ -7,6 +7,7 @@
 @optional
 - (void)statusBarDidSelectReloadConfig;
 - (void)statusBarDidSelectQuit;
+- (void)statusBarDidSelectSetupWizard;
 - (void)statusBarMenuDidOpen;
 - (void)statusBarMenuDidClose;
 - (void)statusBarDidSelectAudioDeviceWithUID:(nullable NSString *)uid;

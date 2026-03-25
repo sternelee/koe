@@ -115,6 +115,18 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     }
 }
 
+- (void)setSuspended:(BOOL)suspended {
+    _suspended = suspended;
+    if (!suspended) {
+        // Reset state machine on unsuspend — key events were missed while
+        // suspended, so fnDown and state may be out of sync with reality.
+        // Without this, stale state can cause phantom key-up/down firings.
+        [self cancelHoldTimer];
+        self.fnDown = NO;
+        self.state = SPHotkeyStateIdle;
+    }
+}
+
 - (BOOL)isTargetKeyCode:(NSInteger)keyCode {
     return keyCode == self.targetKeyCode || (self.altKeyCode != 0 && keyCode == self.altKeyCode);
 }
