@@ -21,7 +21,6 @@ static const NSUInteger kFrameSamples = 3200; // 200ms at 16kHz
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _audioEngine = [[AVAudioEngine alloc] init];
         _isCapturing = NO;
         _accumBuffer = [NSMutableData data];
     }
@@ -33,6 +32,10 @@ static const NSUInteger kFrameSamples = 3200; // 200ms at 16kHz
 
     self.audioCallback = callback;
     [self.accumBuffer setLength:0];
+
+    // Create a fresh engine each session so stale device state (e.g. after
+    // Bluetooth reconnect) never carries over from a previous capture.
+    self.audioEngine = [[AVAudioEngine alloc] init];
 
     AVAudioInputNode *inputNode = self.audioEngine.inputNode;
 

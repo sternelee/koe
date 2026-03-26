@@ -12,6 +12,7 @@ typedef NS_ENUM(NSInteger, SPSessionModeObjC) {
 - (void)rustBridgeDidEncounterError:(NSString *)message;
 - (void)rustBridgeDidReceiveWarning:(NSString *)message;
 - (void)rustBridgeDidChangeState:(NSString *)state;
+- (void)rustBridgeDidReceiveInterimText:(NSString *)text;
 @end
 
 @interface SPRustBridge : NSObject
@@ -32,6 +33,9 @@ typedef NS_ENUM(NSInteger, SPSessionModeObjC) {
 
 /// End the current session.
 - (void)endSession;
+
+/// Cancel the current session (no text output).
+- (void)cancelSession;
 
 /// Reload configuration.
 - (void)reloadConfig;

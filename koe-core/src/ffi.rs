@@ -39,6 +39,9 @@ pub struct SPCallbacks {
     /// Called when session state changes (for status bar updates)
     /// state is a UTF-8 C string representing the state name
     pub on_state_changed: Option<extern "C" fn(state: *const c_char)>,
+    /// Called when an interim (partial) ASR result arrives during recording
+    /// text is a UTF-8 C string, caller must NOT free it
+    pub on_interim_text: Option<extern "C" fn(text: *const c_char)>,
 }
 
 static CALLBACKS: Mutex<Option<SPCallbacks>> = Mutex::new(None);
@@ -107,6 +110,16 @@ pub fn invoke_state_changed(state: &str) {
     }
 }
 
+pub fn invoke_interim_text(text: &str) {
+    let cb = CALLBACKS.lock().unwrap();
+    if let Some(ref cbs) = *cb {
+        if let Some(f) = cbs.on_interim_text {
+            let c_text = CString::new(text).unwrap_or_default();
+            f(c_text.as_ptr());
+        }
+    }
+}
+
 /// Feedback configuration exposed to the Obj-C layer
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -120,12 +133,18 @@ pub struct SPFeedbackConfig {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SPHotkeyConfig {
-    /// Primary key code (e.g. 63 for Fn, 58 for Left Option)
-    pub key_code: u16,
-    /// Alternative key code (e.g. 179 for Globe key), 0 if none
-    pub alt_key_code: u16,
-    /// Modifier flag to check (e.g. 0x800000 for Fn)
-    pub modifier_flag: u64,
+    /// Trigger hotkey primary key code (e.g. 63 for Fn, 58 for Left Option)
+    pub trigger_key_code: u16,
+    /// Trigger hotkey alternative key code (e.g. 179 for Globe key), 0 if none
+    pub trigger_alt_key_code: u16,
+    /// Trigger hotkey modifier flag (e.g. 0x800000 for Fn)
+    pub trigger_modifier_flag: u64,
+    /// Cancel hotkey primary key code
+    pub cancel_key_code: u16,
+    /// Cancel hotkey alternative key code, 0 if none
+    pub cancel_alt_key_code: u16,
+    /// Cancel hotkey modifier flag
+    pub cancel_modifier_flag: u64,
 }
 
 /// Helper to convert a C string pointer to a Rust &str

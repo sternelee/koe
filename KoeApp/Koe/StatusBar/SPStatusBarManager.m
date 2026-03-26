@@ -20,6 +20,7 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, strong) NSMenuItem *accessibilityPermissionItem;
 @property (nonatomic, strong) NSMenuItem *inputMonitoringPermissionItem;
 @property (nonatomic, strong) NSMenuItem *notificationPermissionItem;
+@property (nonatomic, strong) NSMenuItem *hotkeyDisplayItem;
 @property (nonatomic, strong) NSMenuItem *statsCountItem;
 @property (nonatomic, strong) NSMenuItem *statsTimeItem;
 @property (nonatomic, strong) NSMenuItem *statsSpeedItem;
@@ -28,6 +29,22 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, copy) NSString *currentState;
 
 @end
+
+static NSString *displayNameForHotkeyValue(NSString *value) {
+    if ([value isEqualToString:@"left_option"]) {
+        return @"Left Option (⌥)";
+    }
+    if ([value isEqualToString:@"right_option"]) {
+        return @"Right Option (⌥)";
+    }
+    if ([value isEqualToString:@"left_command"]) {
+        return @"Left Command (⌘)";
+    }
+    if ([value isEqualToString:@"right_command"]) {
+        return @"Right Command (⌘)";
+    }
+    return @"Fn (Globe)";
+}
 
 @implementation SPStatusBarManager
 
@@ -56,12 +73,22 @@ static const CGFloat kIconSize = 18.0;
     menu.delegate = self;
     menu.autoenablesItems = NO;
 
-    // Status display
-    self.statusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Ready"
+    // Status display with version info
+    NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+    NSString *version = info[@"CFBundleShortVersionString"] ?: @"?";
+    NSString *build = info[@"CFBundleVersion"] ?: @"?";
+    NSString *statusTitle = [NSString stringWithFormat:@"Ready — v%@ (%@)", version, build];
+    self.statusMenuItem = [[NSMenuItem alloc] initWithTitle:statusTitle
                                                     action:nil
                                              keyEquivalent:@""];
     self.statusMenuItem.enabled = NO;
     [menu addItem:self.statusMenuItem];
+
+    self.hotkeyDisplayItem = [[NSMenuItem alloc] initWithTitle:@"Hotkeys: Fn / Left Option"
+                                                        action:nil
+                                                 keyEquivalent:@""];
+    self.hotkeyDisplayItem.enabled = NO;
+    [menu addItem:self.hotkeyDisplayItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -131,11 +158,23 @@ static const CGFloat kIconSize = 18.0;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    NSMenuItem *setupWizard = [[NSMenuItem alloc] initWithTitle:@"Setup Wizard..."
+                                                        action:@selector(openSetupWizard:)
+                                                 keyEquivalent:@","];
+    setupWizard.target = self;
+    [menu addItem:setupWizard];
+
     NSMenuItem *openConfig = [[NSMenuItem alloc] initWithTitle:@"Open Config Folder..."
                                                        action:@selector(openConfigFolder:)
                                                 keyEquivalent:@""];
     openConfig.target = self;
     [menu addItem:openConfig];
+
+    NSMenuItem *checkForUpdates = [[NSMenuItem alloc] initWithTitle:@"Check for Updates..."
+                                                             action:@selector(checkForUpdates:)
+                                                      keyEquivalent:@""];
+    checkForUpdates.target = self;
+    [menu addItem:checkForUpdates];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -163,6 +202,7 @@ static const CGFloat kIconSize = 18.0;
 #pragma mark - NSMenuDelegate
 
 - (void)menuWillOpen:(NSMenu *)menu {
+    [self refreshHotkeyDisplay];
     [self refreshPermissionStatus];
     [self refreshStats];
     [self refreshMicrophoneSubmenu:menu];
@@ -239,6 +279,55 @@ static const CGFloat kIconSize = 18.0;
     } else {
         self.statsSpeedItem.title = @"  Speed: --";
     }
+}
+
+- (void)refreshHotkeyDisplay {
+    NSString *configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".koe/config.yaml"];
+    NSString *yaml = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
+
+    NSString *triggerKey = @"fn";
+    NSString *cancelKey = @"left_option";
+    if (yaml) {
+        NSArray<NSString *> *lines = [yaml componentsSeparatedByString:@"\n"];
+        for (NSString *line in lines) {
+            NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([trimmed hasPrefix:@"trigger_key:"]) {
+                NSString *value = [trimmed substringFromIndex:@"trigger_key:".length];
+                value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                // Strip quotes
+                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                    value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+                }
+                // Strip inline comment for unquoted values
+                NSRange commentRange = [value rangeOfString:@" #"];
+                if (commentRange.location != NSNotFound) {
+                    value = [[value substringToIndex:commentRange.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                }
+                if (value.length > 0) triggerKey = value;
+            } else if ([trimmed hasPrefix:@"cancel_key:"]) {
+                NSString *value = [trimmed substringFromIndex:@"cancel_key:".length];
+                value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                    value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+                }
+                NSRange commentRange = [value rangeOfString:@" #"];
+                if (commentRange.location != NSNotFound) {
+                    value = [[value substringToIndex:commentRange.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                }
+                if (value.length > 0) cancelKey = value;
+            }
+        }
+    }
+
+    if ([triggerKey isEqualToString:cancelKey]) {
+        cancelKey = [triggerKey isEqualToString:@"fn"] ? @"left_option" : @"fn";
+    }
+
+    self.hotkeyDisplayItem.title = [NSString stringWithFormat:@"Hotkeys: %@ / %@",
+                                    displayNameForHotkeyValue(triggerKey),
+                                    displayNameForHotkeyValue(cancelKey)];
 }
 
 #pragma mark - Microphone Selection
@@ -478,7 +567,10 @@ static const CGFloat kIconSize = 18.0;
     [self stopAnimation];
 
     if ([state isEqualToString:@"idle"] || [state isEqualToString:@"completed"]) {
-        self.statusMenuItem.title = @"Ready";
+        NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+        NSString *ver = info[@"CFBundleShortVersionString"] ?: @"?";
+        NSString *bld = info[@"CFBundleVersion"] ?: @"?";
+        self.statusMenuItem.title = [NSString stringWithFormat:@"Ready — v%@ (%@)", ver, bld];
         [self applyIdleIcon];
 
     } else if ([state hasPrefix:@"recording"]) {
@@ -543,6 +635,12 @@ static const CGFloat kIconSize = 18.0;
 
 #pragma mark - Actions
 
+- (void)openSetupWizard:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(statusBarDidSelectSetupWizard)]) {
+        [self.delegate statusBarDidSelectSetupWizard];
+    }
+}
+
 - (void)openConfigFolder:(id)sender {
     NSString *path = [NSString stringWithFormat:@"%@/.koe", NSHomeDirectory()];
     [[NSFileManager defaultManager] createDirectoryAtPath:path
@@ -555,6 +653,12 @@ static const CGFloat kIconSize = 18.0;
 - (void)reloadConfig:(id)sender {
     if ([self.delegate respondsToSelector:@selector(statusBarDidSelectReloadConfig)]) {
         [self.delegate statusBarDidSelectReloadConfig];
+    }
+}
+
+- (void)checkForUpdates:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(statusBarDidSelectCheckForUpdates)]) {
+        [self.delegate statusBarDidSelectCheckForUpdates];
     }
 }
 

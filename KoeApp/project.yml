@@ -10,6 +10,7 @@ settings:
     PRODUCT_BUNDLE_IDENTIFIER: nz.owo.koe
     MACOSX_DEPLOYMENT_TARGET: "13.0"
     ENABLE_HARDENED_RUNTIME: YES
+    APP_UPDATE_FEED_URL: "https://raw.githubusercontent.com/missuo/koe/main/docs/update-feed.json"
 
 targets:
   Koe:
@@ -30,6 +31,7 @@ targets:
         LIBRARY_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../target/aarch64-apple-darwin/release"
+          - "$(SRCROOT)/../target/x86_64-apple-darwin/release"
           - "$(SRCROOT)/../target/release"
         OTHER_LDFLAGS:
           - "-lkoe_core"
@@ -44,8 +46,14 @@ targets:
     preBuildScripts:
       - name: Build Rust Library
         script: |
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           cd "${SRCROOT}/.."
-          cargo build --manifest-path koe-core/Cargo.toml --release --target aarch64-apple-darwin
+          if [ "$ARCHS" = "x86_64" ]; then
+            RUST_TARGET="x86_64-apple-darwin"
+          else
+            RUST_TARGET="aarch64-apple-darwin"
+          fi
+          cargo build --manifest-path koe-core/Cargo.toml --release --target "$RUST_TARGET"
         basedOnDependencyAnalysis: false
     frameworks:
       - AVFoundation

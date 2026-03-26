@@ -10,9 +10,9 @@ pub mod telemetry;
 
 use crate::config::Config;
 use crate::ffi::{
-    cstr_to_str, invoke_final_text_ready, invoke_session_error, invoke_session_ready,
-    invoke_session_warning, invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext,
-    SPSessionMode,
+    cstr_to_str, invoke_final_text_ready, invoke_interim_text, invoke_session_error,
+    invoke_session_ready, invoke_session_warning, invoke_state_changed, SPCallbacks,
+    SPFeedbackConfig, SPHotkeyConfig, SPSessionContext, SPSessionMode,
 };
 use crate::llm::openai_compatible::OpenAiCompatibleProvider;
 use crate::llm::{CorrectionRequest, LlmProvider};
@@ -20,6 +20,7 @@ use crate::session::{Session, SessionState};
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoWsProvider, TranscriptAggregator};
 
 use std::ffi::c_char;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -30,6 +31,7 @@ struct Core {
     runtime: Runtime,
     audio_tx: Option<mpsc::Sender<Vec<u8>>>,
     session: Arc<Mutex<Option<Session>>>,
+    cancelled: Arc<AtomicBool>,
     config: Config,
     dictionary: Vec<String>,
     system_prompt: String,
@@ -79,7 +81,8 @@ pub extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
 
     // Load prompts
     let system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&cfg));
-    let user_prompt_template = prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
+    let user_prompt_template =
+        prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
 
     // Load translation prompts (use built-in defaults)
     let translation_system_prompt = prompt::load_translation_system_prompt(
@@ -101,6 +104,7 @@ pub extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         runtime,
         audio_tx: None,
         session: Arc::new(Mutex::new(None)),
+        cancelled: Arc::new(AtomicBool::new(false)),
         config: cfg,
         dictionary,
         system_prompt,
@@ -154,7 +158,8 @@ pub extern "C" fn sp_core_reload_config() -> i32 {
     };
 
     let system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&cfg));
-    let user_prompt_template = prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
+    let user_prompt_template =
+        prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
 
     let mut global = CORE.lock().unwrap();
     if let Some(ref mut core) = *global {
@@ -196,8 +201,10 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
         if let Ok(d) = dictionary::load_dictionary(&dict_path) {
             core.dictionary = d;
         }
-        core.system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&new_cfg));
-        core.user_prompt_template = prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&new_cfg));
+        core.system_prompt =
+            prompt::load_system_prompt(&config::resolve_system_prompt_path(&new_cfg));
+        core.user_prompt_template =
+            prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&new_cfg));
         // Also reload translation prompts
         core.translation_system_prompt = prompt::load_translation_system_prompt(
             &config::config_dir().join("translation_system_prompt.txt"),
@@ -217,6 +224,10 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1024);
     core.audio_tx = Some(audio_tx);
 
+    // Reset cancelled flag for new session
+    core.cancelled.store(false, Ordering::SeqCst);
+    let cancelled = core.cancelled.clone();
+
     let session_arc = core.session.clone();
     {
         let mut s = session_arc.lock().unwrap();
@@ -225,18 +236,19 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
 
     // Capture config for the async task
     let cfg = &core.config;
+    let doubao = &cfg.asr.doubao;
     let asr_config = AsrConfig {
-        url: cfg.asr.url.clone(),
-        app_key: cfg.asr.app_key.clone(),
-        access_key: cfg.asr.access_key.clone(),
-        resource_id: cfg.asr.resource_id.clone(),
+        url: doubao.url.clone(),
+        app_key: doubao.app_key.clone(),
+        access_key: doubao.access_key.clone(),
+        resource_id: doubao.resource_id.clone(),
         sample_rate_hz: 16000,
-        connect_timeout_ms: cfg.asr.connect_timeout_ms,
-        final_wait_timeout_ms: cfg.asr.final_wait_timeout_ms,
-        enable_ddc: cfg.asr.enable_ddc,
-        enable_itn: cfg.asr.enable_itn,
-        enable_punc: cfg.asr.enable_punc,
-        enable_nonstream: cfg.asr.enable_nonstream,
+        connect_timeout_ms: doubao.connect_timeout_ms,
+        final_wait_timeout_ms: doubao.final_wait_timeout_ms,
+        enable_ddc: doubao.enable_ddc,
+        enable_itn: doubao.enable_itn,
+        enable_punc: doubao.enable_punc,
+        enable_nonstream: doubao.enable_nonstream,
         hotwords: core.dictionary.clone(),
     };
     let llm_config = cfg.llm.clone();
@@ -262,6 +274,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             user_prompt_template,
             translation_system_prompt,
             translation_user_prompt_template,
+            cancelled,
         )
         .await;
     });
@@ -271,11 +284,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
 
 /// Push an audio frame into the current session.
 #[no_mangle]
-pub extern "C" fn sp_core_push_audio(
-    frame: *const u8,
-    len: u32,
-    _timestamp: u64,
-) -> i32 {
+pub extern "C" fn sp_core_push_audio(frame: *const u8, len: u32, _timestamp: u64) -> i32 {
     if frame.is_null() || len == 0 {
         return -1;
     }
@@ -306,6 +315,21 @@ pub extern "C" fn sp_core_session_end() -> i32 {
     0
 }
 
+/// Cancel the current session. No text will be output.
+#[no_mangle]
+pub extern "C" fn sp_core_session_cancel() -> i32 {
+    log::info!("sp_core_session_cancel called");
+
+    let mut global = CORE.lock().unwrap();
+    if let Some(ref mut core) = *global {
+        // Set cancelled flag so the session task aborts without output
+        core.cancelled.store(true, Ordering::SeqCst);
+        // Drop the audio sender to unblock the session task
+        core.audio_tx = None;
+    }
+    0
+}
+
 /// Query current feedback configuration.
 #[no_mangle]
 pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
@@ -318,32 +342,36 @@ pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
         }
     } else {
         SPFeedbackConfig {
-            start_sound: true,
-            stop_sound: true,
-            error_sound: true,
+            start_sound: false,
+            stop_sound: false,
+            error_sound: false,
         }
     }
 }
 
 /// Query current hotkey configuration.
-/// Returns key codes and modifier flags for the configured trigger key.
-/// If not configured, defaults to Fn key (keyCode 63/179).
+/// Returns key codes and modifier flags for the configured trigger/cancel keys.
 #[no_mangle]
 pub extern "C" fn sp_core_get_hotkey_config() -> SPHotkeyConfig {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
         let params = core.config.hotkey.resolve();
         SPHotkeyConfig {
-            key_code: params.key_code,
-            alt_key_code: params.alt_key_code,
-            modifier_flag: params.modifier_flag,
+            trigger_key_code: params.trigger.key_code,
+            trigger_alt_key_code: params.trigger.alt_key_code,
+            trigger_modifier_flag: params.trigger.modifier_flag,
+            cancel_key_code: params.cancel.key_code,
+            cancel_alt_key_code: params.cancel.alt_key_code,
+            cancel_modifier_flag: params.cancel.modifier_flag,
         }
     } else {
-        // Default to Fn key
         SPHotkeyConfig {
-            key_code: 63,
-            alt_key_code: 179,
-            modifier_flag: 0x00800000,
+            trigger_key_code: 63,
+            trigger_alt_key_code: 179,
+            trigger_modifier_flag: 0x00800000,
+            cancel_key_code: 58,
+            cancel_alt_key_code: 0,
+            cancel_modifier_flag: 0x00000020,
         }
     }
 }
@@ -363,21 +391,13 @@ async fn run_session(
     user_prompt_template: String,
     translation_system_prompt: String,
     translation_user_prompt_template: String,
+    cancelled: Arc<AtomicBool>,
 ) {
     let final_wait_timeout_ms = asr_config.final_wait_timeout_ms;
 
-    // --- Connect ASR ---
-    invoke_state_changed("connecting_asr");
-    let mut asr = DoubaoWsProvider::new();
-    if let Err(e) = asr.connect(&asr_config).await {
-        log::error!("[{session_id}] ASR connection failed: {e}");
-        invoke_session_error(&e.to_string());
-        invoke_state_changed("failed");
-        cleanup_session(&session_arc);
-        return;
-    }
-
-    // Transition to recording
+    // Transition to recording immediately so the user can start speaking
+    // while ASR connects.  Audio frames are buffered in the mpsc channel
+    // (capacity 1024) and drained once the connection is established.
     let recording_state = match mode {
         SPSessionMode::Hold => SessionState::RecordingHold,
         SPSessionMode::Toggle => SessionState::RecordingToggle,
@@ -390,6 +410,16 @@ async fn run_session(
     }
     invoke_state_changed(&recording_state.to_string());
     invoke_session_ready();
+
+    // --- Connect ASR ---
+    let mut asr = DoubaoWsProvider::new();
+    if let Err(e) = asr.connect(&asr_config).await {
+        log::error!("[{session_id}] ASR connection failed: {e}");
+        invoke_session_error(&e.to_string());
+        invoke_state_changed("failed");
+        cleanup_session(&session_arc);
+        return;
+    }
 
     // --- Stream audio to ASR + collect results ---
     let mut aggregator = TranscriptAggregator::new();
@@ -419,13 +449,16 @@ async fn run_session(
                     Ok(AsrEvent::Interim(text)) => {
                         if !text.is_empty() {
                             aggregator.update_interim(&text);
+                            invoke_interim_text(&text);
                         }
                     }
                     Ok(AsrEvent::Definite(text)) => {
                         aggregator.update_definite(&text);
+                        invoke_interim_text(&aggregator.best_text());
                     }
                     Ok(AsrEvent::Final(text)) => {
                         aggregator.update_final(&text);
+                        invoke_interim_text(&text);
                     }
                     Ok(AsrEvent::Closed) => {
                         asr_done = true;
@@ -442,6 +475,16 @@ async fn run_session(
                 }
             }
         }
+    }
+
+    // --- Check if cancelled ---
+    if cancelled.load(Ordering::SeqCst) {
+        log::info!("[{session_id}] session cancelled by user");
+        let _ = asr.close().await;
+        invoke_state_changed("cancelled");
+        cleanup_session(&session_arc);
+        invoke_state_changed("idle");
+        return;
     }
 
     // --- Finalize ASR ---
@@ -493,9 +536,8 @@ async fn run_session(
     }
 
     // --- LLM Correction or Translation ---
-    let llm_enabled = llm_config.enabled
-        && !llm_config.base_url.is_empty()
-        && !llm_config.api_key.is_empty();
+    let llm_enabled =
+        llm_config.enabled && !llm_config.base_url.is_empty() && !llm_config.api_key.is_empty();
     let target_lang = llm_config.translate_to.clone();
     let translate_mode = !target_lang.is_empty();
 
@@ -506,7 +548,11 @@ async fn run_session(
                 let _ = session.transition(SessionState::Correcting);
             }
         }
-        invoke_state_changed(if translate_mode { "translating" } else { "correcting" });
+        invoke_state_changed(if translate_mode {
+            "translating"
+        } else {
+            "correcting"
+        });
 
         let llm = OpenAiCompatibleProvider::new(
             llm_config.base_url,
@@ -515,6 +561,7 @@ async fn run_session(
             llm_config.temperature,
             llm_config.top_p,
             llm_config.max_output_tokens,
+            llm_config.max_token_parameter,
             llm_config.timeout_ms,
         );
 
@@ -527,7 +574,11 @@ async fn run_session(
                 &asr_text,
                 &target_lang,
             );
-            log::debug!("[{}] Translation system prompt:\n{}", session_id, system_prompt);
+            log::debug!(
+                "[{}] Translation system prompt:\n{}",
+                session_id,
+                system_prompt
+            );
             log::debug!("[{}] Translation user prompt:\n{}", session_id, user_prompt);
             (system_prompt, user_prompt, vec![])
         } else {
@@ -538,9 +589,17 @@ async fn run_session(
                 dictionary_max_candidates,
             );
             log::info!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
-            log::info!("[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
-                candidates.len(), interim_history.len());
-            let user_prompt = prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, &interim_history);
+            log::info!(
+                "[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
+                candidates.len(),
+                interim_history.len()
+            );
+            let user_prompt = prompt::render_user_prompt(
+                &user_prompt_template,
+                &asr_text,
+                &candidates,
+                &interim_history,
+            );
             log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
             (system_prompt.clone(), user_prompt, candidates)
         };
@@ -554,13 +613,25 @@ async fn run_session(
 
         match llm.correct(&request).await {
             Ok(result) => {
-                let action = if translate_mode { "translated" } else { "corrected" };
+                let action = if translate_mode {
+                    "translated"
+                } else {
+                    "corrected"
+                };
                 log::info!("[{session_id}] LLM {}: {} chars", action, result.len());
                 result
             }
             Err(e) => {
                 log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
-                invoke_session_warning(&format!("LLM {} failed: {}", if translate_mode { "translation" } else { "correction" }, e));
+                invoke_session_warning(&format!(
+                    "LLM {} failed: {}",
+                    if translate_mode {
+                        "translation"
+                    } else {
+                        "correction"
+                    },
+                    e
+                ));
                 asr_text
             }
         }
@@ -603,23 +674,23 @@ async fn run_session(
     invoke_state_changed("idle");
 }
 
-async fn wait_for_final(
-    asr: &mut DoubaoWsProvider,
-    aggregator: &mut TranscriptAggregator,
-) {
+async fn wait_for_final(asr: &mut DoubaoWsProvider, aggregator: &mut TranscriptAggregator) {
     loop {
         match asr.next_event().await {
             Ok(AsrEvent::Final(text)) => {
                 aggregator.update_final(&text);
+                invoke_interim_text(&text);
                 return;
             }
             Ok(AsrEvent::Interim(text)) => {
                 if !text.is_empty() {
                     aggregator.update_interim(&text);
+                    invoke_interim_text(&text);
                 }
             }
             Ok(AsrEvent::Definite(text)) => {
                 aggregator.update_definite(&text);
+                invoke_interim_text(&aggregator.best_text());
             }
             Ok(AsrEvent::Closed) => return,
             Ok(_) => {}

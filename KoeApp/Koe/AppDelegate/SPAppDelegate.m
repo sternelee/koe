@@ -10,19 +10,50 @@
 #import "SPStatusBarManager.h"
 #import "SPOverlayPanel.h"
 #import "SPHistoryManager.h"
+#import "SPSetupWizardWindowController.h"
+#import "SPUpdateManager.h"
 #import "koe_core.h"
 #import <sys/stat.h>
 #import <UserNotifications/UserNotifications.h>
 
-@interface SPAppDelegate ()
+@interface SPAppDelegate () <SPAudioDeviceManagerDelegate>
 @property (nonatomic, strong) NSDate *recordingStartTime;
 @property (nonatomic, assign) time_t lastConfigModTime;
 @end
 
 @implementation SPAppDelegate
 
+- (void)applyHotkeyConfig:(struct SPHotkeyConfig)hotkeyConfig restartMonitorIfNeeded:(BOOL)restartIfNeeded {
+    BOOL changed = self.hotkeyMonitor.targetKeyCode != hotkeyConfig.trigger_key_code ||
+                   self.hotkeyMonitor.altKeyCode != hotkeyConfig.trigger_alt_key_code ||
+                   self.hotkeyMonitor.targetModifierFlag != hotkeyConfig.trigger_modifier_flag ||
+                   self.hotkeyMonitor.cancelKeyCode != hotkeyConfig.cancel_key_code ||
+                   self.hotkeyMonitor.cancelAltKeyCode != hotkeyConfig.cancel_alt_key_code ||
+                   self.hotkeyMonitor.cancelModifierFlag != hotkeyConfig.cancel_modifier_flag;
+
+    if (!changed) return;
+
+    if (restartIfNeeded) {
+        [self.hotkeyMonitor stop];
+    }
+
+    self.hotkeyMonitor.targetKeyCode = hotkeyConfig.trigger_key_code;
+    self.hotkeyMonitor.altKeyCode = hotkeyConfig.trigger_alt_key_code;
+    self.hotkeyMonitor.targetModifierFlag = hotkeyConfig.trigger_modifier_flag;
+    self.hotkeyMonitor.cancelKeyCode = hotkeyConfig.cancel_key_code;
+    self.hotkeyMonitor.cancelAltKeyCode = hotkeyConfig.cancel_alt_key_code;
+    self.hotkeyMonitor.cancelModifierFlag = hotkeyConfig.cancel_modifier_flag;
+
+    if (restartIfNeeded) {
+        [self.hotkeyMonitor start];
+    }
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSLog(@"[Koe] Application launching...");
+
+    // Add Edit menu so Cmd+C/V/X/A work in text fields (menu-bar-only app has none by default)
+    [self installEditMenu];
 
     // Initialize components
     self.cuePlayer = [[SPCuePlayer alloc] init];
@@ -30,6 +61,8 @@
     self.pasteManager = [[SPPasteManager alloc] init];
     self.audioCaptureManager = [[SPAudioCaptureManager alloc] init];
     self.audioDeviceManager = [[SPAudioDeviceManager alloc] init];
+    self.audioDeviceManager.delegate = self;
+    [self.audioDeviceManager startListening];
     self.permissionManager = [[SPPermissionManager alloc] init];
 
     // Initialize Rust bridge (must be before hotkey monitor)
@@ -43,6 +76,10 @@
 
     // Initialize floating overlay
     self.overlayPanel = [[SPOverlayPanel alloc] init];
+
+    // Initialize app update checker
+    self.updateManager = [[SPUpdateManager alloc] initWithBundle:[NSBundle mainBundle]];
+    [self.updateManager start];
 
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
@@ -67,9 +104,7 @@
 
         // Apply hotkey configuration from config.yaml
         struct SPHotkeyConfig hotkeyConfig = sp_core_get_hotkey_config();
-        self.hotkeyMonitor.targetKeyCode = hotkeyConfig.key_code;
-        self.hotkeyMonitor.altKeyCode = hotkeyConfig.alt_key_code;
-        self.hotkeyMonitor.targetModifierFlag = hotkeyConfig.modifier_flag;
+        [self applyHotkeyConfig:hotkeyConfig restartMonitorIfNeeded:NO];
 
         [self.hotkeyMonitor start];
         NSLog(@"[Koe] Ready — hotkey monitor active");
@@ -85,8 +120,33 @@
         dispatch_source_cancel(self.configWatcher);
         self.configWatcher = nil;
     }
+    [self.audioDeviceManager stopListening];
     [self.hotkeyMonitor stop];
     [self.rustBridge destroyCore];
+}
+
+#pragma mark - Edit Menu (for Cmd+C/V in text fields)
+
+- (void)installEditMenu {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        mainMenu = [[NSMenu alloc] init];
+        [NSApp setMainMenu:mainMenu];
+    }
+
+    NSMenuItem *editMenuItem = [[NSMenuItem alloc] initWithTitle:@"Edit" action:nil keyEquivalent:@""];
+    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+
+    [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+    [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+
+    editMenuItem.submenu = editMenu;
+    [mainMenu addItem:editMenuItem];
 }
 
 #pragma mark - Config File Watcher
@@ -131,25 +191,14 @@
     // Read new hotkey config
     struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
 
-    // Check if hotkey settings actually changed
-    if (self.hotkeyMonitor.targetKeyCode != newConfig.key_code ||
-        self.hotkeyMonitor.altKeyCode != newConfig.alt_key_code ||
-        self.hotkeyMonitor.targetModifierFlag != newConfig.modifier_flag) {
-
-        NSLog(@"[Koe] Hotkey changed: keyCode %ld→%d altKeyCode %ld→%d modifierFlag 0x%lx→0x%llx",
-              (long)self.hotkeyMonitor.targetKeyCode, newConfig.key_code,
-              (long)self.hotkeyMonitor.altKeyCode, newConfig.alt_key_code,
-              (unsigned long)self.hotkeyMonitor.targetModifierFlag, (unsigned long long)newConfig.modifier_flag);
-
-        // Stop, update, restart
-        [self.hotkeyMonitor stop];
-        self.hotkeyMonitor.targetKeyCode = newConfig.key_code;
-        self.hotkeyMonitor.altKeyCode = newConfig.alt_key_code;
-        self.hotkeyMonitor.targetModifierFlag = newConfig.modifier_flag;
-        [self.hotkeyMonitor start];
-
-        NSLog(@"[Koe] Hotkey monitor restarted with new trigger key");
-    }
+    NSLog(@"[Koe] Reloaded hotkey config: trigger=%d/%d flag=0x%llx cancel=%d/%d flag=0x%llx",
+          newConfig.trigger_key_code,
+          newConfig.trigger_alt_key_code,
+          (unsigned long long)newConfig.trigger_modifier_flag,
+          newConfig.cancel_key_code,
+          newConfig.cancel_alt_key_code,
+          (unsigned long long)newConfig.cancel_modifier_flag);
+    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
 }
 
 #pragma mark - SPHotkeyMonitorDelegate
@@ -211,6 +260,15 @@
     });
 }
 
+- (void)hotkeyMonitorDidDetectCancel {
+    NSLog(@"[Koe] Cancel detected");
+    [self.audioCaptureManager stopCapture];
+    [self.rustBridge cancelSession];
+    self.recordingStartTime = nil;
+    [self.statusBarManager updateState:@"idle"];
+    [self.overlayPanel updateState:@"idle"];
+}
+
 #pragma mark - SPRustBridgeDelegate
 
 - (void)rustBridgeDidBecomeReady {
@@ -253,6 +311,7 @@
     NSLog(@"[Koe] Session error: %@", message);
     [self.cuePlayer playError];
     [self.audioCaptureManager stopCapture];
+    [self.hotkeyMonitor resetToIdle];
     [self.statusBarManager updateState:@"error"];
     [self.overlayPanel updateState:@"error"];
 
@@ -310,9 +369,44 @@
     [self sendWarningNotification:message];
 }
 
+- (void)rustBridgeDidReceiveInterimText:(NSString *)text {
+    [self.overlayPanel updateInterimText:text];
+}
+
 - (void)rustBridgeDidChangeState:(NSString *)state {
     [self.statusBarManager updateState:state];
     [self.overlayPanel updateState:state];
+}
+
+#pragma mark - Audio Error Recovery
+
+- (void)handleAudioCaptureError:(NSString *)reason {
+    NSLog(@"[Koe] Audio capture error: %@", reason);
+    [self.cuePlayer playError];
+    [self.rustBridge endSession];
+    [self.hotkeyMonitor resetToIdle];
+    [self.statusBarManager updateState:@"error"];
+    [self.overlayPanel updateState:@"error"];
+    [self sendErrorNotification:reason];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self.statusBarManager updateState:@"idle"];
+        [self.overlayPanel updateState:@"idle"];
+    });
+}
+
+#pragma mark - SPAudioDeviceManagerDelegate
+
+- (void)audioDeviceManagerDeviceListDidChange {
+    if (!self.audioCaptureManager.isCapturing) return;
+
+    // If the selected device disappeared mid-recording, stop gracefully
+    if (![self.audioDeviceManager isSelectedDeviceAvailable]) {
+        NSLog(@"[Koe] Selected audio device disappeared during recording");
+        [self.audioCaptureManager stopCapture];
+        [self handleAudioCaptureError:@"Audio device disconnected"];
+    }
 }
 
 #pragma mark - SPStatusBarDelegate (menu)
@@ -332,6 +426,30 @@
 
 - (void)statusBarDidSelectAudioDeviceWithUID:(NSString *)uid {
     NSLog(@"[Koe] Audio input device changed: %@", uid ?: @"System Default");
+}
+
+- (void)statusBarDidSelectSetupWizard {
+    if (!self.setupWizard) {
+        self.setupWizard = [[SPSetupWizardWindowController alloc] init];
+        self.setupWizard.delegate = self;
+    }
+    [self.setupWizard showWindow:nil];
+}
+
+- (void)statusBarDidSelectCheckForUpdates {
+    [self.updateManager checkForUpdatesFromUserAction];
+}
+
+#pragma mark - SPSetupWizardDelegate
+
+- (void)setupWizardDidSaveConfig {
+    NSLog(@"[Koe] Setup wizard saved config, reloading...");
+    [self.rustBridge reloadConfig];
+
+    // Re-apply hotkey config
+    struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
+    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
+    NSLog(@"[Koe] Hotkey monitor reloaded after setup wizard save");
 }
 
 @end

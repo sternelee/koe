@@ -5,7 +5,7 @@
 
 typedef NS_ENUM(NSInteger, SPHotkeyState) {
     SPHotkeyStateIdle,
-    SPHotkeyStatePending,        // Fn pressed, waiting to determine tap vs hold
+    SPHotkeyStatePending,        // Trigger key pressed, waiting to determine tap vs hold
     SPHotkeyStateRecordingHold,  // Confirmed hold, recording
     SPHotkeyStateRecordingToggle, // Confirmed tap, free-hands recording
     SPHotkeyStateConsumeKeyUp,   // Waiting to consume keyUp after toggle-stop
@@ -16,7 +16,7 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
 @property (nonatomic, weak) id<SPHotkeyMonitorDelegate> delegate;
 @property (nonatomic, assign) SPHotkeyState state;
 @property (nonatomic, strong) NSTimer *holdTimer;
-@property (nonatomic, assign) BOOL fnDown;
+@property (nonatomic, assign) BOOL triggerDown;
 @property (nonatomic, assign) CFMachPortRef eventTap;
 @property (nonatomic, assign) CFRunLoopSourceRef runLoopSource;
 @property (nonatomic, strong) id globalMonitorRef;
@@ -24,6 +24,11 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
 
 - (void)handleFlagsChangedEvent:(CGEventRef)event;
 - (BOOL)isTargetKeyCode:(NSInteger)keyCode;
+- (BOOL)isCancelKeyCode:(NSInteger)keyCode;
+- (BOOL)isRecordingState;
+- (void)handleTriggerDown;
+- (void)handleTriggerUp;
+- (void)handleCancelRequestFromSource:(NSString *)source;
 
 @end
 
@@ -47,6 +52,13 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         [monitor handleFlagsChangedEvent:event];
     } else if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
         NSInteger keyCode = (NSInteger)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+
+        if (type == kCGEventKeyDown && [monitor isCancelKeyCode:keyCode] && [monitor isRecordingState]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [monitor handleCancelRequestFromSource:@"CGEventTap keyDown"];
+            });
+        }
+
         if ([monitor isTargetKeyCode:keyCode]) {
             CGEventFlags flags = CGEventGetFlags(event);
             NSLog(@"[Koe] Key event: type=%d keyCode=%ld flags=0x%llx",
@@ -65,10 +77,13 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         _delegate = delegate;
         _holdThresholdMs = 180.0;
         _state = SPHotkeyStateIdle;
-        _fnDown = NO;
+        _triggerDown = NO;
         _targetKeyCode = 63;       // kVK_Function (Fn)
         _altKeyCode = 179;         // Globe key on newer keyboards
-        _targetModifierFlag = 0x800000; // NSEventModifierFlagFunction
+        _targetModifierFlag = 0x00800000; // NX_SECONDARYFNMASK
+        _cancelKeyCode = 58;       // Left Option
+        _cancelAltKeyCode = 0;
+        _cancelModifierFlag = 0x00000020; // NX_DEVICELALTKEYMASK
     }
     return self;
 }
@@ -92,8 +107,16 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         return event;
     }];
 
-    NSLog(@"[Koe] Hotkey monitor started via NSEvent monitors (keyCode=%ld altKeyCode=%ld modifierFlag=0x%lx threshold=%.0fms)",
-          (long)self.targetKeyCode, (long)self.altKeyCode, (unsigned long)self.targetModifierFlag, self.holdThresholdMs);
+    NSLog(@"[Koe] Hotkey monitor started via NSEvent monitors (trigger=%ld/%ld flag=0x%lx cancel=%ld/%ld flag=0x%lx threshold=%.0fms)",
+          (long)self.targetKeyCode,
+          (long)self.altKeyCode,
+          (unsigned long)self.targetModifierFlag,
+          (long)self.cancelKeyCode,
+          (long)self.cancelAltKeyCode,
+          (unsigned long)self.cancelModifierFlag,
+          self.holdThresholdMs);
+    NSLog(@"[Koe] Cancel hotkey configured (keyCode=%ld altKeyCode=%ld modifierFlag=0x%lx)",
+          (long)self.cancelKeyCode, (long)self.cancelAltKeyCode, (unsigned long)self.cancelModifierFlag);
 
     // Also try CGEventTap as additional source
     CGEventMask mask = CGEventMaskBit(kCGEventFlagsChanged)
@@ -115,8 +138,35 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     }
 }
 
+- (void)setSuspended:(BOOL)suspended {
+    _suspended = suspended;
+    if (!suspended) {
+        // Reset state machine on unsuspend — key events were missed while
+        // suspended, so triggerDown and state may be out of sync with reality.
+        // Without this, stale state can cause phantom key-up/down firings.
+        [self cancelHoldTimer];
+        self.triggerDown = NO;
+        self.state = SPHotkeyStateIdle;
+    }
+}
+
 - (BOOL)isTargetKeyCode:(NSInteger)keyCode {
     return keyCode == self.targetKeyCode || (self.altKeyCode != 0 && keyCode == self.altKeyCode);
+}
+
+- (BOOL)isCancelKeyCode:(NSInteger)keyCode {
+    return keyCode == self.cancelKeyCode || (self.cancelAltKeyCode != 0 && keyCode == self.cancelAltKeyCode);
+}
+
+- (BOOL)isRecordingState {
+    return self.state == SPHotkeyStateRecordingHold || self.state == SPHotkeyStateRecordingToggle;
+}
+
+- (void)handleCancelRequestFromSource:(NSString *)source {
+    if (![self isRecordingState]) return;
+    NSLog(@"[Koe] Cancel hotkey pressed during recording (%@)", source);
+    [self resetToIdle];
+    [self.delegate hotkeyMonitorDidDetectCancel];
 }
 
 - (void)handleNSEvent:(NSEvent *)event {
@@ -129,27 +179,38 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 
         if ([self isTargetKeyCode:keyCode]) {
             BOOL keyNow = (flags & self.targetModifierFlag) != 0;
-            if (keyNow != self.fnDown) {
-                self.fnDown = keyNow;
+            if (keyNow != self.triggerDown) {
+                self.triggerDown = keyNow;
                 if (keyNow) {
-                    [self handleFnDown];
+                    [self handleTriggerDown];
                 } else {
-                    [self handleFnUp];
+                    [self handleTriggerUp];
                 }
+            }
+        } else if ([self isCancelKeyCode:keyCode]) {
+            BOOL cancelNow = (flags & self.cancelModifierFlag) != 0;
+            if (cancelNow && [self isRecordingState]) {
+                [self handleCancelRequestFromSource:@"NSEvent flagsChanged"];
             }
         }
     } else if (event.type == NSEventTypeKeyDown || event.type == NSEventTypeKeyUp) {
-        // Some macOS versions send modifier keys as keyDown/keyUp events
         NSInteger keyCode = event.keyCode;
+
+        if (event.type == NSEventTypeKeyDown && [self isCancelKeyCode:keyCode] && [self isRecordingState]) {
+            [self handleCancelRequestFromSource:@"NSEvent keyDown"];
+            return;
+        }
+
+        // Some macOS versions send modifier keys as keyDown/keyUp events
         if ([self isTargetKeyCode:keyCode]) {
             BOOL isDown = (event.type == NSEventTypeKeyDown);
             NSLog(@"[Koe] NSEvent Key%@: keyCode=%ld", isDown ? @"Down" : @"Up", (long)keyCode);
-            if (isDown != self.fnDown) {
-                self.fnDown = isDown;
+            if (isDown != self.triggerDown) {
+                self.triggerDown = isDown;
                 if (isDown) {
-                    [self handleFnDown];
+                    [self handleTriggerDown];
                 } else {
-                    [self handleFnUp];
+                    [self handleTriggerUp];
                 }
             }
         }
@@ -191,30 +252,38 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     // Target key detection:
     // 1. Check if keyCode matches the configured trigger key
     // 2. Check modifier flag bit for key state
-    BOOL fnNow;
+    BOOL triggerNow;
     if ([self isTargetKeyCode:keyCode]) {
-        fnNow = (flags & self.targetModifierFlag) != 0;
+        triggerNow = (flags & self.targetModifierFlag) != 0;
+    } else if ([self isCancelKeyCode:keyCode]) {
+        BOOL cancelNow = (flags & self.cancelModifierFlag) != 0;
+        if (cancelNow) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleCancelRequestFromSource:@"CGEventTap flagsChanged"];
+            });
+        }
+        return;
     } else {
         return;
     }
 
-    if (fnNow == self.fnDown) return;
+    if (triggerNow == self.triggerDown) return;
 
-    self.fnDown = fnNow;
+    self.triggerDown = triggerNow;
 
-    if (fnNow) {
+    if (triggerNow) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self handleFnDown];
+            [self handleTriggerDown];
         });
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self handleFnUp];
+            [self handleTriggerUp];
         });
     }
 }
 
-- (void)handleFnDown {
-    NSLog(@"[Koe] Fn DOWN (state=%ld)", (long)self.state);
+- (void)handleTriggerDown {
+    NSLog(@"[Koe] Trigger DOWN (state=%ld)", (long)self.state);
     switch (self.state) {
         case SPHotkeyStateIdle:
             self.state = SPHotkeyStatePending;
@@ -231,8 +300,8 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     }
 }
 
-- (void)handleFnUp {
-    NSLog(@"[Koe] Fn UP (state=%ld)", (long)self.state);
+- (void)handleTriggerUp {
+    NSLog(@"[Koe] Trigger UP (state=%ld)", (long)self.state);
     switch (self.state) {
         case SPHotkeyStatePending:
             [self cancelHoldTimer];
@@ -274,6 +343,12 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         self.state = SPHotkeyStateRecordingHold;
         [self.delegate hotkeyMonitorDidDetectHoldStart];
     }
+}
+
+- (void)resetToIdle {
+    [self cancelHoldTimer];
+    self.triggerDown = NO;
+    self.state = SPHotkeyStateIdle;
 }
 
 @end
