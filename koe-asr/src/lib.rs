@@ -43,6 +43,7 @@ pub mod doubao;
 pub mod error;
 pub mod event;
 pub mod provider;
+pub mod sherpa_onnx;
 pub mod transcript;
 
 pub use config::AsrConfig;

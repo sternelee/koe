@@ -4,6 +4,7 @@ pub mod dictionary;
 pub mod errors;
 pub mod ffi;
 pub mod llm;
+pub mod models;
 pub mod prompt;
 pub mod session;
 pub mod telemetry;
@@ -17,6 +18,7 @@ use crate::ffi::{
 use crate::llm::openai_compatible::OpenAiCompatibleProvider;
 use crate::llm::{CorrectionRequest, LlmProvider};
 use crate::session::{Session, SessionState};
+use koe_asr::sherpa_onnx::{ModelType, SherpaOnnxProvider, StreamingMode, VadParams};
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoWsProvider, TranscriptAggregator};
 
 use std::ffi::c_char;
@@ -68,6 +70,19 @@ pub extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
             Config::default()
         }
     };
+
+    // Download models if using local ASR
+    let provider = &cfg.asr.provider;
+    if provider == "sensevoice" || provider == "whisper" {
+        match models::ensure_models_for_provider(provider) {
+            Ok(model_dir) => {
+                log::info!("Local ASR models ready at {:?}", model_dir);
+            }
+            Err(e) => {
+                log::warn!("failed to download local ASR models: {e}");
+            }
+        }
+    }
 
     // Load dictionary
     let dict_path = config::resolve_dictionary_path(&cfg);
@@ -237,6 +252,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // Capture config for the async task
     let cfg = &core.config;
     let doubao = &cfg.asr.doubao;
+    let local = &cfg.asr.local;
     let asr_config = AsrConfig {
         url: doubao.url.clone(),
         app_key: doubao.app_key.clone(),
@@ -250,6 +266,13 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
         enable_punc: doubao.enable_punc,
         enable_nonstream: doubao.enable_nonstream,
         hotwords: core.dictionary.clone(),
+        model_dir: Some(local.model_dir.clone()),
+        provider: Some(cfg.asr.provider.clone()),
+        streaming_mode: Some(local.streaming_mode.clone()),
+        vad_threshold: Some(local.vad_threshold),
+        vad_min_speech_duration: Some(local.vad_min_speech_duration),
+        vad_min_silence_duration: Some(local.vad_min_silence_duration),
+        vad_max_speech_duration: Some(local.vad_max_speech_duration),
     };
     let llm_config = cfg.llm.clone();
     let dictionary = core.dictionary.clone();
@@ -259,6 +282,9 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let translation_system_prompt = core.translation_system_prompt.clone();
     let translation_user_prompt_template = core.translation_user_prompt_template.clone();
 
+    let asr_provider = cfg.asr.provider.clone();
+    let local_config = cfg.asr.local.clone();
+
     // Spawn the session task
     core.runtime.spawn(async move {
         run_session(
@@ -267,6 +293,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             mode,
             audio_rx,
             asr_config,
+            asr_provider,
+            local_config,
             llm_config,
             dictionary,
             dictionary_max_candidates,
@@ -384,6 +412,8 @@ async fn run_session(
     mode: SPSessionMode,
     mut audio_rx: mpsc::Receiver<Vec<u8>>,
     asr_config: AsrConfig,
+    asr_provider: String,
+    local_config: config::LocalAsrConfig,
     llm_config: config::LlmSection,
     dictionary: Vec<String>,
     dictionary_max_candidates: usize,
@@ -412,7 +442,108 @@ async fn run_session(
     invoke_session_ready();
 
     // --- Connect ASR ---
-    let mut asr = DoubaoWsProvider::new();
+    enum AsrProviderBox {
+        Doubao(DoubaoWsProvider),
+        Local(SherpaOnnxProvider),
+    }
+
+    impl AsrProviderBox {
+        async fn connect(&mut self, config: &AsrConfig) -> koe_asr::error::Result<()> {
+            match self {
+                AsrProviderBox::Doubao(p) => p.connect(config).await,
+                AsrProviderBox::Local(p) => p.connect(config).await,
+            }
+        }
+        async fn send_audio(&mut self, frame: &[u8]) -> koe_asr::error::Result<()> {
+            match self {
+                AsrProviderBox::Doubao(p) => p.send_audio(frame).await,
+                AsrProviderBox::Local(p) => p.send_audio(frame).await,
+            }
+        }
+        async fn finish_input(&mut self) -> koe_asr::error::Result<()> {
+            match self {
+                AsrProviderBox::Doubao(p) => p.finish_input().await,
+                AsrProviderBox::Local(p) => p.finish_input().await,
+            }
+        }
+        async fn next_event(&mut self) -> koe_asr::error::Result<AsrEvent> {
+            match self {
+                AsrProviderBox::Doubao(p) => p.next_event().await,
+                AsrProviderBox::Local(p) => p.next_event().await,
+            }
+        }
+        async fn wait_for_final(&mut self, aggregator: &mut TranscriptAggregator) {
+            loop {
+                match self.next_event().await {
+                    Ok(AsrEvent::Final(text)) => {
+                        aggregator.update_final(&text);
+                        invoke_interim_text(&text);
+                        return;
+                    }
+                    Ok(AsrEvent::Interim(text)) => {
+                        if !text.is_empty() {
+                            aggregator.update_interim(&text);
+                            invoke_interim_text(&text);
+                        }
+                    }
+                    Ok(AsrEvent::Definite(text)) => {
+                        aggregator.update_definite(&text);
+                        invoke_interim_text(&aggregator.best_text());
+                    }
+                    Ok(AsrEvent::Closed) => return,
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+        }
+        async fn close(self) -> koe_asr::error::Result<()> {
+            match self {
+                AsrProviderBox::Doubao(mut p) => p.close().await,
+                AsrProviderBox::Local(mut p) => p.close().await,
+            }
+        }
+    }
+
+    let mut asr: AsrProviderBox = match asr_provider.as_str() {
+        "sensevoice" | "whisper" => {
+            let model_type = if asr_provider == "sensevoice" {
+                ModelType::SenseVoice
+            } else {
+                ModelType::Whisper
+            };
+            let model_dir_str = local_config
+                .model_dir
+                .replace('~', &std::env::var("HOME").unwrap_or_default());
+            let model_dir = std::path::PathBuf::from(model_dir_str);
+            let streaming_mode = if local_config.streaming_mode == "interval" {
+                StreamingMode::Interval
+            } else {
+                StreamingMode::Vad
+            };
+            let vad_params = VadParams {
+                threshold: local_config.vad_threshold,
+                min_speech_duration: local_config.vad_min_speech_duration,
+                min_silence_duration: local_config.vad_min_silence_duration,
+                max_speech_duration: local_config.vad_max_speech_duration,
+            };
+            log::info!(
+                "[{session_id}] Using local ASR: {:?} model_dir={:?}",
+                model_type,
+                model_dir
+            );
+            AsrProviderBox::Local(SherpaOnnxProvider::new(
+                model_type,
+                model_dir,
+                streaming_mode,
+                vad_params,
+            ))
+        }
+        _ => {
+            log::info!("[{session_id}] Using Doubao ASR");
+            AsrProviderBox::Doubao(DoubaoWsProvider::new())
+        }
+    };
+
     if let Err(e) = asr.connect(&asr_config).await {
         log::error!("[{session_id}] ASR connection failed: {e}");
         invoke_session_error(&e.to_string());
@@ -500,7 +631,7 @@ async fn run_session(
     if !aggregator.has_final_result() && !asr_done {
         let wait_result = timeout(
             Duration::from_millis(final_wait_timeout_ms),
-            wait_for_final(&mut asr, &mut aggregator),
+            asr.wait_for_final(&mut aggregator),
         )
         .await;
 
@@ -672,31 +803,6 @@ async fn run_session(
     log::info!("[{session_id}] session completed");
     cleanup_session(&session_arc);
     invoke_state_changed("idle");
-}
-
-async fn wait_for_final(asr: &mut DoubaoWsProvider, aggregator: &mut TranscriptAggregator) {
-    loop {
-        match asr.next_event().await {
-            Ok(AsrEvent::Final(text)) => {
-                aggregator.update_final(&text);
-                invoke_interim_text(&text);
-                return;
-            }
-            Ok(AsrEvent::Interim(text)) => {
-                if !text.is_empty() {
-                    aggregator.update_interim(&text);
-                    invoke_interim_text(&text);
-                }
-            }
-            Ok(AsrEvent::Definite(text)) => {
-                aggregator.update_definite(&text);
-                invoke_interim_text(&aggregator.best_text());
-            }
-            Ok(AsrEvent::Closed) => return,
-            Ok(_) => {}
-            Err(_) => return,
-        }
-    }
 }
 
 fn cleanup_session(session_arc: &Arc<Mutex<Option<Session>>>) {

@@ -35,6 +35,7 @@ targets:
           - "$(SRCROOT)/../target/release"
         OTHER_LDFLAGS:
           - "-lkoe_core"
+          - "-lc++"
           - "-lSystem"
           - "-lresolv"
           - "-framework Security"

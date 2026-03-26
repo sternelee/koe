@@ -21,13 +21,17 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AsrSection {
-    /// Which ASR provider to use: "doubao" (default), future: "openai", etc.
+    /// Which ASR provider to use: "doubao" (default), "sensevoice", "whisper"
     #[serde(default = "default_asr_provider")]
     pub provider: String,
 
     /// Doubao (豆包/火山引擎) ASR configuration
     #[serde(default)]
     pub doubao: DoubaoAsrConfig,
+
+    /// Local ASR configuration (for sensevoice/whisper)
+    #[serde(default)]
+    pub local: LocalAsrConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -52,6 +56,22 @@ pub struct DoubaoAsrConfig {
     pub enable_punc: bool,
     #[serde(default = "default_true")]
     pub enable_nonstream: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LocalAsrConfig {
+    #[serde(default = "default_local_model_dir")]
+    pub model_dir: String,
+    #[serde(default = "default_streaming_mode")]
+    pub streaming_mode: String,
+    #[serde(default = "default_vad_threshold")]
+    pub vad_threshold: f32,
+    #[serde(default = "default_vad_min_speech_duration")]
+    pub vad_min_speech_duration: f32,
+    #[serde(default = "default_vad_min_silence_duration")]
+    pub vad_min_silence_duration: f32,
+    #[serde(default = "default_vad_max_speech_duration")]
+    pub vad_max_speech_duration: f32,
 }
 
 // ─── Other Sections (unchanged) ─────────────────────────────────────
@@ -176,14 +196,18 @@ impl HotkeySection {
 
     fn normalize_trigger_key_name(value: &str) -> String {
         match value {
-            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => value.into(),
+            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => {
+                value.into()
+            }
             _ => default_trigger_key(),
         }
     }
 
     fn normalize_cancel_key_name(value: &str) -> String {
         match value {
-            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => value.into(),
+            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => {
+                value.into()
+            }
             _ => default_cancel_key(),
         }
     }
@@ -191,30 +215,30 @@ impl HotkeySection {
     fn resolve_key(key: &str) -> HotkeyParams {
         match key {
             "left_option" => HotkeyParams {
-                key_code: 58,       // kVK_Option
+                key_code: 58, // kVK_Option
                 alt_key_code: 0,
-                modifier_flag: 0x00000020,  // NX_DEVICELALTKEYMASK
+                modifier_flag: 0x00000020, // NX_DEVICELALTKEYMASK
             },
             "right_option" => HotkeyParams {
-                key_code: 61,       // kVK_RightOption
+                key_code: 61, // kVK_RightOption
                 alt_key_code: 0,
-                modifier_flag: 0x00000040,  // NX_DEVICERALTKEYMASK
+                modifier_flag: 0x00000040, // NX_DEVICERALTKEYMASK
             },
             "left_command" => HotkeyParams {
-                key_code: 55,       // kVK_Command
+                key_code: 55, // kVK_Command
                 alt_key_code: 0,
-                modifier_flag: 0x00000008,  // NX_DEVICELCMDKEYMASK
+                modifier_flag: 0x00000008, // NX_DEVICELCMDKEYMASK
             },
             "right_command" => HotkeyParams {
-                key_code: 54,       // kVK_RightCommand
+                key_code: 54, // kVK_RightCommand
                 alt_key_code: 0,
-                modifier_flag: 0x00000010,  // NX_DEVICERCMDKEYMASK
+                modifier_flag: 0x00000010, // NX_DEVICERCMDKEYMASK
             },
             // "fn" or anything else defaults to Fn/Globe
             _ => HotkeyParams {
-                key_code: 63,       // kVK_Function (Fn)
-                alt_key_code: 179,  // Globe key on newer keyboards
-                modifier_flag: 0x00800000,  // NSEventModifierFlagFunction
+                key_code: 63,              // kVK_Function (Fn)
+                alt_key_code: 179,         // Globe key on newer keyboards
+                modifier_flag: 0x00800000, // NSEventModifierFlagFunction
             },
         }
     }
@@ -283,6 +307,30 @@ fn default_user_prompt_path() -> String {
     "user_prompt.txt".into()
 }
 
+fn default_local_model_dir() -> String {
+    "~/.koe/models".into()
+}
+
+fn default_streaming_mode() -> String {
+    "vad".into()
+}
+
+fn default_vad_threshold() -> f32 {
+    0.5
+}
+
+fn default_vad_min_speech_duration() -> f32 {
+    0.25
+}
+
+fn default_vad_min_silence_duration() -> f32 {
+    0.5
+}
+
+fn default_vad_max_speech_duration() -> f32 {
+    30.0
+}
+
 impl Default for Config {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
@@ -314,6 +362,12 @@ impl Default for DictionarySection {
     }
 }
 impl Default for HotkeySection {
+    fn default() -> Self {
+        serde_yaml::from_str("{}").unwrap()
+    }
+}
+
+impl Default for LocalAsrConfig {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
     }
@@ -383,9 +437,16 @@ fn substitute_env_vars(input: &str) -> String {
 
 /// V1 ASR fields that indicate the old flat format.
 const V1_ASR_KEYS: &[&str] = &[
-    "app_key", "access_key", "url", "resource_id",
-    "connect_timeout_ms", "final_wait_timeout_ms",
-    "enable_ddc", "enable_itn", "enable_punc", "enable_nonstream",
+    "app_key",
+    "access_key",
+    "url",
+    "resource_id",
+    "connect_timeout_ms",
+    "final_wait_timeout_ms",
+    "enable_ddc",
+    "enable_itn",
+    "enable_punc",
+    "enable_nonstream",
 ];
 
 /// Check if the config file uses V1 ASR format (flat fields under `asr:`)
@@ -418,9 +479,9 @@ fn migrate_config_v1_to_v2(path: &Path) -> Result<bool> {
     }
 
     // Check if any V1-specific key exists
-    let has_v1_keys = V1_ASR_KEYS.iter().any(|k| {
-        asr_map.contains_key(&serde_yaml::Value::String((*k).into()))
-    });
+    let has_v1_keys = V1_ASR_KEYS
+        .iter()
+        .any(|k| asr_map.contains_key(&serde_yaml::Value::String((*k).into())));
 
     if !has_v1_keys {
         return Ok(false);
@@ -498,9 +559,9 @@ fn normalize_hotkey_config(path: &Path, config: &Config) -> Result<bool> {
     let (normalized_trigger, normalized_cancel) = config.hotkey.normalized_keys();
     let hotkey_key = serde_yaml::Value::String("hotkey".into());
 
-    let hotkey_value = doc_map.entry(hotkey_key).or_insert_with(|| {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-    });
+    let hotkey_value = doc_map
+        .entry(hotkey_key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
 
     let hotkey_map = match hotkey_value.as_mapping_mut() {
         Some(map) => map,
@@ -531,8 +592,9 @@ fn normalize_hotkey_config(path: &Path, config: &Config) -> Result<bool> {
          {yaml_str}"
     );
 
-    std::fs::write(path, &output)
-        .map_err(|e| KoeError::Config(format!("write normalized config {}: {e}", path.display())))?;
+    std::fs::write(path, &output).map_err(|e| {
+        KoeError::Config(format!("write normalized config {}: {e}", path.display()))
+    })?;
 
     log::info!("normalized hotkey config on disk");
     Ok(true)
@@ -691,11 +753,7 @@ mod tests {
     #[test]
     fn normalize_hotkey_config_backfills_missing_cancel_key() {
         let path = temp_config_path("hotkey-config");
-        fs::write(
-            &path,
-            "hotkey:\n  trigger_key: left_option\n",
-        )
-        .unwrap();
+        fs::write(&path, "hotkey:\n  trigger_key: left_option\n").unwrap();
 
         let config = Config {
             hotkey: HotkeySection {

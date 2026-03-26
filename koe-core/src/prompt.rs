@@ -15,7 +15,10 @@ pub fn load_system_prompt(path: &Path) -> String {
             }
         }
         Err(e) => {
-            log::warn!("failed to load system prompt from {}: {e}, using built-in default", path.display());
+            log::warn!(
+                "failed to load system prompt from {}: {e}, using built-in default",
+                path.display()
+            );
             build_default_system_prompt()
         }
     }
@@ -37,7 +40,10 @@ pub fn load_user_prompt_template(path: &Path) -> String {
             }
         }
         Err(e) => {
-            log::warn!("failed to load user prompt from {}: {e}, using built-in default", path.display());
+            log::warn!(
+                "failed to load user prompt from {}: {e}, using built-in default",
+                path.display()
+            );
             build_default_user_prompt_template()
         }
     }
@@ -89,13 +95,17 @@ fn build_default_user_prompt_template() -> String {
 /// Built-in default translation system prompt.
 /// cbindgen:ignore
 fn build_default_translation_system_prompt() -> String {
-    include_str!("default_translation_system_prompt.txt").trim().to_string()
+    include_str!("default_translation_system_prompt.txt")
+        .trim()
+        .to_string()
 }
 
 /// Built-in default translation user prompt template.
 /// cbindgen:ignore
 fn build_default_translation_user_prompt_template() -> String {
-    include_str!("default_translation_user_prompt.txt").trim().to_string()
+    include_str!("default_translation_user_prompt.txt")
+        .trim()
+        .to_string()
 }
 
 /// Load translation system prompt from file, or return built-in default.
@@ -113,7 +123,10 @@ pub fn load_translation_system_prompt(path: &Path) -> String {
             }
         }
         Err(e) => {
-            log::warn!("failed to load translation system prompt from {}: {e}, using built-in default", path.display());
+            log::warn!(
+                "failed to load translation system prompt from {}: {e}, using built-in default",
+                path.display()
+            );
             build_default_translation_system_prompt()
         }
     }
@@ -135,7 +148,10 @@ pub fn load_translation_user_prompt_template(path: &Path) -> String {
             }
         }
         Err(e) => {
-            log::warn!("failed to load translation user prompt from {}: {e}, using built-in default", path.display());
+            log::warn!(
+                "failed to load translation user prompt from {}: {e}, using built-in default",
+                path.display()
+            );
             build_default_translation_user_prompt_template()
         }
     }
@@ -181,13 +197,12 @@ pub fn filter_dictionary_candidates(
                 .chars()
                 .filter(|c| asr_chars.contains(c))
                 .count();
-            let substring_bonus = if asr_lower.contains(&entry_lower)
-                || entry_lower.contains(&asr_lower)
-            {
-                entry.len() * 10
-            } else {
-                0
-            };
+            let substring_bonus =
+                if asr_lower.contains(&entry_lower) || entry_lower.contains(&asr_lower) {
+                    entry.len() * 10
+                } else {
+                    0
+                };
             (overlap + substring_bonus, entry)
         })
         .collect();

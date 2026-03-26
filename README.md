@@ -148,15 +148,18 @@ Below is the full configuration with explanations for every field.
 
 #### ASR (Speech Recognition)
 
-Koe now uses a provider-based ASR config layout. The only built-in provider is
-still **Doubao (豆包) ASR 2.0**, and future releases may add more providers such
-as the **OpenAI Transcriptions API**.
+Koe supports multiple ASR providers via a provider-based config layout:
+
+- **Doubao (豆包)**: Cloud ASR, requires credentials
+- **SenseVoice**: Local ASR, multi-language (Chinese, English, Japanese, Korean, Cantonese)
+- **Whisper**: Local ASR, English only
 
 ```yaml
 asr:
-  # ASR provider. Currently "doubao" is the only built-in option.
+  # ASR provider: "doubao" | "sensevoice" | "whisper"
   provider: "doubao"
 
+  # Doubao (豆包) cloud ASR configuration
   doubao:
     # WebSocket endpoint. Default uses ASR 2.0 optimized bidirectional streaming.
     # Do not change unless you know what you're doing.
@@ -195,10 +198,36 @@ asr:
     # but significantly better accuracy, especially for technical terms.
     # Recommended: true.
     enable_nonstream: true
+
+  # Local ASR configuration (for sensevoice/whisper)
+  local:
+    # Model directory. Models are auto-downloaded on first use.
+    model_dir: "~/.koe/models"
+
+    # Streaming mode: "vad" (Voice Activity Detection) or "interval"
+    # VAD mode detects speech segments automatically (recommended)
+    # Interval mode outputs results at fixed intervals
+    streaming_mode: "vad"
+
+    # VAD parameters (only used when streaming_mode is "vad")
+    vad_threshold: 0.5              # Speech detection threshold (0-1)
+    vad_min_speech_duration: 0.25   # Min speech duration in seconds
+    vad_min_silence_duration: 0.5   # Min silence duration to end speech
+    vad_max_speech_duration: 30.0   # Max speech duration per segment
 ```
 
-Older Koe versions stored Doubao fields directly under `asr:`. Current builds
-migrate that flat format into the provider-based v2 layout automatically.
+##### Local ASR Models
+
+When using `sensevoice` or `whisper` provider, models are auto-downloaded to `~/.koe/models/` on first use.
+
+| Provider | Languages | Model Size | Notes |
+|----------|-----------|------------|-------|
+| SenseVoice | Chinese, English, Japanese, Korean, Cantonese | ~70MB | Multi-language, recommended |
+| Whisper tiny.en | English only | ~30MB | Lighter, English-only |
+
+Models are downloaded from:
+- SenseVoice: [k2-fsa/sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases)
+- Silero VAD: [k2-fsa/sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) (required for VAD mode)
 
 #### LLM (Text Correction)
 
