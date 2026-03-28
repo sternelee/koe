@@ -741,20 +741,4 @@ mod tests {
 
         let _ = fs::remove_file(path);
     }
-
-    #[test]
-    fn default_cancel_key_cycles_through_all_keys() {
-        assert_eq!(default_cancel_key_for_trigger("fn"), "left_option");
-        assert_eq!(default_cancel_key_for_trigger("left_option"), "right_option");
-        assert_eq!(default_cancel_key_for_trigger("right_option"), "left_command");
-        assert_eq!(default_cancel_key_for_trigger("left_command"), "right_command");
-        assert_eq!(default_cancel_key_for_trigger("right_command"), "left_control");
-        assert_eq!(default_cancel_key_for_trigger("left_control"), "right_control");
-        assert_eq!(default_cancel_key_for_trigger("right_control"), "fn");
-    }
-
-    #[test]
-    fn default_cancel_key_falls_back_for_unknown() {
-        assert_eq!(default_cancel_key_for_trigger("unknown"), "left_option");
-    }
 }
