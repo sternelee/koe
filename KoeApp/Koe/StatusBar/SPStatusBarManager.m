@@ -30,6 +30,47 @@ static const CGFloat kIconSize = 18.0;
 
 @end
 
+static NSString *displayNameForKeycode(int keycode) {
+    switch (keycode) {
+        case 122: return @"F1";
+        case 120: return @"F2";
+        case 99:  return @"F3";
+        case 118: return @"F4";
+        case 96:  return @"F5";
+        case 97:  return @"F6";
+        case 98:  return @"F7";
+        case 100: return @"F8";
+        case 101: return @"F9";
+        case 109: return @"F10";
+        case 103: return @"F11";
+        case 111: return @"F12";
+        case 105: return @"F13";
+        case 107: return @"F14";
+        case 113: return @"F15";
+        case 106: return @"F16";
+        case 64:  return @"F17";
+        case 79:  return @"F18";
+        case 80:  return @"F19";
+        case 90:  return @"F20";
+        case 49:  return @"Space";
+        case 53:  return @"Escape";
+        case 48:  return @"Tab";
+        case 57:  return @"CapsLock";
+        case 36:  return @"Return";
+        case 51:  return @"Delete";
+        case 117: return @"Forward Delete";
+        case 115: return @"Home";
+        case 119: return @"End";
+        case 116: return @"Page Up";
+        case 121: return @"Page Down";
+        case 123: return @"Left Arrow";
+        case 124: return @"Right Arrow";
+        case 125: return @"Down Arrow";
+        case 126: return @"Up Arrow";
+        default:  return [NSString stringWithFormat:@"Key %d", keycode];
+    }
+}
+
 static NSString *displayNameForHotkeyValue(NSString *value) {
     if ([value isEqualToString:@"left_option"]) {
         return @"Left Option (⌥)";
@@ -49,7 +90,17 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     if ([value isEqualToString:@"right_control"]) {
         return @"Right Control (⌃)";
     }
-    return @"Fn (Globe)";
+    if ([value isEqualToString:@"fn"]) {
+        return @"Fn (Globe)";
+    }
+    // Numeric keycode: show friendly name or "Keycode XX"
+    NSScanner *scanner = [NSScanner scannerWithString:value];
+    int keycode;
+    if ([scanner scanInt:&keycode] && [scanner isAtEnd]) {
+        return displayNameForKeycode(keycode);
+    }
+    // Unknown string value: show as-is
+    return value;
 }
 
 @implementation SPStatusBarManager
@@ -300,8 +351,10 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
             if ([trimmed hasPrefix:@"trigger_key:"]) {
                 NSString *value = [trimmed substringFromIndex:@"trigger_key:".length];
                 value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                // Strip quotes
-                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                // Strip double or single quotes
+                if (value.length >= 2 &&
+                    (([value hasPrefix:@"\""] && [value hasSuffix:@"\""]) ||
+                     ([value hasPrefix:@"'"] && [value hasSuffix:@"'"]))) {
                     value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
                 }
                 // Strip inline comment for unquoted values
@@ -314,7 +367,9 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
             } else if ([trimmed hasPrefix:@"cancel_key:"]) {
                 NSString *value = [trimmed substringFromIndex:@"cancel_key:".length];
                 value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                if (value.length >= 2 &&
+                    (([value hasPrefix:@"\""] && [value hasSuffix:@"\""]) ||
+                     ([value hasPrefix:@"'"] && [value hasSuffix:@"'"]))) {
                     value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
                 }
                 NSRange commentRange = [value rangeOfString:@" #"];

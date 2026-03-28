@@ -91,7 +91,10 @@ static NSString *yamlRead(NSString *yaml, NSString *keyPath) {
                                  stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
                     }
                 }
-                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+                // Strip double or single quotes
+                if (value.length >= 2 &&
+                    (([value hasPrefix:@"\""] && [value hasSuffix:@"\""]) ||
+                     ([value hasPrefix:@"'"] && [value hasSuffix:@"'"]))) {
                     value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
                 }
                 return value;
@@ -260,6 +263,13 @@ static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
     return [lines componentsJoinedByString:@"\n"];
 }
 
+static BOOL isNumericKeycode(NSString *value) {
+    if (value.length == 0) return NO;
+    NSScanner *scanner = [NSScanner scannerWithString:value];
+    int intValue;
+    return [scanner scanInt:&intValue] && [scanner isAtEnd];
+}
+
 static NSString *normalizedHotkeyValue(NSString *value) {
     static NSSet<NSString *> *validValues;
     static dispatch_once_t onceToken;
@@ -274,10 +284,45 @@ static NSString *normalizedHotkeyValue(NSString *value) {
             @"right_control",
         ]];
     });
-    return [validValues containsObject:value] ? value : @"fn";
+    if ([validValues containsObject:value]) return value;
+    if (isNumericKeycode(value)) return value;
+    return @"fn";
+}
+
+static NSString *displayNameForCustomKeycode(NSString *value) {
+    int keycode = value.intValue;
+    switch (keycode) {
+        case 122: return @"F1 (Keycode 122)";
+        case 120: return @"F2 (Keycode 120)";
+        case 99:  return @"F3 (Keycode 99)";
+        case 118: return @"F4 (Keycode 118)";
+        case 96:  return @"F5 (Keycode 96)";
+        case 97:  return @"F6 (Keycode 97)";
+        case 98:  return @"F7 (Keycode 98)";
+        case 100: return @"F8 (Keycode 100)";
+        case 101: return @"F9 (Keycode 101)";
+        case 109: return @"F10 (Keycode 109)";
+        case 103: return @"F11 (Keycode 103)";
+        case 111: return @"F12 (Keycode 111)";
+        case 49:  return @"Space (Keycode 49)";
+        case 53:  return @"Escape (Keycode 53)";
+        case 48:  return @"Tab (Keycode 48)";
+        case 57:  return @"CapsLock (Keycode 57)";
+        default:  return [NSString stringWithFormat:@"Keycode %d", keycode];
+    }
+}
+
+/// If the value is a numeric keycode, add a custom item to the popup and select it.
+static void ensureCustomKeycodeInPopup(NSPopUpButton *popup, NSString *value) {
+    if (!isNumericKeycode(value)) return;
+    NSString *title = displayNameForCustomKeycode(value);
+    [popup addItemWithTitle:title];
+    [popup lastItem].representedObject = value;
+    [popup selectItem:[popup lastItem]];
 }
 
 static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
+    if (isNumericKeycode(triggerKey)) return @"left_option";
     NSString *normalizedTrigger = normalizedHotkeyValue(triggerKey);
     if ([normalizedTrigger isEqualToString:@"fn"]) return @"left_option";
     if ([normalizedTrigger isEqualToString:@"left_option"]) return @"right_option";
@@ -1049,16 +1094,24 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
             cancelKey = defaultCancelKeyForTrigger(triggerKey);
         }
 
-        for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
-            if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
-                [self.hotkeyPopup selectItemAtIndex:i];
-                break;
+        if (isNumericKeycode(triggerKey)) {
+            ensureCustomKeycodeInPopup(self.hotkeyPopup, triggerKey);
+        } else {
+            for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
+                if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
+                    [self.hotkeyPopup selectItemAtIndex:i];
+                    break;
+                }
             }
         }
-        for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
-            if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
-                [self.cancelHotkeyPopup selectItemAtIndex:i];
-                break;
+        if (isNumericKeycode(cancelKey)) {
+            ensureCustomKeycodeInPopup(self.cancelHotkeyPopup, cancelKey);
+        } else {
+            for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
+                if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
+                    [self.cancelHotkeyPopup selectItemAtIndex:i];
+                    break;
+                }
             }
         }
 

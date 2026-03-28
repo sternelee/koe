@@ -140,18 +140,46 @@ pub struct DictionarySection {
     pub path: String,
 }
 
+/// Deserialize a YAML value that can be either a string ("fn") or an integer (96)
+/// into a String. This is needed because YAML `trigger_key: 96` is parsed as an
+/// integer, not a string, and serde_yaml won't auto-convert int → String.
+fn deserialize_string_or_int<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrInt;
+    impl<'de> serde::de::Visitor<'de> for StringOrInt {
+        type Value = String;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or integer")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+    deserializer.deserialize_any(StringOrInt)
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct HotkeySection {
     /// Trigger key for voice input.
     /// Options: "fn", "left_option", "right_option", "left_command", "right_command", "left_control", "right_control"
+    /// Or a raw keycode number (e.g. 122 for F1) for non-modifier keys.
     /// Default: "fn"
-    #[serde(default = "default_trigger_key")]
+    #[serde(default = "default_trigger_key", deserialize_with = "deserialize_string_or_int")]
     pub trigger_key: String,
 
     /// Cancel key for aborting the current voice input session.
     /// Options: "fn", "left_option", "right_option", "left_command", "right_command", "left_control", "right_control"
+    /// Or a raw keycode number (e.g. 122 for F1) for non-modifier keys.
     /// Default: "left_option"
-    #[serde(default = "default_cancel_key")]
+    #[serde(default = "default_cancel_key", deserialize_with = "deserialize_string_or_int")]
     pub cancel_key: String,
 }
 
@@ -207,6 +235,7 @@ impl HotkeySection {
     fn normalize_trigger_key_name(value: &str) -> String {
         match value {
             "left_option" | "right_option" | "left_command" | "right_command" | "left_control" | "right_control" | "fn" => value.into(),
+            _ if Self::parse_raw_keycode(value).is_some() => value.into(),
             _ => default_trigger_key(),
         }
     }
@@ -214,7 +243,19 @@ impl HotkeySection {
     fn normalize_cancel_key_name(value: &str) -> String {
         match value {
             "left_option" | "right_option" | "left_command" | "right_command" | "left_control" | "right_control" | "fn" => value.into(),
+            _ if Self::parse_raw_keycode(value).is_some() => value.into(),
             _ => default_cancel_key(),
+        }
+    }
+
+    /// Try to parse a string as a raw keycode (u16).
+    /// Supports decimal (e.g. "122") and hex with 0x prefix (e.g. "0x7a").
+    fn parse_raw_keycode(value: &str) -> Option<u16> {
+        let trimmed = value.trim();
+        if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+            u16::from_str_radix(hex, 16).ok()
+        } else {
+            trimmed.parse::<u16>().ok()
         }
     }
 
@@ -249,6 +290,15 @@ impl HotkeySection {
                 key_code: 62,       // kVK_RightControl
                 alt_key_code: 0,
                 modifier_flag: 0x00002000,  // NX_DEVICERCTLKEYMASK
+            },
+            // Raw keycode (non-modifier key, detected via keyDown/keyUp)
+            _ if Self::parse_raw_keycode(key).is_some() => {
+                let code = Self::parse_raw_keycode(key).unwrap();
+                HotkeyParams {
+                    key_code: code,
+                    alt_key_code: 0,
+                    modifier_flag: 0,
+                }
             },
             // "fn" or anything else defaults to Fn/Globe
             _ => HotkeyParams {
@@ -718,8 +768,10 @@ dictionary:
 
 hotkey:
   # 触发键：fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # 也可以填 macOS keycode 数字来使用非修饰键，例如 122 (F1)、120 (F2)、99 (F3) 等
   trigger_key: "fn"
-  # 取消键：fn | left_option | right_option | left_command | right_command | left_control | right_control（不能与触发键重复）
+  # 取消键：fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # 也可以填 macOS keycode 数字（不能与触发键重复）
   cancel_key: "left_option"
 "#;
 
