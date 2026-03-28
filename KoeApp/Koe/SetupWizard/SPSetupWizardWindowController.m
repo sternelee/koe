@@ -457,7 +457,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat fieldW = paneWidth - fieldX - 32;
     CGFloat rowH = 32;
 
-    // Calculate content height (调整为合适的高度)
+    // Calculate content height
     CGFloat contentHeight = 260;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
@@ -480,14 +480,14 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [self.asrProviderPopup setAction:@selector(asrProviderChanged:)];
     [pane addSubview:self.asrProviderPopup];
 
-    // Test button 放在 Provider 旁边
+    // Test button next to Provider
     self.asrTestButton = [NSButton buttonWithTitle:@"Test" target:self action:@selector(testAsrConnection:)];
     self.asrTestButton.bezelStyle = NSBezelStyleRounded;
     self.asrTestButton.frame = NSMakeRect(fieldX + 168, y - 2, 70, 28);
     [pane addSubview:self.asrTestButton];
     y -= rowH;
 
-    // App Key (Doubao only) - 在 Provider 下方
+    // App Key (Doubao only)
     self.asrAppKeyField = [self formTextField:NSMakeRect(fieldX, y, fieldW, 22) placeholder:@"Volcengine App ID"];
     [pane addSubview:self.asrAppKeyField];
     NSTextField *appKeyLabel = [self formLabel:@"App Key" frame:NSMakeRect(16, y, labelW, 22)];
@@ -495,7 +495,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [pane addSubview:appKeyLabel];
     y -= rowH;
 
-    // Access Key (Doubao) - 在 App Key 下方
+    // Access Key (Doubao)
     CGFloat eyeW = 28;
     CGFloat secFieldW = fieldW - eyeW - 4;
 
@@ -512,11 +512,10 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     NSTextField *accessKeyLabel = [self formLabel:@"Access Key" frame:NSMakeRect(16, y, labelW, 22)];
     accessKeyLabel.tag = 1002;
     [pane addSubview:accessKeyLabel];
-    y -= rowH;  // Access Key 的下一行
+    y -= rowH;
 
-    // Qwen API Key - 紧跟在 Provider 下方
-    // 计算方式：从顶部往下减去 Description(52) + Provider 的第一行位置
-    CGFloat qwenY = contentHeight - 48 - 52 - rowH;  // = 260 - 48 - 52 - 32 = 128
+    // Qwen API Key
+    CGFloat qwenY = contentHeight - 48 - 52 - rowH;
     self.asrQwenApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, qwenY, secFieldW, 22)];
     self.asrQwenApiKeySecureField.placeholderString = @"DashScope API Key (sk-xxx)";
     self.asrQwenApiKeySecureField.font = [NSFont systemFontOfSize:13];
@@ -534,14 +533,14 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     qwenKeyLabel.hidden = YES;
     [pane addSubview:qwenKeyLabel];
 
-    // Test result label (放在 API Key 下方，调整位置以适应新高度)
+    // Test result label
     self.asrTestResultLabel = [NSTextField wrappingLabelWithString:@""];
     self.asrTestResultLabel.frame = NSMakeRect(fieldX, 55, fieldW, 42);
     self.asrTestResultLabel.font = [NSFont systemFontOfSize:12];
     self.asrTestResultLabel.selectable = YES;
     [pane addSubview:self.asrTestResultLabel];
 
-    // Save / Cancel buttons - 固定位置在底部
+    // Save / Cancel buttons
     [self addButtonsToPane:pane atY:16 width:paneWidth];
 
     return pane;
@@ -1266,7 +1265,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 }
 
 - (void)testDoubaoConnection {
-    // 获取当前的 key 值（考虑明文/密文切换状态）
+    // Get current key values (account for plain/secure toggle state)
     NSString *appKey = self.asrAppKeyField.stringValue;
     NSString *accessKey = self.asrAccessKeyToggle.tag == 1 ? self.asrAccessKeyField.stringValue : self.asrAccessKeySecureField.stringValue;
 
@@ -1280,12 +1279,12 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     self.asrTestResultLabel.stringValue = @"测试中...";
     self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
 
-    // 创建 WebSocket 连接测试
+    // Create WebSocket connection test
     NSURL *url = [NSURL URLWithString:@"wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.timeoutInterval = 5;
 
-    // 设置豆包认证头
+    // Set Doubao auth headers
     [request setValue:appKey forHTTPHeaderField:@"X-Api-App-Key"];
     [request setValue:accessKey forHTTPHeaderField:@"X-Api-Access-Key"];
     [request setValue:@"volc.seedasr.sauc.duration" forHTTPHeaderField:@"X-Api-Resource-Id"];
@@ -1296,11 +1295,10 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
     NSURLSessionWebSocketTask *wsTask = [session webSocketTaskWithRequest:request];
 
-    // 使用弱引用避免循环引用
     __weak typeof(self) weakSelf = self;
     __block BOOL hasCompleted = NO;
 
-    // 尝试接收消息（豆包可能不会立即发送消息）
+    // Try to receive a message (Doubao may not send one immediately)
     [wsTask receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (hasCompleted) return;
@@ -1313,11 +1311,10 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
             strongSelf.asrTestButton.enabled = YES;
 
             if (error) {
-                // 检查错误类型并提供友好的中文提示
                 NSString *errorMsg = error.localizedDescription;
                 NSString *errorCode = [NSString stringWithFormat:@"%ld", (long)error.code];
 
-                // 检查 userInfo 中是否有 HTTP 状态码
+                // Check userInfo for HTTP status code
                 NSHTTPURLResponse *response = error.userInfo[@"NSURLSessionDownloadTaskResumeData"];
                 NSInteger statusCode = 0;
                 if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -1332,7 +1329,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                 } else if ([errorMsg containsString:@"bad response"] ||
                            [errorMsg containsString:@"Bad response"] ||
                            statusCode == 400 || statusCode == 403) {
-                    // WebSocket 握手阶段返回 HTTP 错误（如 400 Bad Request）
+                    // HTTP error during WebSocket handshake (e.g. 400 Bad Request)
                     strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 App Key 和 Access Key 是否正确";
                 } else if ([errorMsg containsString:@"unable"] ||
                            [errorMsg containsString:@"Unable"] ||
@@ -1340,23 +1337,20 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                            [errorMsg containsString:@"Network"]) {
                     strongSelf.asrTestResultLabel.stringValue = @"网络连接失败：请检查网络设置";
                 } else {
-                    // 其他错误，显示简化的中文提示
                     strongSelf.asrTestResultLabel.stringValue = @"连接失败：请检查配置信息是否正确";
                 }
                 strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
                 return;
             }
 
-            // 收到消息表示连接成功
             strongSelf.asrTestResultLabel.stringValue = @"连接成功";
             strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
         });
     }];
 
-    // 启动连接
     [wsTask resume];
 
-    // 豆包不会立即发送消息，2秒后如果没收到错误也认为成功
+    // Doubao may not send a message immediately; treat no error within 2s as success
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (hasCompleted) return;
         hasCompleted = YES;
@@ -1364,19 +1358,16 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
 
-        // 关闭 WebSocket 连接
         [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
 
-        // 检查是否还在等待中（如果连接失败，上面的回调会被调用）
         if (!strongSelf.asrTestButton.enabled) {
             strongSelf.asrTestButton.enabled = YES;
-            // 2秒内没有收到错误，认为连接成功
             strongSelf.asrTestResultLabel.stringValue = @"连接成功";
             strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
         }
     });
 
-    // 备用超时处理
+    // Fallback timeout
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (hasCompleted) return;
         hasCompleted = YES;
@@ -1392,7 +1383,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 }
 
 - (void)testQwenConnection {
-    // 获取当前的 key 值（考虑明文/密文切换状态）
+    // Get current key value (account for plain/secure toggle state)
     NSString *apiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
 
     if (apiKey.length == 0) {
@@ -1405,12 +1396,12 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     self.asrTestResultLabel.stringValue = @"测试中...";
     self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
 
-    // 创建 WebSocket 连接测试
+    // Create WebSocket connection test
     NSURL *url = [NSURL URLWithString:@"wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.timeoutInterval = 10;
 
-    // 设置Qwen DashScope认证头
+    // Set Qwen DashScope auth header
     [request setValue:[NSString stringWithFormat:@"Bearer %@", apiKey] forHTTPHeaderField:@"Authorization"];
 
     NSURLSessionConfiguration *config2 = [NSURLSessionConfiguration defaultSessionConfiguration];
@@ -1418,29 +1409,25 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config2];
     NSURLSessionWebSocketTask *wsTask = [session webSocketTaskWithRequest:request];
 
-    // 使用弱引用避免循环引用
     __weak typeof(self) weakSelf = self;
     __weak NSURLSessionWebSocketTask *weakWsTask = wsTask;
 
-    // 设置消息处理 - Qwen DashScope会返回 session.created 消息
+    // Qwen DashScope returns a session.created message on connect
     [wsTask receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) return;
 
-            // 关闭 WebSocket 连接
             [weakWsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
 
             strongSelf.asrTestButton.enabled = YES;
 
             if (error) {
-                // 检查错误类型并提供友好的中文提示
                 NSString *errorMsg = error.localizedDescription;
                 NSInteger statusCode = 0;
 
-                // 尝试从 error 中提取 HTTP 状态码
+                // Try to extract HTTP status code from error
                 if (error.userInfo[@"_kCFStreamErrorDomainKey"]) {
-                    // 某些网络错误可能包含状态码
                     NSNumber *code = error.userInfo[@"_kCFStreamErrorDomainKey"];
                     if (code) statusCode = code.integerValue;
                 }
@@ -1452,21 +1439,19 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                     strongSelf.asrTestResultLabel.stringValue = @"连接超时：请检查网络连接";
                 } else if ([errorMsg containsString:@"bad response"] ||
                            [errorMsg containsString:@"Bad response"]) {
-                    // WebSocket 握手阶段返回 HTTP 错误
+                    // HTTP error during WebSocket handshake
                     strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 API Key 是否正确";
                 } else if ([errorMsg containsString:@"unable"] ||
                            [errorMsg containsString:@"Unable"] ||
                            [errorMsg containsString:@"Cannot connect"]) {
                     strongSelf.asrTestResultLabel.stringValue = @"网络连接失败：请检查网络设置";
                 } else {
-                    // 其他错误，显示简化的中文提示
                     strongSelf.asrTestResultLabel.stringValue = @"连接失败：请检查配置信息是否正确";
                 }
                 strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
                 return;
             }
 
-            // 收到消息表示连接成功
             if (message) {
                 strongSelf.asrTestResultLabel.stringValue = @"连接成功";
                 strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
@@ -1477,10 +1462,9 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         });
     }];
 
-    // 启动连接
     [wsTask resume];
 
-    // 设置超时处理
+    // Timeout handler
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || strongSelf.asrTestButton.enabled) return;

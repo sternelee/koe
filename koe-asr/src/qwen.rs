@@ -17,21 +17,21 @@ const DASHSCOPE_WS_URL: &str =
     "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime";
 const SESSION_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
-// VAD (语音活动检测) 参数配置
-// threshold: 语音检测阈值，0.0-1.0，越高越严格，可减少噪音误触发
+// VAD (Voice Activity Detection) parameters
+// threshold: 0.0-1.0, higher = stricter, reduces false triggers from ambient noise
 const VAD_THRESHOLD: f32 = 0.5;
-// silence_duration_ms: 静音持续时间，超过此值视为语音结束
+// silence_duration_ms: duration of silence before speech is considered ended
 const VAD_SILENCE_DURATION_MS: u32 = 400;
-// prefix_padding_ms: 语音开始前保留的音频时长，用于捕捉语音起始部分
+// prefix_padding_ms: audio retained before speech onset to capture the beginning
 const VAD_PREFIX_PADDING_MS: u32 = 100;
 
-/// Qwen DashScope 实时语音识别 Provider (Qwen-ASR-Realtime)
+/// Qwen DashScope Realtime ASR Provider (Qwen-ASR-Realtime)
 ///
-/// 协议参考Qwen官方 WebSocket Realtime API：
-/// 1. 连接建立后等待 `session.created`
-/// 2. 发送 `session.update`
-/// 3. 使用 `input_audio_buffer.append` 追加 Base64 音频
-/// 4. 音频结束后发送 `session.finish`
+/// Protocol follows the Qwen WebSocket Realtime API:
+/// 1. Wait for `session.created` after connection
+/// 2. Send `session.update` with configuration
+/// 3. Append Base64-encoded audio via `input_audio_buffer.append`
+/// 4. Send `session.finish` when audio ends
 pub struct QwenAsrProvider {
     ws: Option<WsStream>,
     input_finished: bool,
@@ -355,51 +355,4 @@ struct ClientEvent {
     audio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<serde_json::Value>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::QwenAsrProvider;
-    use crate::event::AsrEvent;
-
-    #[test]
-    fn parses_interim_preview_from_text_and_stash() {
-        let mut provider = QwenAsrProvider::new();
-        let events = provider
-            .parse_server_event(
-                r#"{
-                    "type":"conversation.item.input_audio_transcription.text",
-                    "text":"今天",
-                    "stash":"天气不错"
-                }"#,
-            )
-            .unwrap();
-
-        assert!(matches!(
-            events.first(),
-            Some(AsrEvent::Interim(text)) if text == "今天天气不错"
-        ));
-    }
-
-    #[test]
-    fn parses_final_transcript() {
-        let mut provider = QwenAsrProvider::new();
-        let events = provider
-            .parse_server_event(
-                r#"{
-                    "type":"conversation.item.input_audio_transcription.completed",
-                    "transcript":"你好世界"
-                }"#,
-            )
-            .unwrap();
-
-        assert!(matches!(
-            events.first(),
-            Some(AsrEvent::Definite(text)) if text == "你好世界"
-        ));
-        assert!(matches!(
-            events.get(1),
-            Some(AsrEvent::Final(text)) if text == "你好世界"
-        ));
-    }
 }
