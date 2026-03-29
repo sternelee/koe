@@ -1,4 +1,8 @@
 #import <Cocoa/Cocoa.h>
+#import "SPRustBridge.h"
+#import "SPStatusBarManager.h"
+#import "SPHotkeyMonitor.h"
+#import "SPSetupWizardWindowController.h"
 
 @class SPPermissionManager;
 @class SPHotkeyMonitor;
@@ -14,7 +18,7 @@
 @class SPSetupWizardWindowController;
 @class SPUpdateManager;
 
-@interface SPAppDelegate : NSObject <NSApplicationDelegate>
+@interface SPAppDelegate : NSObject <NSApplicationDelegate, SPRustBridgeDelegate, SPStatusBarDelegate, SPHotkeyMonitorDelegate, SPSetupWizardDelegate>
 
 @property (nonatomic, strong) SPPermissionManager *permissionManager;
 @property (nonatomic, strong) SPHotkeyMonitor *hotkeyMonitor;

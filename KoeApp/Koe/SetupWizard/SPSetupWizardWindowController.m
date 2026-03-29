@@ -1718,7 +1718,6 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
             if (error) {
                 NSString *errorMsg = error.localizedDescription;
-                NSString *errorCode = [NSString stringWithFormat:@"%ld", (long)error.code];
 
                 // Check userInfo for HTTP status code
                 NSHTTPURLResponse *response = error.userInfo[@"NSURLSessionDownloadTaskResumeData"];

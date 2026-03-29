@@ -14,9 +14,11 @@
 - (void)statusBarDidSelectAudioDeviceWithUID:(nullable NSString *)uid;
 @end
 
+NS_ASSUME_NONNULL_BEGIN
+
 @interface SPStatusBarManager : NSObject <NSMenuDelegate>
 
-- (instancetype)initWithDelegate:(id<SPStatusBarDelegate>)delegate
+- (instancetype)initWithDelegate:(nullable id<SPStatusBarDelegate>)delegate
                permissionManager:(SPPermissionManager *)permissionManager
               audioDeviceManager:(SPAudioDeviceManager *)audioDeviceManager;
 
@@ -26,3 +28,5 @@
 - (void)updateState:(NSString *)state;
 
 @end
+
+NS_ASSUME_NONNULL_END
