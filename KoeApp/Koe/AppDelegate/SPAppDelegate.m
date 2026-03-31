@@ -228,9 +228,12 @@
     // Start audio capture + Rust session
     [self.rustBridge beginSessionWithMode:SPSessionModeHold];
     [self.audioCaptureManager setInputDeviceID:[self.audioDeviceManager resolvedDeviceID]];
-    [self.audioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
+    BOOL started = [self.audioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
         [self.rustBridge pushAudioFrame:buffer length:length timestamp:timestamp];
     }];
+    if (!started) {
+        [self handleAudioCaptureError:@"Failed to start audio capture"];
+    }
 }
 
 - (void)hotkeyMonitorDidDetectHoldEnd {
@@ -264,9 +267,12 @@
 
     [self.rustBridge beginSessionWithMode:SPSessionModeToggle];
     [self.audioCaptureManager setInputDeviceID:[self.audioDeviceManager resolvedDeviceID]];
-    [self.audioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
+    BOOL started = [self.audioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
         [self.rustBridge pushAudioFrame:buffer length:length timestamp:timestamp];
     }];
+    if (!started) {
+        [self handleAudioCaptureError:@"Failed to start audio capture"];
+    }
 }
 
 - (void)hotkeyMonitorDidDetectTapEnd {
