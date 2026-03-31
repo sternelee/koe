@@ -537,12 +537,6 @@ impl Default for HotkeySection {
     }
 }
 
-impl Default for LocalAsrConfig {
-    fn default() -> Self {
-        serde_yaml::from_str("{}").unwrap()
-    }
-}
-
 // ─── Config Directory ───────────────────────────────────────────────
 
 /// Returns ~/.koe/
