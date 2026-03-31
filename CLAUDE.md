@@ -18,6 +18,12 @@ make build-rust
 # Build Xcode app only
 make build-xcode
 
+# Build for Intel Mac
+make build-x86_64
+
+# Regenerate Xcode project after modifying KoeApp/project.yml
+cd KoeApp && xcodegen generate
+
 # Clean build artifacts
 make clean
 
@@ -30,9 +36,14 @@ make run
 The app consists of two layers communicating via C FFI:
 
 - **Objective-C shell** (`KoeApp/`): macOS integration — hotkey detection (Fn key with 180ms tap/hold threshold), audio capture (AVFoundation), clipboard management, paste simulation (Cmd+V), menu bar UI, and SQLite usage statistics
-- **Rust core** (`koe-core/`, `koe-asr/`): Network operations — ASR 2.0 WebSocket streaming (Doubao/豆包), LLM correction (OpenAI-compatible API), config management, transcript aggregation
+- **Rust core** (`koe-core/`, `koe-asr/`): Network operations — ASR WebSocket streaming (Doubao/豆包, Qwen/通义), local ASR (MLX via Swift FFI, sherpa-onnx via CPU worker), LLM correction (OpenAI-compatible API), config management, transcript aggregation, model management
+- **Swift KoeMLX package**: Bridges MLX inference (Qwen3-ASR) to Rust via C FFI for on-device ASR on Apple Silicon
 
 The Rust core is compiled as a static library (`libkoe_core.a`) and linked into the Xcode project.
+
+### FFI Boundary
+
+`koe-core/src/ffi.rs` defines the C ABI surface. The ObjC shell registers `SPCallbacks` (function pointers) at startup, then drives sessions via `sp_begin_session` / `sp_feed_audio` / `sp_end_session`. Callbacks fire on Rust-managed threads; the ObjC side dispatches to the main thread as needed. Each session carries a `session_token` (u64) so the ObjC caller can discard events from superseded sessions.
 
 ### Key Modules
 
@@ -52,6 +63,8 @@ All config lives in `~/.koe/`:
 ### State Machine States
 
 Idle → HotkeyDecisionPending → ConnectingAsr → RecordingHold/RecordingToggle → FinalizingAsr → Correcting → PreparingPaste → Pasting → RestoringClipboard → Completed → Idle
+
+Any state can transition to `Failed` on error. The `Failed` state is terminal for that session.
 
 ## Dependencies
 
