@@ -17,6 +17,10 @@ typedef NS_ENUM(NSInteger, SPSessionModeObjC) {
 
 @interface SPRustBridge : NSObject
 
+/// Monotonic token identifying the current session.
+/// Use this to guard delayed blocks against stale execution.
+@property (nonatomic, readonly) uint64_t currentSessionToken;
+
 - (instancetype)initWithDelegate:(id<SPRustBridgeDelegate>)delegate;
 
 /// Initialize the Rust core library.
@@ -39,5 +43,36 @@ typedef NS_ENUM(NSInteger, SPSessionModeObjC) {
 
 /// Reload configuration.
 - (void)reloadConfig;
+
+// ─── Model Management ──────────────────────────────────────────────
+
+/// Return supported local provider names (e.g. @[@"mlx", @"sherpa-onnx"]).
+- (NSArray<NSString *> *)supportedLocalProviders;
+
+/// Scan all models and return array of dictionaries.
+/// Each dict: path, provider, description, repo, total_size, status (0/1/2)
+- (NSArray<NSDictionary *> *)scanModels;
+
+typedef NS_ENUM(NSInteger, SPModelVerifyMode) {
+    SPModelVerifyNormal = 0,      // cached sha256, compute on miss
+    SPModelVerifyCacheOnly = 1,   // cache hit only, no compute
+    SPModelVerifyForce = 2,       // ignore cache, always compute
+};
+
+/// Model status with configurable verification: 0=not installed, 1=incomplete, 2=installed
+- (NSInteger)modelStatus:(NSString *)modelPath mode:(SPModelVerifyMode)mode;
+
+/// Download a model asynchronously.
+- (void)downloadModel:(NSString *)modelPath
+             progress:(void (^)(NSUInteger fileIndex, NSUInteger fileCount,
+                                uint64_t downloaded, uint64_t total,
+                                NSString *filename))progressBlock
+           completion:(void (^)(BOOL success, NSString *message))completionBlock;
+
+/// Cancel an active download.
+- (void)cancelDownload:(NSString *)modelPath;
+
+/// Remove downloaded model files (keeps manifest). Returns files removed.
+- (NSInteger)removeModelFiles:(NSString *)modelPath;
 
 @end

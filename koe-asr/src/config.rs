@@ -3,6 +3,7 @@
 pub struct AsrConfig {
     pub url: String,
     pub app_key: String,
+    /// X-Api-Access-Key (Access Token from Volcengine console) or API Key for Qwen
     pub access_key: String,
     pub resource_id: String,
     pub sample_rate_hz: u32,
@@ -20,6 +21,8 @@ pub struct AsrConfig {
     pub vad_min_speech_duration: Option<f32>,
     pub vad_min_silence_duration: Option<f32>,
     pub vad_max_speech_duration: Option<f32>,
+    /// Language code for ASR (e.g. "zh", "en") - used by Qwen ASR
+    pub language: Option<String>,
 }
 
 impl Default for AsrConfig {
@@ -44,6 +47,7 @@ impl Default for AsrConfig {
             vad_min_speech_duration: None,
             vad_min_silence_duration: None,
             vad_max_speech_duration: None,
+            language: Some("zh".to_string()),
         }
     }
 }

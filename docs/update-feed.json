@@ -1,16 +1,13 @@
 {
-  "version": "1.0.9",
-  "build": 10,
-  "published_at": "2026-03-25T17:30:40Z",
+  "version": "1.0.12",
+  "build": 13,
+  "published_at": "2026-03-29T06:00:00Z",
   "minimum_system_version": "13.0",
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.9/Koe-macOS-arm64.zip",
-  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.9",
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.12/Koe-macOS-arm64.zip",
+  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.12",
   "notes": [
-    "Add built-in app update checks and a manual Check for Updates action in the menu bar.",
-    "Show the current version and build number directly in the menu bar status UI.",
-    "Handle microphone disconnects during recording and recover gracefully.",
-    "Migrate ASR settings to the provider-based v2 format and add an ASR provider selector, defaulting to Doubao.",
-    "Improve the interim transcription overlay with auto-wrapping and less layout jitter.",
-    "Add a configurable cancel hotkey separate from the trigger key, and persist valid hotkey defaults into config.yaml."
+    "Support custom macOS keycodes for trigger and cancel keys, allowing any non-modifier key (e.g. F1-F20) to be configured in config.yaml.",
+    "Display friendly key names for custom keycodes in the status bar menu and setup wizard.",
+    "Make Qwen ASR URL and model configurable in config.yaml."
   ]
 }

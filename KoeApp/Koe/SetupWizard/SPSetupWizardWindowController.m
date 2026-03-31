@@ -1,8 +1,8 @@
 #import "SPSetupWizardWindowController.h"
+#import "SPRustBridge.h"
 #import <Cocoa/Cocoa.h>
 
 static NSString *const kConfigDir = @".koe";
-static NSString *const kConfigFile = @"config.yaml";
 static NSString *const kDictionaryFile = @"dictionary.txt";
 static NSString *const kSystemPromptFile = @"system_prompt.txt";
 
@@ -13,231 +13,31 @@ static NSToolbarItemIdentifier const kToolbarHotkey = @"hotkey";
 static NSToolbarItemIdentifier const kToolbarDictionary = @"dictionary";
 static NSToolbarItemIdentifier const kToolbarSystemPrompt = @"system_prompt";
 
-// ─── YAML helpers (minimal, line-based) ─────────────────────────────
-// We parse/write the config.yaml with simple line-based logic to avoid
-// pulling in a YAML library.  The config file is flat enough for this.
+// ─── Config helpers (backed by sp_config_get / sp_config_set) ───────
+#import "koe_core.h"
 
 static NSString *configDirPath(void) {
     return [NSHomeDirectory() stringByAppendingPathComponent:kConfigDir];
 }
 
-static NSString *configFilePath(void) {
-    return [configDirPath() stringByAppendingPathComponent:kConfigFile];
+
+static NSString *configGet(NSString *keyPath) {
+    char *raw = sp_config_get(keyPath.UTF8String);
+    if (!raw) return @"";
+    NSString *result = [NSString stringWithUTF8String:raw] ?: @"";
+    sp_core_free_string(raw);
+    return result;
 }
 
-/// Count leading spaces in a line (each tab counts as 2 spaces).
-static NSInteger yamlIndentLevel(NSString *line) {
-    NSInteger indent = 0;
-    for (NSUInteger i = 0; i < line.length; i++) {
-        unichar ch = [line characterAtIndex:i];
-        if (ch == ' ') indent++;
-        else if (ch == '\t') indent += 2;
-        else break;
-    }
-    return indent;
+static BOOL configSet(NSString *keyPath, NSString *value) {
+    return sp_config_set(keyPath.UTF8String, (value ?: @"").UTF8String) == 0;
 }
 
-/// Read a YAML value at an arbitrary depth key path, e.g. @"asr.doubao.app_key".
-/// Returns @"" if not found.
-static NSString *yamlRead(NSString *yaml, NSString *keyPath) {
-    NSArray<NSString *> *parts = [keyPath componentsSeparatedByString:@"."];
-    if (parts.count == 0) return @"";
-
-    NSArray<NSString *> *lines = [yaml componentsSeparatedByString:@"\n"];
-    // Track which depth of the path we've matched so far
-    NSInteger matchedDepth = 0;
-    // The minimum indent level required for each depth
-    NSInteger requiredIndent[16] = {0}; // support up to 16 levels
-    requiredIndent[0] = 0;
-
-    for (NSString *line in lines) {
-        NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (trimmed.length == 0 || [trimmed hasPrefix:@"#"]) continue;
-
-        NSInteger indent = yamlIndentLevel(line);
-
-        // If indent is less than what the current matched section requires, we've left that section
-        if (matchedDepth > 0 && indent < requiredIndent[matchedDepth - 1] + 1) {
-            // Reset to how many parent sections are still valid
-            while (matchedDepth > 0 && indent < requiredIndent[matchedDepth - 1] + 1) {
-                matchedDepth--;
-            }
-        }
-
-        // Extract key from this line
-        NSRange colonRange = [trimmed rangeOfString:@":"];
-        if (colonRange.location == NSNotFound) continue;
-
-        NSString *lineKey = [[trimmed substringToIndex:colonRange.location]
-                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-
-        NSString *expectedKey = (matchedDepth < (NSInteger)parts.count) ? parts[matchedDepth] : nil;
-        if (!expectedKey) continue;
-
-        if ([lineKey isEqualToString:expectedKey]) {
-            if (matchedDepth == (NSInteger)parts.count - 1) {
-                // This is the leaf key — extract value
-                NSString *value = [trimmed substringFromIndex:colonRange.location + 1];
-                value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                if ([value hasPrefix:@"\""]) {
-                    NSRange closeQuote = [value rangeOfString:@"\"" options:0 range:NSMakeRange(1, value.length - 1)];
-                    if (closeQuote.location != NSNotFound) {
-                        value = [value substringToIndex:closeQuote.location + 1];
-                    }
-                } else {
-                    NSRange commentRange = [value rangeOfString:@" #"];
-                    if (commentRange.location != NSNotFound) {
-                        value = [[value substringToIndex:commentRange.location]
-                                 stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    }
-                }
-                if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
-                    value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
-                }
-                return value;
-            } else {
-                // This is an intermediate section key — go deeper
-                requiredIndent[matchedDepth] = indent;
-                matchedDepth++;
-            }
-        }
-    }
-    return @"";
-}
-
-/// Set a value in the YAML string at an arbitrary depth key path.
-/// If the key exists, replace it; otherwise append under the parent section(s).
-static NSString *yamlWrite(NSString *yaml, NSString *keyPath, NSString *value) {
-    NSArray<NSString *> *parts = [keyPath componentsSeparatedByString:@"."];
-    NSString *key = parts.lastObject;
-
-    // Quote the value if it contains special chars or is empty
-    NSString *quotedValue;
-    if (value.length == 0 ||
-        [value rangeOfString:@" "].location != NSNotFound ||
-        [value rangeOfString:@"#"].location != NSNotFound ||
-        [value rangeOfString:@":"].location != NSNotFound ||
-        [value rangeOfString:@"\""].location != NSNotFound ||
-        [value rangeOfString:@"$"].location != NSNotFound ||
-        [value rangeOfString:@"@"].location != NSNotFound ||
-        [value hasPrefix:@"wss://"] || [value hasPrefix:@"https://"] || [value hasPrefix:@"http://"]) {
-        quotedValue = [NSString stringWithFormat:@"\"%@\"", value];
-    } else {
-        quotedValue = value;
-    }
-
-    NSMutableArray<NSString *> *lines = [[yaml componentsSeparatedByString:@"\n"] mutableCopy];
-
-    // Build indent string for the leaf key (2 spaces per depth level for sections)
-    NSInteger sectionCount = (NSInteger)parts.count - 1;
-    NSMutableString *indent = [NSMutableString string];
-    for (NSInteger i = 0; i < sectionCount; i++) {
-        [indent appendString:@"  "];
-    }
-
-    // Track section matching
-    NSInteger matchedDepth = 0;
-    NSInteger requiredIndent[16] = {0};
-    NSInteger lastMatchedSectionLine[16] = {0}; // line index where each section was found
-
-    for (NSInteger i = 0; i < (NSInteger)lines.count; i++) {
-        NSString *line = lines[i];
-        NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (trimmed.length == 0 || [trimmed hasPrefix:@"#"]) continue;
-
-        NSInteger lineIndent = yamlIndentLevel(line);
-
-        // Check if we've left a matched section
-        while (matchedDepth > 0 && lineIndent < requiredIndent[matchedDepth - 1] + 1) {
-            matchedDepth--;
-        }
-
-        NSRange colonRange = [trimmed rangeOfString:@":"];
-        if (colonRange.location == NSNotFound) continue;
-
-        NSString *lineKey = [[trimmed substringToIndex:colonRange.location]
-                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-
-        if (matchedDepth < sectionCount) {
-            // Still looking for parent sections
-            NSString *expectedSection = parts[matchedDepth];
-            if ([lineKey isEqualToString:expectedSection]) {
-                requiredIndent[matchedDepth] = lineIndent;
-                lastMatchedSectionLine[matchedDepth] = i;
-                matchedDepth++;
-            }
-        } else if (matchedDepth == sectionCount) {
-            // Looking for the leaf key
-            if ([lineKey isEqualToString:key]) {
-                // Replace this line
-                NSString *newLine = [NSString stringWithFormat:@"%@%@: %@", indent, key, quotedValue];
-                lines[i] = newLine;
-                return [lines componentsJoinedByString:@"\n"];
-            }
-            // Check if we've passed the section (indent dropped to parent level or above)
-        }
-    }
-
-    // Key not found — we need to insert it.
-    // First, make sure all parent sections exist.
-    NSInteger insertIdx = (NSInteger)lines.count;
-
-    // Walk through parts[0..sectionCount-1] to find or create sections
-    matchedDepth = 0;
-    for (NSInteger i = 0; i < (NSInteger)lines.count; i++) {
-        NSString *line = lines[i];
-        NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (trimmed.length == 0 || [trimmed hasPrefix:@"#"]) continue;
-
-        NSInteger lineIndent = yamlIndentLevel(line);
-        while (matchedDepth > 0 && lineIndent < requiredIndent[matchedDepth - 1] + 1) {
-            matchedDepth--;
-        }
-
-        NSRange colonRange = [trimmed rangeOfString:@":"];
-        if (colonRange.location == NSNotFound) continue;
-
-        NSString *lineKey = [[trimmed substringToIndex:colonRange.location]
-                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-
-        if (matchedDepth < sectionCount) {
-            NSString *expectedSection = parts[matchedDepth];
-            if ([lineKey isEqualToString:expectedSection]) {
-                requiredIndent[matchedDepth] = lineIndent;
-                lastMatchedSectionLine[matchedDepth] = i;
-                matchedDepth++;
-
-                if (matchedDepth == sectionCount) {
-                    // Found all parent sections — find end of deepest section to insert
-                    insertIdx = i + 1;
-                    while (insertIdx < (NSInteger)lines.count) {
-                        NSString *nextLine = lines[insertIdx];
-                        NSString *nextTrimmed = [nextLine stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                        if (nextTrimmed.length > 0 && ![nextTrimmed hasPrefix:@"#"]) {
-                            NSInteger nextIndent = yamlIndentLevel(nextLine);
-                            if (nextIndent <= lineIndent) break;
-                        }
-                        insertIdx++;
-                    }
-                }
-            }
-        }
-    }
-
-    // Create missing parent sections
-    for (NSInteger d = matchedDepth; d < sectionCount; d++) {
-        NSMutableString *secIndent = [NSMutableString string];
-        for (NSInteger j = 0; j < d; j++) [secIndent appendString:@"  "];
-        NSString *secLine = [NSString stringWithFormat:@"%@%@:", secIndent, parts[d]];
-        [lines insertObject:secLine atIndex:insertIdx];
-        insertIdx++;
-    }
-
-    // Insert the leaf key
-    NSString *newLine = [NSString stringWithFormat:@"%@%@: %@", indent, key, quotedValue];
-    [lines insertObject:newLine atIndex:insertIdx];
-
-    return [lines componentsJoinedByString:@"\n"];
+static BOOL isNumericKeycode(NSString *value) {
+    if (value.length == 0) return NO;
+    NSScanner *scanner = [NSScanner scannerWithString:value];
+    int intValue;
+    return [scanner scanInt:&intValue] && [scanner isAtEnd];
 }
 
 static NSString *normalizedHotkeyValue(NSString *value) {
@@ -250,17 +50,56 @@ static NSString *normalizedHotkeyValue(NSString *value) {
             @"right_option",
             @"left_command",
             @"right_command",
+            @"left_control",
+            @"right_control",
         ]];
     });
-    return [validValues containsObject:value] ? value : @"fn";
+    if ([validValues containsObject:value]) return value;
+    if (isNumericKeycode(value)) return value;
+    return @"fn";
+}
+
+static NSString *displayNameForCustomKeycode(NSString *value) {
+    int keycode = value.intValue;
+    switch (keycode) {
+        case 122: return @"F1 (Keycode 122)";
+        case 120: return @"F2 (Keycode 120)";
+        case 99:  return @"F3 (Keycode 99)";
+        case 118: return @"F4 (Keycode 118)";
+        case 96:  return @"F5 (Keycode 96)";
+        case 97:  return @"F6 (Keycode 97)";
+        case 98:  return @"F7 (Keycode 98)";
+        case 100: return @"F8 (Keycode 100)";
+        case 101: return @"F9 (Keycode 101)";
+        case 109: return @"F10 (Keycode 109)";
+        case 103: return @"F11 (Keycode 103)";
+        case 111: return @"F12 (Keycode 111)";
+        case 49:  return @"Space (Keycode 49)";
+        case 53:  return @"Escape (Keycode 53)";
+        case 48:  return @"Tab (Keycode 48)";
+        case 57:  return @"CapsLock (Keycode 57)";
+        default:  return [NSString stringWithFormat:@"Keycode %d", keycode];
+    }
+}
+
+/// If the value is a numeric keycode, add a custom item to the popup and select it.
+static void ensureCustomKeycodeInPopup(NSPopUpButton *popup, NSString *value) {
+    if (!isNumericKeycode(value)) return;
+    NSString *title = displayNameForCustomKeycode(value);
+    [popup addItemWithTitle:title];
+    [popup lastItem].representedObject = value;
+    [popup selectItem:[popup lastItem]];
 }
 
 static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
+    if (isNumericKeycode(triggerKey)) return @"left_option";
     NSString *normalizedTrigger = normalizedHotkeyValue(triggerKey);
     if ([normalizedTrigger isEqualToString:@"fn"]) return @"left_option";
     if ([normalizedTrigger isEqualToString:@"left_option"]) return @"right_option";
     if ([normalizedTrigger isEqualToString:@"right_option"]) return @"left_command";
     if ([normalizedTrigger isEqualToString:@"left_command"]) return @"right_command";
+    if ([normalizedTrigger isEqualToString:@"right_command"]) return @"left_control";
+    if ([normalizedTrigger isEqualToString:@"left_control"]) return @"right_control";
     return @"fn";
 }
 
@@ -278,6 +117,22 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 @property (nonatomic, strong) NSTextField *asrAccessKeyField;
 @property (nonatomic, strong) NSSecureTextField *asrAccessKeySecureField;
 @property (nonatomic, strong) NSButton *asrAccessKeyToggle;
+@property (nonatomic, strong) NSSecureTextField *asrQwenApiKeySecureField;
+@property (nonatomic, strong) NSTextField *asrQwenApiKeyField;
+@property (nonatomic, strong) NSButton *asrQwenApiKeyToggle;
+@property (nonatomic, strong) NSButton *asrTestButton;
+@property (nonatomic, strong) NSTextField *asrTestResultLabel;
+
+// Local ASR model selection
+@property (nonatomic, strong) NSPopUpButton *localModelPopup;
+@property (nonatomic, strong) NSTextField *localModelLabel;
+@property (nonatomic, strong) NSTextField *modelStatusLabel;
+@property (nonatomic, strong) NSButton *modelDownloadButton;
+@property (nonatomic, strong) NSButton *modelDeleteButton;
+@property (nonatomic, strong) NSProgressIndicator *modelProgressBar;
+@property (nonatomic, strong) NSTextField *modelProgressSizeLabel;
+@property (nonatomic, strong) NSMutableSet<NSString *> *downloadingModels;
+@property (nonatomic, copy) NSString *pendingVerificationPath;
 
 // LLM fields
 @property (nonatomic, strong) NSButton *llmEnabledCheckbox;
@@ -307,7 +162,9 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
 @end
 
-@implementation SPSetupWizardWindowController
+@implementation SPSetupWizardWindowController {
+    dispatch_queue_t _verifyQueue;
+}
 
 - (instancetype)init {
     NSWindow *window = [[NSWindow alloc]
@@ -320,14 +177,16 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
     self = [super initWithWindow:window];
     if (self) {
+        _verifyQueue = dispatch_queue_create("koe.model.verify", DISPATCH_QUEUE_SERIAL);
         [self setupToolbar];
-        [self switchToPane:kToolbarASR];
-        [self loadCurrentValues];
     }
     return self;
 }
 
 - (void)showWindow:(id)sender {
+    if (!self.currentPaneIdentifier) {
+        [self switchToPane:kToolbarASR];
+    }
     [self loadCurrentValues];
     [self.window center];
     [self.window makeKeyAndOrderFront:sender];
@@ -449,49 +308,171 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat rowH = 32;
 
     // Calculate content height
-    CGFloat contentHeight = 256;
+    CGFloat contentHeight = 260;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
     CGFloat y = contentHeight - 48;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"Choose the ASR provider used for transcription. Currently only Doubao is available."];
+    NSTextField *desc = [self descriptionLabel:@"Choose the ASR provider used for transcription."];
     desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
     [pane addSubview:desc];
     y -= 52;
 
     // Provider
     [pane addSubview:[self formLabel:@"Provider" frame:NSMakeRect(16, y, labelW, 22)]];
-    self.asrProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 220, 26) pullsDown:NO];
+    self.asrProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 160, 26) pullsDown:NO];
     [self.asrProviderPopup addItemWithTitle:@"Doubao (\u8c46\u5305)"];
     [self.asrProviderPopup itemAtIndex:0].representedObject = @"doubao";
+    [self.asrProviderPopup addItemWithTitle:@"Qwen (\u963f\u91cc\u4e91)"];
+    [self.asrProviderPopup itemAtIndex:1].representedObject = @"qwen";
+    // Add local providers supported by this build
+    NSDictionary *localProviderLabels = @{
+        @"mlx": @"MLX (Apple Silicon)",
+        @"sherpa-onnx": @"Sherpa-ONNX",
+    };
+    for (NSString *provider in [self.rustBridge supportedLocalProviders]) {
+        NSString *label = localProviderLabels[provider] ?: provider;
+        [self.asrProviderPopup addItemWithTitle:label];
+        [self.asrProviderPopup lastItem].representedObject = provider;
+    }
+    [self.asrProviderPopup setTarget:self];
+    [self.asrProviderPopup setAction:@selector(asrProviderChanged:)];
     [pane addSubview:self.asrProviderPopup];
+
+    // Test button next to Provider
+    self.asrTestButton = [NSButton buttonWithTitle:@"Test" target:self action:@selector(testAsrConnection:)];
+    self.asrTestButton.bezelStyle = NSBezelStyleRounded;
+    self.asrTestButton.frame = NSMakeRect(fieldX + 168, y - 2, 70, 28);
+    [pane addSubview:self.asrTestButton];
     y -= rowH;
 
-    // App Key
-    [pane addSubview:[self formLabel:@"App Key" frame:NSMakeRect(16, y, labelW, 22)]];
+    // App Key (Doubao only)
     self.asrAppKeyField = [self formTextField:NSMakeRect(fieldX, y, fieldW, 22) placeholder:@"Volcengine App ID"];
     [pane addSubview:self.asrAppKeyField];
+    NSTextField *appKeyLabel = [self formLabel:@"App Key" frame:NSMakeRect(16, y, labelW, 22)];
+    appKeyLabel.tag = 1001;
+    [pane addSubview:appKeyLabel];
+
+    // Row 1: Model popup + Download button (Local providers, same row as App Key)
+    self.localModelLabel = [self formLabel:@"Model" frame:NSMakeRect(16, y, labelW, 22)];
+    self.localModelLabel.tag = 1004;
+    self.localModelLabel.hidden = YES;
+    [pane addSubview:self.localModelLabel];
+    self.localModelPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, fieldW - 26, 26) pullsDown:NO];
+    self.localModelPopup.hidden = YES;
+    [self.localModelPopup setTarget:self];
+    [self.localModelPopup setAction:@selector(localModelChanged:)];
+    [pane addSubview:self.localModelPopup];
+
+    // Download button (right of model popup, same style as eye button)
+    self.modelDownloadButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, y + 1, 20, 20)];
+    self.modelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                  accessibilityDescription:@"Download"];
+    self.modelDownloadButton.bezelStyle = NSBezelStyleInline;
+    self.modelDownloadButton.bordered = NO;
+    self.modelDownloadButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+    self.modelDownloadButton.target = self;
+    self.modelDownloadButton.action = @selector(downloadSelectedModel:);
+    self.modelDownloadButton.hidden = YES;
+    [pane addSubview:self.modelDownloadButton];
+
     y -= rowH;
 
-    // Access Key (secure by default)
+    // Row 2: Status + Delete button
+    self.modelStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, y + 2, fieldW - 32, 18)];
+    self.modelStatusLabel.bezeled = NO;
+    self.modelStatusLabel.drawsBackground = NO;
+    self.modelStatusLabel.editable = NO;
+    self.modelStatusLabel.selectable = NO;
+    self.modelStatusLabel.font = [NSFont systemFontOfSize:12];
+    self.modelStatusLabel.hidden = YES;
+    [pane addSubview:self.modelStatusLabel];
+
+    // Delete button (right end of status row, same style as eye button)
+    self.modelDeleteButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, y + 1, 20, 20)];
+    self.modelDeleteButton.image = [NSImage imageWithSystemSymbolName:@"trash"
+                                                accessibilityDescription:@"Delete"];
+    self.modelDeleteButton.bezelStyle = NSBezelStyleInline;
+    self.modelDeleteButton.bordered = NO;
+    self.modelDeleteButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+    self.modelDeleteButton.target = self;
+    self.modelDeleteButton.action = @selector(deleteSelectedModel:);
+    self.modelDeleteButton.hidden = YES;
+    [pane addSubview:self.modelDeleteButton];
+
+    y -= rowH;
+
+    // Row 3: Progress bar + size label
+    self.modelProgressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(fieldX, y + 10, fieldW - 120, 10)];
+    self.modelProgressBar.controlSize = NSControlSizeMini;
+    self.modelProgressBar.style = NSProgressIndicatorStyleBar;
+    self.modelProgressBar.minValue = 0;
+    self.modelProgressBar.maxValue = 100;
+    self.modelProgressBar.indeterminate = NO;
+    self.modelProgressBar.hidden = YES;
+    [pane addSubview:self.modelProgressBar];
+
+    self.modelProgressSizeLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 114, y + 2, 114, 18)];
+    self.modelProgressSizeLabel.bezeled = NO;
+    self.modelProgressSizeLabel.drawsBackground = NO;
+    self.modelProgressSizeLabel.editable = NO;
+    self.modelProgressSizeLabel.selectable = NO;
+    self.modelProgressSizeLabel.alignment = NSTextAlignmentRight;
+    self.modelProgressSizeLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    self.modelProgressSizeLabel.textColor = [NSColor secondaryLabelColor];
+    self.modelProgressSizeLabel.hidden = YES;
+    [pane addSubview:self.modelProgressSizeLabel];
+
+    y -= rowH;
+
+    // Access Key (Doubao) — fixed at row 2 (same as Qwen API Key)
+    CGFloat accessKeyY = contentHeight - 48 - 52 - rowH - rowH;
     CGFloat eyeW = 28;
     CGFloat secFieldW = fieldW - eyeW - 4;
-    [pane addSubview:[self formLabel:@"Access Key" frame:NSMakeRect(16, y, labelW, 22)]];
-    self.asrAccessKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, y, secFieldW, 22)];
+
+    self.asrAccessKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, accessKeyY, secFieldW, 22)];
     self.asrAccessKeySecureField.placeholderString = @"Volcengine Access Token";
     self.asrAccessKeySecureField.font = [NSFont systemFontOfSize:13];
     [pane addSubview:self.asrAccessKeySecureField];
-    self.asrAccessKeyField = [self formTextField:NSMakeRect(fieldX, y, secFieldW, 22) placeholder:@"Volcengine Access Token"];
+    self.asrAccessKeyField = [self formTextField:NSMakeRect(fieldX, accessKeyY, secFieldW, 22) placeholder:@"Volcengine Access Token"];
     self.asrAccessKeyField.hidden = YES;
     [pane addSubview:self.asrAccessKeyField];
-    self.asrAccessKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, y - 1, eyeW, 24)
+    self.asrAccessKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, accessKeyY - 1, eyeW, 24)
                                                 action:@selector(toggleAsrAccessKeyVisibility:)];
     [pane addSubview:self.asrAccessKeyToggle];
-    y -= rowH + 16;
+    NSTextField *accessKeyLabel = [self formLabel:@"Access Key" frame:NSMakeRect(16, accessKeyY, labelW, 22)];
+    accessKeyLabel.tag = 1002;
+    [pane addSubview:accessKeyLabel];
+
+    // Qwen API Key — fixed at row 1 (same position as App Key)
+    CGFloat qwenY = contentHeight - 48 - 52 - rowH;
+    self.asrQwenApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, qwenY, secFieldW, 22)];
+    self.asrQwenApiKeySecureField.placeholderString = @"DashScope API Key (sk-xxx)";
+    self.asrQwenApiKeySecureField.font = [NSFont systemFontOfSize:13];
+    self.asrQwenApiKeySecureField.hidden = YES;
+    [pane addSubview:self.asrQwenApiKeySecureField];
+    self.asrQwenApiKeyField = [self formTextField:NSMakeRect(fieldX, qwenY, secFieldW, 22) placeholder:@"DashScope API Key (sk-xxx)"];
+    self.asrQwenApiKeyField.hidden = YES;
+    [pane addSubview:self.asrQwenApiKeyField];
+    self.asrQwenApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, qwenY - 1, eyeW, 24)
+                                                action:@selector(toggleQwenApiKeyVisibility:)];
+    self.asrQwenApiKeyToggle.hidden = YES;
+    [pane addSubview:self.asrQwenApiKeyToggle];
+    NSTextField *qwenKeyLabel = [self formLabel:@"API Key" frame:NSMakeRect(16, qwenY, labelW, 22)];
+    qwenKeyLabel.tag = 1003;
+    qwenKeyLabel.hidden = YES;
+    [pane addSubview:qwenKeyLabel];
+
+    // Test result label
+    self.asrTestResultLabel = [NSTextField wrappingLabelWithString:@""];
+    self.asrTestResultLabel.frame = NSMakeRect(fieldX, 55, fieldW, 42);
+    self.asrTestResultLabel.font = [NSFont systemFontOfSize:12];
+    self.asrTestResultLabel.selectable = YES;
+    [pane addSubview:self.asrTestResultLabel];
 
     // Save / Cancel buttons
-    [self addButtonsToPane:pane atY:y width:paneWidth];
+    [self addButtonsToPane:pane atY:16 width:paneWidth];
 
     return pane;
 }
@@ -615,12 +596,16 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         @"Right Option (\u2325)",
         @"Left Command (\u2318)",
         @"Right Command (\u2318)",
+        @"Left Control (\u2303)",
+        @"Right Control (\u2303)",
     ]];
     [self.hotkeyPopup itemAtIndex:0].representedObject = @"fn";
     [self.hotkeyPopup itemAtIndex:1].representedObject = @"left_option";
     [self.hotkeyPopup itemAtIndex:2].representedObject = @"right_option";
     [self.hotkeyPopup itemAtIndex:3].representedObject = @"left_command";
     [self.hotkeyPopup itemAtIndex:4].representedObject = @"right_command";
+    [self.hotkeyPopup itemAtIndex:5].representedObject = @"left_control";
+    [self.hotkeyPopup itemAtIndex:6].representedObject = @"right_control";
     [pane addSubview:self.hotkeyPopup];
     y -= rowH + 16;
 
@@ -634,12 +619,16 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         @"Right Option (\u2325)",
         @"Left Command (\u2318)",
         @"Right Command (\u2318)",
+        @"Left Control (\u2303)",
+        @"Right Control (\u2303)",
     ]];
     [self.cancelHotkeyPopup itemAtIndex:0].representedObject = @"fn";
     [self.cancelHotkeyPopup itemAtIndex:1].representedObject = @"left_option";
     [self.cancelHotkeyPopup itemAtIndex:2].representedObject = @"right_option";
     [self.cancelHotkeyPopup itemAtIndex:3].representedObject = @"left_command";
     [self.cancelHotkeyPopup itemAtIndex:4].representedObject = @"right_command";
+    [self.cancelHotkeyPopup itemAtIndex:5].representedObject = @"left_control";
+    [self.cancelHotkeyPopup itemAtIndex:6].representedObject = @"right_control";
     [pane addSubview:self.cancelHotkeyPopup];
     y -= rowH + 8;
 
@@ -836,6 +825,271 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     }
 }
 
+- (void)toggleQwenApiKeyVisibility:(NSButton *)sender {
+    if (sender.tag == 0) {
+        // Show plain text
+        self.asrQwenApiKeyField.stringValue = self.asrQwenApiKeySecureField.stringValue;
+        self.asrQwenApiKeySecureField.hidden = YES;
+        self.asrQwenApiKeyField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:@"Hide"];
+        sender.tag = 1;
+    } else {
+        // Show secure
+        self.asrQwenApiKeySecureField.stringValue = self.asrQwenApiKeyField.stringValue;
+        self.asrQwenApiKeyField.hidden = YES;
+        self.asrQwenApiKeySecureField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+        sender.tag = 0;
+    }
+}
+
+- (void)asrProviderChanged:(NSPopUpButton *)sender {
+    NSString *selectedProvider = sender.selectedItem.representedObject ?: @"doubao";
+    BOOL isDoubao = [selectedProvider isEqualToString:@"doubao"];
+    BOOL isQwen = [selectedProvider isEqualToString:@"qwen"];
+    BOOL isLocal = !isDoubao && !isQwen;
+
+    // Show/hide Doubao fields
+    for (NSView *view in self.currentPaneView.subviews) {
+        if (view.tag == 1001 || view.tag == 1002) { // App Key and Access Key labels
+            view.hidden = !isDoubao;
+        }
+    }
+    self.asrAppKeyField.hidden = !isDoubao;
+    self.asrAccessKeyField.hidden = YES; // Always start hidden (secure mode)
+    self.asrAccessKeySecureField.hidden = !isDoubao;
+    self.asrAccessKeyToggle.hidden = !isDoubao;
+
+    // Show/hide Qwen fields
+    for (NSView *view in self.currentPaneView.subviews) {
+        if (view.tag == 1003) { // Qwen API Key label
+            view.hidden = !isQwen;
+        }
+    }
+    self.asrQwenApiKeyField.hidden = YES; // Always start hidden (secure mode)
+    self.asrQwenApiKeySecureField.hidden = !isQwen;
+    self.asrQwenApiKeyToggle.hidden = !isQwen;
+
+    // Show/hide local model popup, status, and download button
+    self.localModelPopup.hidden = !isLocal;
+    self.modelStatusLabel.hidden = !isLocal;
+    if (!isLocal) {
+        self.modelDownloadButton.hidden = YES;
+        self.modelDeleteButton.hidden = YES;
+        self.modelProgressBar.hidden = YES;
+        self.modelProgressSizeLabel.hidden = YES;
+    } else {
+        self.modelDownloadButton.hidden = NO;
+        self.modelDeleteButton.hidden = NO;
+    }
+    for (NSView *view in self.currentPaneView.subviews) {
+        if (view.tag == 1004) { // Model label
+            view.hidden = !isLocal;
+        }
+    }
+    if (isLocal) {
+        [self populateLocalModelPopup:selectedProvider];
+        [self updateModelStatusLabel];
+    }
+
+    // Hide test button for local providers (no remote connection to test)
+    self.asrTestButton.hidden = isLocal;
+    self.asrTestResultLabel.hidden = isLocal;
+
+    // Clear test result when switching provider
+    self.asrTestResultLabel.stringValue = @"";
+    self.asrTestButton.enabled = YES;
+}
+
+- (void)localModelChanged:(id)sender {
+    [self updateModelStatusLabel];
+}
+
+- (void)updateModelStatusLabel {
+    NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+    if (!modelPath) {
+        self.modelStatusLabel.stringValue = @"";
+        self.modelDownloadButton.enabled = NO;
+        self.modelDeleteButton.enabled = NO;
+        self.modelProgressBar.hidden = YES;
+        self.modelProgressSizeLabel.hidden = YES;
+        return;
+    }
+
+    // If selected model is currently downloading, show progress UI
+    if ([self.downloadingModels containsObject:modelPath]) {
+        self.modelStatusLabel.stringValue = @"Downloading";
+        self.modelStatusLabel.textColor = [NSColor secondaryLabelColor];
+        self.modelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle"
+                                                     accessibilityDescription:@"Stop"];
+        self.modelDownloadButton.enabled = YES;
+        self.modelDeleteButton.enabled = NO;
+        self.modelProgressBar.hidden = NO;
+        self.modelProgressSizeLabel.hidden = NO;
+        return;
+    }
+
+    // 1. Cache-only lookup (~1ms)
+    NSInteger cachedStatus = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
+    if (cachedStatus == 2) {
+        [self applyModelStatus:cachedStatus];
+        return;
+    }
+
+    // 2. Cache miss or incomplete — show "Verifying…" and dispatch async
+    [self applyModelStatus:(cachedStatus > 0 ? cachedStatus : 1) verifying:YES];
+    self.pendingVerificationPath = modelPath;
+
+    dispatch_async(_verifyQueue, ^{
+        NSInteger verified = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyNormal];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.pendingVerificationPath isEqualToString:modelPath]) {
+                self.pendingVerificationPath = nil;
+                [self applyModelStatus:verified];
+            }
+        });
+    });
+}
+
+- (void)applyModelStatus:(NSInteger)status {
+    [self applyModelStatus:status verifying:NO];
+}
+
+- (void)applyModelStatus:(NSInteger)status verifying:(BOOL)verifying {
+    self.modelProgressBar.hidden = YES;
+    self.modelProgressSizeLabel.hidden = YES;
+    self.modelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                 accessibilityDescription:@"Download"];
+    switch (status) {
+        case 2:
+            self.modelStatusLabel.stringValue = verifying ? @"● Verifying…" : @"● Installed";
+            self.modelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemGreenColor];
+            self.modelDownloadButton.enabled = NO;
+            self.modelDeleteButton.enabled = YES;
+            break;
+        case 1:
+            self.modelStatusLabel.stringValue = verifying ? @"◐ Verifying…" : @"◐ Incomplete";
+            self.modelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemOrangeColor];
+            self.modelDownloadButton.enabled = YES;
+            self.modelDeleteButton.enabled = YES;
+            break;
+        default:
+            self.modelStatusLabel.stringValue = @"○ Not installed";
+            self.modelStatusLabel.textColor = [NSColor secondaryLabelColor];
+            self.modelDownloadButton.enabled = YES;
+            self.modelDeleteButton.enabled = NO;
+            break;
+    }
+}
+
+- (void)downloadSelectedModel:(id)sender {
+    NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+    if (!modelPath) return;
+
+    // If this model is downloading, cancel it
+    if ([self.downloadingModels containsObject:modelPath]) {
+        [self.rustBridge cancelDownload:modelPath];
+        return;
+    }
+
+    if (!self.downloadingModels) {
+        self.downloadingModels = [NSMutableSet new];
+    }
+    [self.downloadingModels addObject:modelPath];
+
+    // Switch to stop icon and show progress bar
+    self.modelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle"
+                                                 accessibilityDescription:@"Stop"];
+    self.modelDownloadButton.hidden = NO;
+    self.modelStatusLabel.stringValue = @"Downloading...";
+    self.modelStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.modelProgressBar.hidden = NO;
+    self.modelProgressBar.doubleValue = 0;
+    self.modelProgressSizeLabel.hidden = NO;
+    self.modelProgressSizeLabel.stringValue = @"";
+
+    // Get total size from scan_models data
+    __block uint64_t totalBytesAllFiles = 0;
+    for (NSDictionary *m in [self.rustBridge scanModels]) {
+        if ([m[@"path"] isEqualToString:modelPath]) {
+            totalBytesAllFiles = [m[@"total_size"] unsignedLongLongValue];
+            break;
+        }
+    }
+    __block NSMutableDictionary<NSNumber *, NSNumber *> *fileDownloaded = [NSMutableDictionary new];
+
+    __weak typeof(self) weakSelf = self;
+    [self.rustBridge downloadModel:modelPath
+        progress:^(NSUInteger fileIndex, NSUInteger fileCount,
+                   uint64_t downloaded, uint64_t total, NSString *filename) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            // Only update UI if this model is still selected
+            NSString *selected = strongSelf.localModelPopup.selectedItem.representedObject;
+            if (![modelPath isEqualToString:selected]) return;
+
+            fileDownloaded[@(fileIndex)] = @(downloaded);
+
+            uint64_t totalDownloaded = 0;
+            for (NSNumber *v in fileDownloaded.allValues) totalDownloaded += v.unsignedLongLongValue;
+
+            double pct = (totalBytesAllFiles > 0)
+                ? (double)totalDownloaded / (double)totalBytesAllFiles * 100.0 : 0;
+            strongSelf.modelProgressBar.doubleValue = pct;
+            strongSelf.modelStatusLabel.stringValue = @"Downloading";
+            strongSelf.modelProgressSizeLabel.stringValue =
+                [NSString stringWithFormat:@"%.1f / %.1f MB",
+                    (double)totalDownloaded / 1048576.0,
+                    (double)totalBytesAllFiles / 1048576.0];
+        }
+        completion:^(BOOL success, NSString *message) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf.downloadingModels removeObject:modelPath];
+            [strongSelf updateModelStatusLabel];
+        }];
+}
+
+- (void)deleteSelectedModel:(id)sender {
+    NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+    if (!modelPath) return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Remove Model Files?";
+    alert.informativeText = @"Downloaded model files will be deleted. The model can be re-downloaded later.";
+    [alert addButtonWithTitle:@"Remove"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.alertStyle = NSAlertStyleWarning;
+
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [self.rustBridge removeModelFiles:modelPath];
+        [self updateModelStatusLabel];
+    }
+}
+
+- (void)populateLocalModelPopup:(NSString *)provider {
+    [self.localModelPopup removeAllItems];
+
+    NSArray<NSDictionary *> *models = [self.rustBridge scanModels];
+    for (NSDictionary *model in models) {
+        if (![model[@"provider"] isEqualToString:provider]) continue;
+
+        NSString *path = model[@"path"];
+        NSString *title = model[@"description"] ?: path;
+
+        [self.localModelPopup addItemWithTitle:title];
+        [self.localModelPopup lastItem].representedObject = path;
+    }
+
+    if (self.localModelPopup.numberOfItems == 0) {
+        [self.localModelPopup addItemWithTitle:@"No models found"];
+        self.localModelPopup.enabled = NO;
+    } else {
+        self.localModelPopup.enabled = YES;
+    }
+}
+
 - (void)toggleLlmApiKeyVisibility:(NSButton *)sender {
     if (sender.tag == 0) {
         self.llmApiKeyField.stringValue = self.llmApiKeySecureField.stringValue;
@@ -860,11 +1114,9 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
 - (void)loadValuesForPane:(NSString *)identifier {
     NSString *dir = configDirPath();
-    NSString *configPath = configFilePath();
-    NSString *yaml = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
 
     if ([identifier isEqualToString:kToolbarASR]) {
-        NSString *provider = yamlRead(yaml, @"asr.provider");
+        NSString *provider = configGet(@"asr.provider");
         if (provider.length == 0) provider = @"doubao";
         for (NSInteger i = 0; i < self.asrProviderPopup.numberOfItems; i++) {
             if ([[self.asrProviderPopup itemAtIndex:i].representedObject isEqualToString:provider]) {
@@ -872,31 +1124,52 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                 break;
             }
         }
-        self.asrAppKeyField.stringValue = yamlRead(yaml, @"asr.doubao.app_key");
-        NSString *accessKey = yamlRead(yaml, @"asr.doubao.access_key");
+        // Load Doubao fields
+        self.asrAppKeyField.stringValue = configGet(@"asr.doubao.app_key");
+        NSString *accessKey = configGet(@"asr.doubao.access_key");
         self.asrAccessKeySecureField.stringValue = accessKey;
         self.asrAccessKeyField.stringValue = accessKey;
-        // Reset to hidden state
-        self.asrAccessKeySecureField.hidden = NO;
-        self.asrAccessKeyField.hidden = YES;
-        self.asrAccessKeyToggle.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
-        self.asrAccessKeyToggle.tag = 0;
+        // Load Qwen fields
+        NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
+        self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
+        self.asrQwenApiKeyField.stringValue = qwenApiKey;
+        // Reset visibility based on selected provider
+        [self asrProviderChanged:self.asrProviderPopup];
+        // Select current local model if applicable
+        NSString *currentModel = nil;
+        if ([provider isEqualToString:@"mlx"]) {
+            currentModel = configGet(@"asr.mlx.model");
+        } else if ([provider isEqualToString:@"sherpa-onnx"]) {
+            currentModel = configGet(@"asr.sherpa-onnx.model");
+        }
+        if (currentModel.length > 0) {
+            for (NSInteger i = 0; i < self.localModelPopup.numberOfItems; i++) {
+                if ([[self.localModelPopup itemAtIndex:i].representedObject isEqualToString:currentModel]) {
+                    [self.localModelPopup selectItemAtIndex:i];
+                    break;
+                }
+            }
+            [self updateModelStatusLabel];
+        }
+        // Clear test result when loading
+        self.asrTestResultLabel.stringValue = @"";
+        self.asrTestButton.enabled = YES;
     } else if ([identifier isEqualToString:kToolbarLLM]) {
-        NSString *enabled = yamlRead(yaml, @"llm.enabled");
+        NSString *enabled = configGet(@"llm.enabled");
         self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
-        NSString *baseUrl = yamlRead(yaml, @"llm.base_url");
+        NSString *baseUrl = configGet(@"llm.base_url");
         self.llmBaseUrlField.stringValue = baseUrl.length > 0 ? baseUrl : @"https://api.openai.com/v1";
-        NSString *apiKey = yamlRead(yaml, @"llm.api_key");
+        NSString *apiKey = configGet(@"llm.api_key");
         self.llmApiKeySecureField.stringValue = apiKey;
         self.llmApiKeyField.stringValue = apiKey;
         self.llmApiKeySecureField.hidden = NO;
         self.llmApiKeyField.hidden = YES;
         self.llmApiKeyToggle.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
         self.llmApiKeyToggle.tag = 0;
-        NSString *model = yamlRead(yaml, @"llm.model");
+        NSString *model = configGet(@"llm.model");
         self.llmModelField.stringValue = model.length > 0 ? model : @"gpt-5.4-nano";
         // Max token parameter
-        NSString *maxTokenParam = yamlRead(yaml, @"llm.max_token_parameter");
+        NSString *maxTokenParam = configGet(@"llm.max_token_parameter");
         if (maxTokenParam.length == 0) maxTokenParam = @"max_completion_tokens";
         for (NSInteger i = 0; i < self.maxTokenParamPopup.numberOfItems; i++) {
             if ([[self.maxTokenParamPopup itemAtIndex:i].representedObject isEqualToString:maxTokenParam]) {
@@ -907,27 +1180,41 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         self.llmTestResultLabel.stringValue = @"";
         [self updateLlmFieldsEnabled];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
-        NSString *triggerKey = normalizedHotkeyValue(yamlRead(yaml, @"hotkey.trigger_key"));
-        NSString *cancelKey = normalizedHotkeyValue(yamlRead(yaml, @"hotkey.cancel_key"));
+        NSString *triggerKeyRaw = configGet(@"hotkey.trigger_key");
+        NSString *cancelKeyRaw = configGet(@"hotkey.cancel_key");
+
+        NSString *triggerKey = normalizedHotkeyValue(triggerKeyRaw);
+        NSString *cancelKey = normalizedHotkeyValue(cancelKeyRaw);
+
+        // Reset cancel key to default if it's empty or matches trigger key
         if (cancelKey.length == 0 || [cancelKey isEqualToString:triggerKey]) {
             cancelKey = defaultCancelKeyForTrigger(triggerKey);
         }
-        for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
-            if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
-                [self.hotkeyPopup selectItemAtIndex:i];
-                break;
+
+        if (isNumericKeycode(triggerKey)) {
+            ensureCustomKeycodeInPopup(self.hotkeyPopup, triggerKey);
+        } else {
+            for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
+                if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
+                    [self.hotkeyPopup selectItemAtIndex:i];
+                    break;
+                }
             }
         }
-        for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
-            if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
-                [self.cancelHotkeyPopup selectItemAtIndex:i];
-                break;
+        if (isNumericKeycode(cancelKey)) {
+            ensureCustomKeycodeInPopup(self.cancelHotkeyPopup, cancelKey);
+        } else {
+            for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
+                if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
+                    [self.cancelHotkeyPopup selectItemAtIndex:i];
+                    break;
+                }
             }
         }
 
-        NSString *startSound = yamlRead(yaml, @"feedback.start_sound");
-        NSString *stopSound = yamlRead(yaml, @"feedback.stop_sound");
-        NSString *errorSound = yamlRead(yaml, @"feedback.error_sound");
+        NSString *startSound = configGet(@"feedback.start_sound");
+        NSString *stopSound = configGet(@"feedback.stop_sound");
+        NSString *errorSound = configGet(@"feedback.error_sound");
         self.startSoundCheckbox.state = [startSound isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
         self.stopSoundCheckbox.state = [stopSound isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
         self.errorSoundCheckbox.state = [errorSound isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
@@ -943,6 +1230,29 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 }
 
 - (void)saveConfig:(id)sender {
+    // Warn if a local provider is selected but the model is not installed
+    if (self.asrProviderPopup) {
+        NSString *provider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubao";
+        BOOL isLocal = ![provider isEqualToString:@"doubao"] && ![provider isEqualToString:@"qwen"];
+        if (isLocal) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) {
+                NSInteger status = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
+                if (status != 2) { // not installed
+                    NSAlert *alert = [[NSAlert alloc] init];
+                    alert.messageText = @"Model Not Installed";
+                    alert.informativeText = @"The selected model has not been downloaded yet. ASR will not work until the model is installed.";
+                    [alert addButtonWithTitle:@"Save Anyway"];
+                    [alert addButtonWithTitle:@"Cancel"];
+                    alert.alertStyle = NSAlertStyleWarning;
+                    if ([alert runModal] != NSAlertFirstButtonReturn) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     NSString *dir = configDirPath();
 
     // Ensure directory exists
@@ -951,29 +1261,40 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                                                attributes:nil
                                                     error:nil];
 
-    // Read existing config.yaml (preserve structure)
-    NSString *configPath = configFilePath();
-    NSString *yaml = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    // Track whether any config write fails
+    BOOL saveOk = YES;
 
     // Update ASR fields (always save — fields may be nil if pane not visited, check first)
     if (self.asrAppKeyField) {
         NSString *selectedProvider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubao";
-        yaml = yamlWrite(yaml, @"asr.provider", selectedProvider);
-        yaml = yamlWrite(yaml, @"asr.doubao.app_key", self.asrAppKeyField.stringValue);
+        saveOk &= configSet(@"asr.provider", selectedProvider);
+        // Save Doubao fields
+        saveOk &= configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
         NSString *accessKey = self.asrAccessKeyToggle.tag == 1 ? self.asrAccessKeyField.stringValue : self.asrAccessKeySecureField.stringValue;
-        yaml = yamlWrite(yaml, @"asr.doubao.access_key", accessKey);
+        saveOk &= configSet(@"asr.doubao.access_key", accessKey);
+        // Save Qwen fields
+        NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
+        saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
+        // Save local model selection
+        if ([selectedProvider isEqualToString:@"mlx"]) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) saveOk &= configSet(@"asr.mlx.model", modelPath);
+        } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+        }
     }
 
     // Update LLM fields
     if (self.llmEnabledCheckbox) {
         NSString *enabledStr = (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
-        yaml = yamlWrite(yaml, @"llm.enabled", enabledStr);
-        yaml = yamlWrite(yaml, @"llm.base_url", self.llmBaseUrlField.stringValue);
+        saveOk &= configSet(@"llm.enabled", enabledStr);
+        saveOk &= configSet(@"llm.base_url", self.llmBaseUrlField.stringValue);
         NSString *llmApiKey = self.llmApiKeyToggle.tag == 1 ? self.llmApiKeyField.stringValue : self.llmApiKeySecureField.stringValue;
-        yaml = yamlWrite(yaml, @"llm.api_key", llmApiKey);
-        yaml = yamlWrite(yaml, @"llm.model", self.llmModelField.stringValue);
+        saveOk &= configSet(@"llm.api_key", llmApiKey);
+        saveOk &= configSet(@"llm.model", self.llmModelField.stringValue);
         NSString *selectedTokenParam = self.maxTokenParamPopup.selectedItem.representedObject ?: @"max_completion_tokens";
-        yaml = yamlWrite(yaml, @"llm.max_token_parameter", selectedTokenParam);
+        saveOk &= configSet(@"llm.max_token_parameter", selectedTokenParam);
     }
 
     // Update hotkey
@@ -985,28 +1306,25 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
                        info:@"Choose two different keys for starting and cancelling voice input."];
             return;
         }
-        yaml = yamlWrite(yaml, @"hotkey.trigger_key", selectedTriggerHotkey);
-        yaml = yamlWrite(yaml, @"hotkey.cancel_key", selectedCancelHotkey);
+        saveOk &= configSet(@"hotkey.trigger_key", selectedTriggerHotkey);
+        saveOk &= configSet(@"hotkey.cancel_key", selectedCancelHotkey);
     }
     if (self.startSoundCheckbox) {
         NSString *startSound = (self.startSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
         NSString *stopSound = (self.stopSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
         NSString *errorSound = (self.errorSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
-        yaml = yamlWrite(yaml, @"feedback.start_sound", startSound);
-        yaml = yamlWrite(yaml, @"feedback.stop_sound", stopSound);
-        yaml = yamlWrite(yaml, @"feedback.error_sound", errorSound);
+        saveOk &= configSet(@"feedback.start_sound", startSound);
+        saveOk &= configSet(@"feedback.stop_sound", stopSound);
+        saveOk &= configSet(@"feedback.error_sound", errorSound);
     }
 
-    // Write config.yaml
-    NSError *error = nil;
-    [yaml writeToFile:configPath atomically:YES encoding:NSUTF8StringEncoding error:&error];
-    if (error) {
-        NSLog(@"[Koe] Failed to write config.yaml: %@", error.localizedDescription);
-        [self showAlert:@"Failed to save config.yaml" info:error.localizedDescription];
-        return;
+    if (!saveOk) {
+        [self showAlert:@"Some settings failed to save"
+                   info:@"Check that ~/.koe/config.yaml is writable and try again."];
     }
 
     // Write dictionary.txt
+    NSError *error = nil;
     if (self.dictionaryTextView) {
         NSString *dictPath = [dir stringByAppendingPathComponent:kDictionaryFile];
         [self.dictionaryTextView.string writeToFile:dictPath atomically:YES encoding:NSUTF8StringEncoding error:&error];
@@ -1081,11 +1399,15 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     }
 
     NSString *tokenParam = self.maxTokenParamPopup.selectedItem.representedObject ?: @"max_completion_tokens";
-    NSDictionary *body = @{
+    NSMutableDictionary *body = [@{
         @"model": model,
         @"messages": @[@{@"role": @"user", @"content": @"Hi"}],
         tokenParam: @(10),
-    };
+    } mutableCopy];
+    // Match runtime behavior: send reasoning_effort when using max_completion_tokens
+    if ([tokenParam isEqualToString:@"max_completion_tokens"]) {
+        body[@"reasoning_effort"] = @"none";
+    }
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
@@ -1130,6 +1452,228 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         });
     }];
     [task resume];
+}
+
+// ─── ASR Test Connection ────────────────────────────────────────────
+
+- (void)testAsrConnection:(id)sender {
+    NSString *provider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubao";
+    if ([provider isEqualToString:@"doubao"]) {
+        [self testDoubaoConnection];
+    } else if ([provider isEqualToString:@"qwen"]) {
+        [self testQwenConnection];
+    }
+}
+
+- (void)testDoubaoConnection {
+    // Get current key values (account for plain/secure toggle state)
+    NSString *appKey = self.asrAppKeyField.stringValue;
+    NSString *accessKey = self.asrAccessKeyToggle.tag == 1 ? self.asrAccessKeyField.stringValue : self.asrAccessKeySecureField.stringValue;
+
+    if (appKey.length == 0 || accessKey.length == 0) {
+        self.asrTestResultLabel.stringValue = @"请先填写 App Key 和 Access Key";
+        self.asrTestResultLabel.textColor = [NSColor systemOrangeColor];
+        return;
+    }
+
+    self.asrTestButton.enabled = NO;
+    self.asrTestResultLabel.stringValue = @"测试中...";
+    self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+    // Create WebSocket connection test
+    NSURL *url = [NSURL URLWithString:@"wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 5;
+
+    // Set Doubao auth headers
+    [request setValue:appKey forHTTPHeaderField:@"X-Api-App-Key"];
+    [request setValue:accessKey forHTTPHeaderField:@"X-Api-Access-Key"];
+    [request setValue:@"volc.seedasr.sauc.duration" forHTTPHeaderField:@"X-Api-Resource-Id"];
+    [request setValue:[[NSUUID UUID] UUIDString] forHTTPHeaderField:@"X-Api-Connect-Id"];
+
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    config.timeoutIntervalForRequest = 5;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
+    NSURLSessionWebSocketTask *wsTask = [session webSocketTaskWithRequest:request];
+
+    __weak typeof(self) weakSelf = self;
+    __block BOOL hasCompleted = NO;
+
+    // Try to receive a message (Doubao may not send one immediately)
+    [wsTask receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (hasCompleted) return;
+            hasCompleted = YES;
+
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+            strongSelf.asrTestButton.enabled = YES;
+
+            if (error) {
+                NSString *errorMsg = error.localizedDescription;
+
+                // Check userInfo for HTTP status code
+                NSHTTPURLResponse *response = error.userInfo[@"NSURLSessionDownloadTaskResumeData"];
+                NSInteger statusCode = 0;
+                if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                    statusCode = response.statusCode;
+                }
+
+                if ([errorMsg containsString:@"401"] || [errorMsg containsString:@"403"] ||
+                    [error.localizedFailureReason containsString:@"401"] || statusCode == 401) {
+                    strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 App Key 和 Access Key 是否正确";
+                } else if ([errorMsg containsString:@"time"] || error.code == NSURLErrorTimedOut) {
+                    strongSelf.asrTestResultLabel.stringValue = @"连接超时：请检查网络连接";
+                } else if ([errorMsg containsString:@"bad response"] ||
+                           [errorMsg containsString:@"Bad response"] ||
+                           statusCode == 400 || statusCode == 403) {
+                    // HTTP error during WebSocket handshake (e.g. 400 Bad Request)
+                    strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 App Key 和 Access Key 是否正确";
+                } else if ([errorMsg containsString:@"unable"] ||
+                           [errorMsg containsString:@"Unable"] ||
+                           [errorMsg containsString:@"Cannot connect"] ||
+                           [errorMsg containsString:@"Network"]) {
+                    strongSelf.asrTestResultLabel.stringValue = @"网络连接失败：请检查网络设置";
+                } else {
+                    strongSelf.asrTestResultLabel.stringValue = @"连接失败：请检查配置信息是否正确";
+                }
+                strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+                return;
+            }
+
+            strongSelf.asrTestResultLabel.stringValue = @"连接成功";
+            strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
+        });
+    }];
+
+    [wsTask resume];
+
+    // Doubao may not send a message immediately; treat no error within 2s as success
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (hasCompleted) return;
+        hasCompleted = YES;
+
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+
+        if (!strongSelf.asrTestButton.enabled) {
+            strongSelf.asrTestButton.enabled = YES;
+            strongSelf.asrTestResultLabel.stringValue = @"连接成功";
+            strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
+        }
+    });
+
+    // Fallback timeout
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (hasCompleted) return;
+        hasCompleted = YES;
+
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+        strongSelf.asrTestButton.enabled = YES;
+        strongSelf.asrTestResultLabel.stringValue = @"连接超时：请检查网络连接";
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+    });
+}
+
+- (void)testQwenConnection {
+    // Get current key value (account for plain/secure toggle state)
+    NSString *apiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
+
+    if (apiKey.length == 0) {
+        self.asrTestResultLabel.stringValue = @"请先填写 API Key";
+        self.asrTestResultLabel.textColor = [NSColor systemOrangeColor];
+        return;
+    }
+
+    self.asrTestButton.enabled = NO;
+    self.asrTestResultLabel.stringValue = @"测试中...";
+    self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+    // Create WebSocket connection test
+    NSURL *url = [NSURL URLWithString:@"wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 10;
+
+    // Set Qwen DashScope auth header
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", apiKey] forHTTPHeaderField:@"Authorization"];
+
+    NSURLSessionConfiguration *config2 = [NSURLSessionConfiguration defaultSessionConfiguration];
+    config2.timeoutIntervalForRequest = 10;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config2];
+    NSURLSessionWebSocketTask *wsTask = [session webSocketTaskWithRequest:request];
+
+    __weak typeof(self) weakSelf = self;
+    __weak NSURLSessionWebSocketTask *weakWsTask = wsTask;
+
+    // Qwen DashScope returns a session.created message on connect
+    [wsTask receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            [weakWsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+
+            strongSelf.asrTestButton.enabled = YES;
+
+            if (error) {
+                NSString *errorMsg = error.localizedDescription;
+                NSInteger statusCode = 0;
+
+                // Try to extract HTTP status code from error
+                if (error.userInfo[@"_kCFStreamErrorDomainKey"]) {
+                    NSNumber *code = error.userInfo[@"_kCFStreamErrorDomainKey"];
+                    if (code) statusCode = code.integerValue;
+                }
+
+                if ([errorMsg containsString:@"401"] || [errorMsg containsString:@"403"] ||
+                    statusCode == 401) {
+                    strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 API Key 是否正确";
+                } else if ([errorMsg containsString:@"time"] || error.code == NSURLErrorTimedOut) {
+                    strongSelf.asrTestResultLabel.stringValue = @"连接超时：请检查网络连接";
+                } else if ([errorMsg containsString:@"bad response"] ||
+                           [errorMsg containsString:@"Bad response"]) {
+                    // HTTP error during WebSocket handshake
+                    strongSelf.asrTestResultLabel.stringValue = @"认证失败：请检查 API Key 是否正确";
+                } else if ([errorMsg containsString:@"unable"] ||
+                           [errorMsg containsString:@"Unable"] ||
+                           [errorMsg containsString:@"Cannot connect"]) {
+                    strongSelf.asrTestResultLabel.stringValue = @"网络连接失败：请检查网络设置";
+                } else {
+                    strongSelf.asrTestResultLabel.stringValue = @"连接失败：请检查配置信息是否正确";
+                }
+                strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+                return;
+            }
+
+            if (message) {
+                strongSelf.asrTestResultLabel.stringValue = @"连接成功";
+                strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
+            } else {
+                strongSelf.asrTestResultLabel.stringValue = @"连接失败：未收到服务器响应";
+                strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+            }
+        });
+    }];
+
+    [wsTask resume];
+
+    // Timeout handler
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.asrTestButton.enabled) return;
+
+        [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+        strongSelf.asrTestButton.enabled = YES;
+        strongSelf.asrTestResultLabel.stringValue = @"连接超时：请检查网络连接";
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+    });
 }
 
 - (void)showAlert:(NSString *)message info:(NSString *)info {

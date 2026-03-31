@@ -21,7 +21,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AsrSection {
-    /// Which ASR provider to use: "doubao" (default), "sensevoice", "whisper"
+    /// Which ASR provider to use: "doubao" (default), "qwen", "mlx", "sherpa-onnx"
     #[serde(default = "default_asr_provider")]
     pub provider: String,
 
@@ -29,9 +29,46 @@ pub struct AsrSection {
     #[serde(default)]
     pub doubao: DoubaoAsrConfig,
 
-    /// Local ASR configuration (for sensevoice/whisper)
+    /// Qwen ASR configuration
     #[serde(default)]
-    pub local: LocalAsrConfig,
+    pub qwen: QwenAsrConfig,
+
+    /// MLX local ASR configuration (Apple Silicon only)
+    #[serde(default)]
+    pub mlx: MlxAsrConfig,
+
+    /// Sherpa-ONNX local ASR configuration (CPU)
+    #[serde(rename = "sherpa-onnx", default)]
+    pub sherpa_onnx: SherpaOnnxAsrConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct QwenAsrConfig {
+    #[serde(default = "default_qwen_url")]
+    pub url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_qwen_model")]
+    pub model: String,
+    #[serde(default = "default_qwen_language")]
+    pub language: String,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_ms: u64,
+    #[serde(default = "default_final_wait_timeout")]
+    pub final_wait_timeout_ms: u64,
+}
+
+impl Default for QwenAsrConfig {
+    fn default() -> Self {
+        Self {
+            url: default_qwen_url(),
+            api_key: String::new(),
+            model: default_qwen_model(),
+            language: default_qwen_language(),
+            connect_timeout_ms: default_connect_timeout(),
+            final_wait_timeout_ms: default_final_wait_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,19 +96,53 @@ pub struct DoubaoAsrConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct LocalAsrConfig {
-    #[serde(default = "default_local_model_dir")]
-    pub model_dir: String,
-    #[serde(default = "default_streaming_mode")]
-    pub streaming_mode: String,
-    #[serde(default = "default_vad_threshold")]
-    pub vad_threshold: f32,
-    #[serde(default = "default_vad_min_speech_duration")]
-    pub vad_min_speech_duration: f32,
-    #[serde(default = "default_vad_min_silence_duration")]
-    pub vad_min_silence_duration: f32,
-    #[serde(default = "default_vad_max_speech_duration")]
-    pub vad_max_speech_duration: f32,
+pub struct MlxAsrConfig {
+    /// Model directory name under ~/.koe/models/mlx/
+    #[serde(default = "default_mlx_model")]
+    pub model: String,
+    /// Delay preset: "realtime", "agent", "subtitle"
+    #[serde(default = "default_mlx_delay_preset")]
+    pub delay_preset: String,
+    /// Language: "auto", "zh", "en"
+    #[serde(default = "default_mlx_language")]
+    pub language: String,
+}
+
+impl Default for MlxAsrConfig {
+    fn default() -> Self {
+        Self {
+            model: default_mlx_model(),
+            delay_preset: default_mlx_delay_preset(),
+            language: default_mlx_language(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SherpaOnnxAsrConfig {
+    /// Model directory name under ~/.koe/models/sherpa-onnx/
+    #[serde(default = "default_sherpa_onnx_model")]
+    pub model: String,
+    /// Number of threads for inference (default: 2)
+    #[serde(default = "default_sherpa_onnx_num_threads")]
+    pub num_threads: i32,
+    /// Hotwords score boost (default: 1.5)
+    #[serde(default = "default_sherpa_onnx_hotwords_score")]
+    pub hotwords_score: f32,
+    /// Trailing silence for endpoint detection in seconds (default: 1.2)
+    #[serde(default = "default_sherpa_onnx_endpoint_silence")]
+    pub endpoint_silence: f32,
+}
+
+impl Default for SherpaOnnxAsrConfig {
+    fn default() -> Self {
+        Self {
+            model: default_sherpa_onnx_model(),
+            num_threads: default_sherpa_onnx_num_threads(),
+            hotwords_score: default_sherpa_onnx_hotwords_score(),
+            endpoint_silence: default_sherpa_onnx_endpoint_silence(),
+        }
+    }
 }
 
 // ─── Other Sections (unchanged) ─────────────────────────────────────
@@ -130,18 +201,52 @@ pub struct DictionarySection {
     pub path: String,
 }
 
+/// Deserialize a YAML value that can be either a string ("fn") or an integer (96)
+/// into a String. This is needed because YAML `trigger_key: 96` is parsed as an
+/// integer, not a string, and serde_yaml won't auto-convert int → String.
+fn deserialize_string_or_int<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrInt;
+    impl<'de> serde::de::Visitor<'de> for StringOrInt {
+        type Value = String;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or integer")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+    deserializer.deserialize_any(StringOrInt)
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct HotkeySection {
     /// Trigger key for voice input.
-    /// Options: "fn", "left_option", "right_option", "left_command", "right_command"
+    /// Options: "fn", "left_option", "right_option", "left_command", "right_command", "left_control", "right_control"
+    /// Or a raw keycode number (e.g. 122 for F1) for non-modifier keys.
     /// Default: "fn"
-    #[serde(default = "default_trigger_key")]
+    #[serde(
+        default = "default_trigger_key",
+        deserialize_with = "deserialize_string_or_int"
+    )]
     pub trigger_key: String,
 
     /// Cancel key for aborting the current voice input session.
-    /// Options: "fn", "left_option", "right_option", "left_command", "right_command"
+    /// Options: "fn", "left_option", "right_option", "left_command", "right_command", "left_control", "right_control"
+    /// Or a raw keycode number (e.g. 122 for F1) for non-modifier keys.
     /// Default: "left_option"
-    #[serde(default = "default_cancel_key")]
+    #[serde(
+        default = "default_cancel_key",
+        deserialize_with = "deserialize_string_or_int"
+    )]
     pub cancel_key: String,
 }
 
@@ -196,19 +301,33 @@ impl HotkeySection {
 
     fn normalize_trigger_key_name(value: &str) -> String {
         match value {
-            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => {
-                value.into()
-            }
+            "left_option" | "right_option" | "left_command" | "right_command" | "left_control"
+            | "right_control" | "fn" => value.into(),
+            _ if Self::parse_raw_keycode(value).is_some() => value.into(),
             _ => default_trigger_key(),
         }
     }
 
     fn normalize_cancel_key_name(value: &str) -> String {
         match value {
-            "left_option" | "right_option" | "left_command" | "right_command" | "fn" => {
-                value.into()
-            }
+            "left_option" | "right_option" | "left_command" | "right_command" | "left_control"
+            | "right_control" | "fn" => value.into(),
+            _ if Self::parse_raw_keycode(value).is_some() => value.into(),
             _ => default_cancel_key(),
+        }
+    }
+
+    /// Try to parse a string as a raw keycode (u16).
+    /// Supports decimal (e.g. "122") and hex with 0x prefix (e.g. "0x7a").
+    fn parse_raw_keycode(value: &str) -> Option<u16> {
+        let trimmed = value.trim();
+        if let Some(hex) = trimmed
+            .strip_prefix("0x")
+            .or_else(|| trimmed.strip_prefix("0X"))
+        {
+            u16::from_str_radix(hex, 16).ok()
+        } else {
+            trimmed.parse::<u16>().ok()
         }
     }
 
@@ -234,6 +353,25 @@ impl HotkeySection {
                 alt_key_code: 0,
                 modifier_flag: 0x00000010, // NX_DEVICERCMDKEYMASK
             },
+            "left_control" => HotkeyParams {
+                key_code: 59, // kVK_Control
+                alt_key_code: 0,
+                modifier_flag: 0x00000001, // NX_DEVICELCTLKEYMASK
+            },
+            "right_control" => HotkeyParams {
+                key_code: 62, // kVK_RightControl
+                alt_key_code: 0,
+                modifier_flag: 0x00002000, // NX_DEVICERCTLKEYMASK
+            },
+            // Raw keycode (non-modifier key, detected via keyDown/keyUp)
+            _ if Self::parse_raw_keycode(key).is_some() => {
+                let code = Self::parse_raw_keycode(key).unwrap();
+                HotkeyParams {
+                    key_code: code,
+                    alt_key_code: 0,
+                    modifier_flag: 0,
+                }
+            }
             // "fn" or anything else defaults to Fn/Globe
             _ => HotkeyParams {
                 key_code: 63,              // kVK_Function (Fn)
@@ -248,6 +386,36 @@ impl HotkeySection {
 
 fn default_asr_provider() -> String {
     "doubao".into()
+}
+fn default_qwen_url() -> String {
+    "wss://dashscope.aliyuncs.com/api-ws/v1/realtime".into()
+}
+fn default_qwen_model() -> String {
+    "qwen3-asr-flash-realtime".into()
+}
+fn default_qwen_language() -> String {
+    "zh".into()
+}
+fn default_mlx_model() -> String {
+    "mlx/Qwen3-ASR-0.6B-4bit".into()
+}
+fn default_mlx_delay_preset() -> String {
+    "realtime".into()
+}
+fn default_mlx_language() -> String {
+    "auto".into()
+}
+fn default_sherpa_onnx_model() -> String {
+    "sherpa-onnx/bilingual-zh-en".into()
+}
+fn default_sherpa_onnx_num_threads() -> i32 {
+    2
+}
+fn default_sherpa_onnx_hotwords_score() -> f32 {
+    1.5
+}
+fn default_sherpa_onnx_endpoint_silence() -> f32 {
+    1.2
 }
 fn default_asr_url() -> String {
     "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async".into()
@@ -299,7 +467,9 @@ fn default_cancel_key_for_trigger(trigger_key: &str) -> &'static str {
         "left_option" => "right_option",
         "right_option" => "left_command",
         "left_command" => "right_command",
-        "right_command" => "fn",
+        "right_command" => "left_control",
+        "left_control" => "right_control",
+        "right_control" => "fn",
         _ => "left_option",
     }
 }
@@ -396,6 +566,17 @@ fn resolve_path(p: &str) -> PathBuf {
     }
 }
 
+/// Resolve a model directory path.
+/// Absolute paths are used directly; relative paths are resolved under ~/.koe/models/.
+pub fn resolve_model_dir(model: &str) -> PathBuf {
+    let path = Path::new(model);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        crate::model_manager::models_dir().join(model)
+    }
+}
+
 /// Resolve dictionary path (relative to config dir).
 pub fn resolve_dictionary_path(config: &Config) -> PathBuf {
     resolve_path(&config.dictionary.path)
@@ -417,11 +598,7 @@ pub fn resolve_user_prompt_path(config: &Config) -> PathBuf {
 fn substitute_env_vars(input: &str) -> String {
     let mut result = input.to_string();
     // Simple regex-free approach
-    loop {
-        let start = match result.find("${") {
-            Some(pos) => pos,
-            None => break,
-        };
+    while let Some(start) = result.find("${") {
         let end = match result[start + 2..].find('}') {
             Some(pos) => start + 2 + pos,
             None => break,
@@ -469,19 +646,19 @@ fn migrate_config_v1_to_v2(path: &Path) -> Result<bool> {
     };
 
     // If `asr` already has a `provider` key, it's already V2
-    if asr_map.contains_key(&serde_yaml::Value::String("provider".into())) {
+    if asr_map.contains_key(serde_yaml::Value::String("provider".into())) {
         return Ok(false);
     }
 
     // If `asr` has a `doubao` key, it's already V2 (just missing provider field, which defaults)
-    if asr_map.contains_key(&serde_yaml::Value::String("doubao".into())) {
+    if asr_map.contains_key(serde_yaml::Value::String("doubao".into())) {
         return Ok(false);
     }
 
     // Check if any V1-specific key exists
     let has_v1_keys = V1_ASR_KEYS
         .iter()
-        .any(|k| asr_map.contains_key(&serde_yaml::Value::String((*k).into())));
+        .any(|k| asr_map.contains_key(serde_yaml::Value::String((*k).into())));
 
     if !has_v1_keys {
         return Ok(false);
@@ -672,7 +849,114 @@ pub fn ensure_defaults() -> Result<bool> {
         }
     }
 
+    // Install default model manifests into ~/.koe/models/
+    let models_dir = crate::model_manager::models_dir();
+    for (rel_path, content) in DEFAULT_MANIFESTS {
+        let manifest_dir = models_dir.join(rel_path);
+        let manifest_file = manifest_dir.join(".koe-manifest.json");
+        if !manifest_file.exists() {
+            std::fs::create_dir_all(&manifest_dir)
+                .map_err(|e| KoeError::Config(format!("create {}: {e}", manifest_dir.display())))?;
+            std::fs::write(&manifest_file, content)
+                .map_err(|e| KoeError::Config(format!("write {}: {e}", manifest_file.display())))?;
+            log::info!("installed manifest: {}", manifest_file.display());
+            created = true;
+        }
+    }
+
     Ok(created)
+}
+
+// ─── Key-path Get / Set ────────────────────────────────────────────
+
+/// Get a config value by dot-separated key path (e.g. `"asr.doubao.app_key"`).
+/// Returns an empty string if the key is not found.
+pub fn config_get(key_path: &str) -> Result<String> {
+    let path = config_path();
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| KoeError::Config(format!("read {}: {e}", path.display())))?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&raw)
+        .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?;
+
+    let mut current = &root;
+    for part in key_path.split('.') {
+        let key = serde_yaml::Value::String(part.to_string());
+        match current.as_mapping().and_then(|m| m.get(&key)) {
+            Some(v) => current = v,
+            None => return Ok(String::new()),
+        }
+    }
+
+    let s = match current {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    Ok(s)
+}
+
+/// Set a config value by dot-separated key path. Reads, modifies, and writes back.
+/// Creates intermediate mappings as needed. Infers YAML type from the string value.
+pub fn config_set(key_path: &str, value: &str) -> Result<()> {
+    let path = config_path();
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut root: serde_yaml::Value = if raw.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        serde_yaml::from_str(&raw)
+            .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?
+    };
+
+    let parts: Vec<&str> = key_path.split('.').collect();
+    let (sections, leaf_slice) = parts.split_at(parts.len() - 1);
+    let leaf = leaf_slice[0];
+
+    let parent = navigate_to_parent(&mut root, sections);
+    parent.insert(
+        serde_yaml::Value::String(leaf.to_string()),
+        yaml_value_from_str(value),
+    );
+
+    let serialized =
+        serde_yaml::to_string(&root).map_err(|e| KoeError::Config(format!("serialize: {e}")))?;
+    std::fs::write(&path, &serialized)
+        .map_err(|e| KoeError::Config(format!("write {}: {e}", path.display())))?;
+
+    Ok(())
+}
+
+/// Recursively navigate into nested YAML mappings by path segments, creating
+/// intermediate mappings as needed. Returns a mutable ref to the final mapping.
+fn navigate_to_parent<'a>(
+    node: &'a mut serde_yaml::Value,
+    sections: &[&str],
+) -> &'a mut serde_yaml::Mapping {
+    if !node.is_mapping() {
+        *node = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    if sections.is_empty() {
+        return node.as_mapping_mut().unwrap();
+    }
+    let (first, rest) = sections.split_first().unwrap();
+    let key = serde_yaml::Value::String(first.to_string());
+    let map = node.as_mapping_mut().unwrap();
+    let child = map
+        .entry(key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    navigate_to_parent(child, rest)
+}
+
+/// Infer YAML scalar type from a string value.
+fn yaml_value_from_str(s: &str) -> serde_yaml::Value {
+    match s {
+        "true" => serde_yaml::Value::Bool(true),
+        "false" => serde_yaml::Value::Bool(false),
+        _ => match s.parse::<i64>() {
+            Ok(n) => serde_yaml::Value::Number(n.into()),
+            Err(_) => serde_yaml::Value::String(s.to_string()),
+        },
+    }
 }
 
 const DEFAULT_CONFIG_YAML: &str = r#"# Koe - Voice Input Tool Configuration
@@ -694,6 +978,28 @@ asr:
     enable_itn: true     # 文本规范化 (数字、日期等)
     enable_punc: true    # 自动标点
     enable_nonstream: true  # 二遍识别 (流式+非流式, 提升准确率)
+
+  # Qwen (Aliyun DashScope) Realtime ASR
+  qwen:
+    url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    api_key: ""
+    model: "qwen3-asr-flash-realtime"
+    language: "zh"
+    connect_timeout_ms: 3000
+    final_wait_timeout_ms: 5000
+
+  # MLX local ASR (Apple Silicon only)
+  mlx:
+    model: "mlx/Qwen3-ASR-0.6B-4bit"       # relative to ~/.koe/models/, or absolute path
+    delay_preset: "realtime"    # realtime | agent | subtitle
+    language: "auto"            # auto | zh | en
+
+  # Sherpa-ONNX local ASR (CPU)
+  sherpa-onnx:
+    model: "sherpa-onnx/bilingual-zh-en"    # relative to ~/.koe/models/, or absolute path
+    num_threads: 2
+    hotwords_score: 1.5         # dictionary term boost
+    endpoint_silence: 1.2       # trailing silence for sentence boundary (seconds)
 
 llm:
   enabled: true        # set to false to skip LLM correction entirely
@@ -720,9 +1026,11 @@ dictionary:
   path: "dictionary.txt"  # relative to ~/.koe/
 
 hotkey:
-  # 触发键：fn | left_option | right_option | left_command | right_command
+  # 触发键：fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # 也可以填 macOS keycode 数字来使用非修饰键，例如 122 (F1)、120 (F2)、99 (F3) 等
   trigger_key: "fn"
-  # 取消键：不能与触发键重复
+  # 取消键：fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # 也可以填 macOS keycode 数字（不能与触发键重复）
   cancel_key: "left_option"
 "#;
 
@@ -736,6 +1044,21 @@ const DEFAULT_SYSTEM_PROMPT: &str = include_str!("default_system_prompt.txt");
 
 const DEFAULT_USER_PROMPT: &str = include_str!("default_user_prompt.txt");
 
+/// Default model manifests: (relative_path, json_content).
+/// relative_path maps to ~/.koe/models/<relative_path>/.koe-manifest.json
+macro_rules! manifest {
+    ($path:literal) => {
+        ($path, include_str!(concat!("manifests/", $path, ".json")))
+    };
+}
+const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
+    manifest!("mlx/Qwen3-ASR-0.6B-4bit"),
+    manifest!("mlx/Qwen3-ASR-1.7B-4bit"),
+    manifest!("sherpa-onnx/bilingual-zh-en"),
+    manifest!("sherpa-onnx/multilingual-8lang"),
+    manifest!("sherpa-onnx/zh-xlarge"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,6 +1071,62 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("koe-{name}-{nonce}.yaml"))
+    }
+
+    #[test]
+    fn normalized_keys_dedup_fn() {
+        let h = HotkeySection {
+            trigger_key: "fn".into(),
+            cancel_key: "fn".into(),
+        };
+        let (t, c) = h.normalized_keys();
+        assert_eq!(t, "fn");
+        assert_eq!(c, "left_option");
+    }
+
+    #[test]
+    fn normalized_keys_dedup_left_option() {
+        // Status bar used to fallback to "fn" here, but core uses "right_option"
+        let h = HotkeySection {
+            trigger_key: "left_option".into(),
+            cancel_key: "left_option".into(),
+        };
+        let (t, c) = h.normalized_keys();
+        assert_eq!(t, "left_option");
+        assert_eq!(c, "right_option");
+    }
+
+    #[test]
+    fn normalized_keys_dedup_right_option() {
+        let h = HotkeySection {
+            trigger_key: "right_option".into(),
+            cancel_key: "right_option".into(),
+        };
+        let (t, c) = h.normalized_keys();
+        assert_eq!(t, "right_option");
+        assert_eq!(c, "left_command");
+    }
+
+    #[test]
+    fn normalized_keys_distinct_passes_through() {
+        let h = HotkeySection {
+            trigger_key: "fn".into(),
+            cancel_key: "right_command".into(),
+        };
+        let (t, c) = h.normalized_keys();
+        assert_eq!(t, "fn");
+        assert_eq!(c, "right_command");
+    }
+
+    #[test]
+    fn normalized_keys_invalid_trigger_falls_back_to_fn() {
+        let h = HotkeySection {
+            trigger_key: "nonexistent".into(),
+            cancel_key: "left_option".into(),
+        };
+        let (t, c) = h.normalized_keys();
+        assert_eq!(t, "fn");
+        assert_eq!(c, "left_option");
     }
 
     #[test]
@@ -771,5 +1150,45 @@ mod tests {
         assert!(output.contains("cancel_key: right_option"));
 
         let _ = fs::remove_file(path);
+    }
+
+    // config_set tests are combined into one function because they mutate
+    // the HOME env var, which is process-global and races with parallel tests.
+    #[test]
+    fn config_set_error_and_success() {
+        let orig_home = std::env::var("HOME").unwrap();
+
+        // --- corrupted YAML should fail ---
+        let tmp1 = std::env::temp_dir().join(format!(
+            "koe-test-bad-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let koe_dir1 = tmp1.join(".koe");
+        fs::create_dir_all(&koe_dir1).unwrap();
+        fs::write(koe_dir1.join("config.yaml"), "{{{{invalid yaml").unwrap();
+
+        unsafe { std::env::set_var("HOME", &tmp1) };
+        let bad_result = config_set("test.key", "value");
+        unsafe { std::env::set_var("HOME", &orig_home) };
+        let _ = fs::remove_dir_all(&tmp1);
+        assert!(bad_result.is_err(), "config_set should fail on corrupted YAML");
+
+        // --- valid YAML should succeed ---
+        let tmp2 = std::env::temp_dir().join(format!(
+            "koe-test-ok-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let koe_dir2 = tmp2.join(".koe");
+        fs::create_dir_all(&koe_dir2).unwrap();
+        fs::write(koe_dir2.join("config.yaml"), "asr:\n  provider: doubao\n").unwrap();
+
+        unsafe { std::env::set_var("HOME", &tmp2) };
+        let ok_result = config_set("llm.enabled", "true");
+        unsafe { std::env::set_var("HOME", &orig_home) };
+
+        assert!(ok_result.is_ok(), "config_set should succeed on valid YAML");
+        let content = fs::read_to_string(koe_dir2.join("config.yaml")).unwrap();
+        assert!(content.contains("enabled: true"));
+        let _ = fs::remove_dir_all(&tmp2);
     }
 }

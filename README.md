@@ -14,7 +14,7 @@ I tried nearly every voice input app on the market. They were either paid, ugly,
 
 Koe takes a different approach:
 
-- **Minimal runtime UI.** Koe stays out of the way with a menu bar item, a small floating status pill during active sessions, and an optional built-in settings window when you actually need to configure it.
+- **Minimal runtime UI.** Koe stays out of the way with a menu bar item, a small floating status pill with native frosted-glass vibrancy during active sessions, and an optional built-in settings window when you actually need to configure it.
 - **All configuration lives in plain text files** under `~/.koe/`. You can edit them with any text editor, vim, a script, or the built-in settings UI.
 - **Dictionary is a plain `.txt` file.** No need to open an app and add words one by one through a GUI. Just edit `~/.koe/dictionary.txt` — one term per line. You can even use Claude Code or other AI tools to bulk-generate domain-specific terms.
 - **Changes take effect immediately.** Edit any config file and the new settings are used automatically. ASR, LLM, dictionary, and prompt changes apply on the next hotkey press. Hotkey changes are detected within a few seconds. No restart, no reload button.
@@ -31,10 +31,11 @@ Koe takes a different approach:
 4. The ASR transcript is corrected by an LLM (any OpenAI-compatible API) — fixing capitalization, punctuation, spacing, and terminology
 5. The corrected text is automatically pasted into the active input field
 
-Current provider support is intentionally narrow:
+ASR provider support:
 
-- **ASR**: uses a provider-based config layout, but currently ships with **Doubao ASR only**
-- **LLM**: currently supports **OpenAI-compatible APIs only**
+- **Cloud**: **Doubao (豆包)** and **Qwen (通义)** streaming ASR
+- **Local**: **MLX** (Apple Silicon, Qwen3-ASR models) and **sherpa-onnx** (CPU, streaming zipformer models)
+- **LLM**: any **OpenAI-compatible API** for text correction
 - **Planned**: future ASR support may include the **OpenAI Transcriptions API**
 
 ## Installation
@@ -66,9 +67,9 @@ The feed file lives at `docs/update-feed.json` and should contain at least:
 
 ```json
 {
-  "version": "1.0.9",
-  "build": 10,
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.9/Koe-macOS-arm64.zip"
+  "version": "1.0.10",
+  "build": 11,
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.10/Koe-macOS-arm64.zip"
 }
 ```
 
@@ -82,7 +83,7 @@ URL instead of patching the installed app in place.
 
 #### Prerequisites
 
-- macOS 13.0+
+- macOS 14.0+ (13.0+ without MLX support)
 - Apple Silicon or Intel Mac
 - Rust toolchain (`rustup`)
 - Xcode with command line tools
@@ -131,7 +132,10 @@ To grant permissions: **System Settings → Privacy & Security** → enable Koe 
 ## Configuration
 
 All config files live in `~/.koe/` and are auto-generated on first launch. You
-can edit them directly, or use the built-in settings window from the menu bar:
+can edit them directly, or use the built-in settings window (Setup Wizard) from
+the menu bar. The settings window includes tabs for ASR, LLM, Controls, Dictionary,
+and Prompt. When a local ASR provider (MLX or Sherpa-ONNX) is selected, the ASR
+tab shows a model picker with download, status, and delete controls.
 
 ```
 ~/.koe/
@@ -139,7 +143,16 @@ can edit them directly, or use the built-in settings window from the menu bar:
 ├── dictionary.txt       # User dictionary (hotwords + LLM correction)
 ├── history.db           # Usage statistics (SQLite, auto-created)
 ├── system_prompt.txt    # LLM system prompt (customizable)
-└── user_prompt.txt      # LLM user prompt template (customizable)
+├── user_prompt.txt      # LLM user prompt template (customizable)
+└── models/              # Local ASR models
+    ├── mlx/
+    │   └── Qwen3-ASR-0.6B-4bit/
+    │       ├── .koe-manifest.json
+    │       └── *.safetensors, config.json, ...
+    └── sherpa-onnx/
+        └── bilingual-zh-en/
+            ├── .koe-manifest.json
+            └── *.onnx, tokens.txt, ...
 ```
 
 ### config.yaml
@@ -148,15 +161,11 @@ Below is the full configuration with explanations for every field.
 
 #### ASR (Speech Recognition)
 
-Koe supports multiple ASR providers via a provider-based config layout:
-
-- **Doubao (豆包)**: Cloud ASR, requires credentials
-- **SenseVoice**: Local ASR, multi-language (Chinese, English, Japanese, Korean, Cantonese)
-- **Whisper**: Local ASR, English only
+Koe uses a provider-based ASR config layout. Built-in providers: **Doubao**, **Qwen**, **MLX** (local, Apple Silicon), and **sherpa-onnx** (local, CPU).
 
 ```yaml
 asr:
-  # ASR provider: "doubao" | "sensevoice" | "whisper"
+  # ASR provider: "doubao", "qwen", "mlx", "sherpa-onnx"
   provider: "doubao"
 
   # Doubao (豆包) cloud ASR configuration
@@ -199,21 +208,18 @@ asr:
     # Recommended: true.
     enable_nonstream: true
 
-  # Local ASR configuration (for sensevoice/whisper)
-  local:
-    # Model directory. Models are auto-downloaded on first use.
-    model_dir: "~/.koe/models"
+  # MLX local ASR (Apple Silicon only, requires model download)
+  mlx:
+    model: "mlx/Qwen3-ASR-0.6B-4bit"    # relative to ~/.koe/models/, or absolute path
+    delay_preset: "realtime"              # realtime | agent | subtitle
+    language: "auto"                      # auto | zh | en
 
-    # Streaming mode: "vad" (Voice Activity Detection) or "interval"
-    # VAD mode detects speech segments automatically (recommended)
-    # Interval mode outputs results at fixed intervals
-    streaming_mode: "vad"
-
-    # VAD parameters (only used when streaming_mode is "vad")
-    vad_threshold: 0.5              # Speech detection threshold (0-1)
-    vad_min_speech_duration: 0.25   # Min speech duration in seconds
-    vad_min_silence_duration: 0.5   # Min silence duration to end speech
-    vad_max_speech_duration: 30.0   # Max speech duration per segment
+  # Sherpa-ONNX local ASR (CPU, requires model download)
+  sherpa-onnx:
+    model: "sherpa-onnx/bilingual-zh-en"  # relative to ~/.koe/models/, or absolute path
+    num_threads: 2                         # CPU inference threads
+    hotwords_score: 1.5                    # dictionary term boost
+    endpoint_silence: 1.2                  # trailing silence for sentence boundary (seconds)
 ```
 
 ##### Local ASR Models
@@ -235,6 +241,11 @@ After ASR, the transcript is sent to an LLM for correction (capitalization,
 spacing, terminology, filler word removal). Koe currently supports
 **OpenAI-compatible APIs only** for this step. Native provider-specific APIs that
 are not OpenAI-compatible are not supported directly.
+
+The LLM HTTP client is shared across sessions with HTTP/2 support and connection
+pooling for lower latency. For GPT-5-style endpoints (using `max_completion_tokens`),
+Koe automatically sets `reasoning_effort: "none"` to skip unnecessary reasoning
+on the latency-sensitive correction path.
 
 ```yaml
 llm:
@@ -297,7 +308,7 @@ feedback:
 ```yaml
 hotkey:
   # Trigger key for voice input.
-  # Options: fn | left_option | right_option | left_command | right_command
+  # Options: fn | left_option | right_option | left_command | right_command | left_control | right_control
   trigger_key: "fn"
   # Cancel key for aborting the current session.
   # Must be different from trigger_key.
@@ -311,6 +322,8 @@ hotkey:
 | `right_option` | Right Option | Least likely to conflict with shortcuts |
 | `left_command` | Left Command | May conflict with system shortcuts |
 | `right_command` | Right Command | Less conflict-prone than left Command |
+| `left_control` | Left Control | Available on all Mac keyboards |
+| `right_control` | Right Control | Only on full-size/external keyboards |
 
 Hotkey changes take effect automatically within a few seconds. The trigger key
 starts voice input, and the cancel key aborts the current session without output.
@@ -413,6 +426,65 @@ sqlite3 ~/.koe/history.db "SELECT date(timestamp, 'unixepoch', 'localtime') as d
 
 You can also build your own dashboard or visualization on top of this database — it's just a standard SQLite file.
 
+## Local ASR Models
+
+Koe supports on-device speech recognition via **MLX** (Apple Silicon) and **sherpa-onnx** (CPU). Models are managed through `.koe-manifest.json` files under `~/.koe/models/`.
+
+You can manage models in two ways:
+
+1. **Setup Wizard** — select a local provider in the ASR tab, pick a model from the dropdown, and click the download button. Progress is shown inline with a progress bar.
+2. **koe CLI** — command-line model management (see below).
+
+### koe CLI
+
+The `koe` CLI tool manages local models:
+
+```bash
+# List all discovered models and their status
+koe model list
+
+# Download a model
+koe model pull mlx/Qwen3-ASR-0.6B-4bit
+
+# Check model status
+koe model status mlx/Qwen3-ASR-0.6B-4bit
+
+# Remove downloaded files (keeps manifest for re-download)
+koe model remove mlx/Qwen3-ASR-0.6B-4bit
+
+# Generate manifest from a HuggingFace repo
+koe manifest generate mlx-community/Qwen3-ASR-0.6B-4bit \
+    --provider mlx --description "Qwen3 ASR 0.6B 4-bit"
+```
+
+### Available Models
+
+**MLX (Apple Silicon)**:
+- `mlx/Qwen3-ASR-0.6B-4bit` — Qwen3 ASR 0.6B 4-bit (~680 MB, fast)
+- `mlx/Qwen3-ASR-1.7B-4bit` — Qwen3 ASR 1.7B 4-bit (~1.5 GB, higher accuracy)
+
+**sherpa-onnx (CPU)**:
+- `sherpa-onnx/bilingual-zh-en` — Bilingual Chinese-English (~189 MB)
+- `sherpa-onnx/multilingual-8lang` — 8-language multilingual (~322 MB)
+- `sherpa-onnx/zh-xlarge` — Chinese extra-large (~735 MB, best accuracy)
+
+### Model Manifest
+
+Each model directory contains a `.koe-manifest.json` describing the model and its files:
+
+```json
+{
+  "provider": "mlx",
+  "description": "Qwen3 ASR 0.6B 4-bit (fast, lightweight)",
+  "repo": "mlx-community/Qwen3-ASR-0.6B-4bit",
+  "files": [
+    {"name": "config.json", "size": 7187, "sha256": "...", "url": "https://huggingface.co/..."}
+  ]
+}
+```
+
+Default manifests are installed automatically on first launch. `koe model pull` downloads the actual model files using the URLs and verifies them with sha256 checksums.
+
 ## AI-Assisted Setup
 
 Koe provides a skill that works with any AI coding agent (Claude Code, Codex, etc.) to guide you through the entire setup process interactively.
@@ -442,7 +514,8 @@ This is especially useful for first-time users who want a guided, interactive se
 Koe is built as a native macOS app with two layers:
 
 - **Objective-C shell** — handles macOS integration: hotkey detection, audio capture, clipboard management, paste simulation, menu bar UI, and usage statistics (SQLite)
-- **Rust core library** — handles all network operations: ASR 2.0 WebSocket streaming with two-pass recognition, LLM API calls, config management, transcript aggregation, and session orchestration
+- **Rust core library** — handles ASR (cloud WebSocket streaming + local MLX/sherpa-onnx), LLM API calls, config management, model management, transcript aggregation, and session orchestration
+- **Swift KoeMLX package** — bridges MLX inference (Qwen3-ASR) to Rust via C FFI for on-device ASR on Apple Silicon
 
 The two layers communicate via C FFI (Foreign Function Interface). The Rust core is compiled as a static library (`libkoe_core.a`) and linked into the Xcode project.
 
@@ -466,75 +539,44 @@ The two layers communicate via C FFI (Foreign Function Interface). The Rust core
                     │ C ABI
 ┌───────────────────▼──────────────────────────────┐
 │  Rust Core (libkoe_core.a)                       │
-│  ┌──────────────┐ ┌────────┐ ┌────────────────┐  │
-│  │ ASR 2.0      │ │ LLM    │ │ Config + Dict  │  │
-│  │ (WebSocket)  │ │ (HTTP) │ │ + Prompts      │  │
-│  │ Two-pass     │ │        │ │                │  │
-│  └──────┬───────┘ └───▲────┘ └────────────────┘  │
-│         │             │                          │
-│  ┌──────▼─────────────┴──────────────────────┐   │
-│  │ TranscriptAggregator                      │   │
-│  │ (interim → definite → final + history)    │   │
-│  └───────────────────────────────────────────┘   │
+│  ┌──────────────────────────┐ ┌────────────────┐  │
+│  │ ASR Providers            │ │ Config + Dict  │  │
+│  │ ┌────────┐ ┌───────────┐ │ │ + Prompts      │  │
+│  │ │ Doubao │ │ Qwen      │ │ │ + Models       │  │
+│  │ │ (WS)   │ │ (WS)      │ │ └────────────────┘  │
+│  │ ├────────┤ ├───────────┤ │ ┌────────────────┐  │
+│  │ │ MLX    │ │ sherpa-   │ │ │ LLM (HTTP)     │  │
+│  │ │ (FFI)  │ │ onnx(CPU) │ │ │                │  │
+│  │ └────────┘ └───────────┘ │ └───────▲────────┘  │
+│  └──────────┬───────────────┘         │           │
+│  ┌──────────▼─────────────────────────┴────────┐  │
+│  │ TranscriptAggregator                        │  │
+│  │ (interim → definite → final + history)      │  │
+│  └─────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────┘
 ```
 
 ### ASR Pipeline
 
-1. Audio streams to Doubao ASR 2.0 via WebSocket (binary protocol with gzip compression)
+Cloud providers (Doubao, Qwen):
+
+1. Audio streams via WebSocket to the cloud ASR service
 2. First-pass streaming results arrive in real-time (`Interim` events) and are displayed in the overlay
 3. Second-pass re-recognition confirms segments with higher accuracy (`Definite` events)
+
+Local providers (MLX, sherpa-onnx):
+
+1. Audio is processed on-device — MLX via Swift FFI on Apple Silicon, sherpa-onnx via a dedicated CPU worker thread
+2. Streaming results are emitted through the same `Interim`/`Definite`/`Final` event model
+
+All providers:
+
 4. `TranscriptAggregator` merges all results and tracks interim revision history
 5. Final transcript + interim history + dictionary are sent to the LLM for correction
 
 ## Contributing
 
-Contributions are welcome! Before you open a PR, please note:
-
-### Commit Convention
-
-All commits **must** follow the [Conventional Commits](https://www.conventionalcommits.org/) specification. We recommend using the [Ship](https://github.com/missuo/ship) skill to generate commit messages automatically:
-
-```bash
-npx skills add missuo/ship
-```
-
-Then simply run `/ship` in Claude Code (or any compatible AI coding agent) to stage, commit, and push with a properly formatted message.
-
-#### Commit Types
-
-| Type | When to use |
-|---|---|
-| `feat` | New functionality |
-| `fix` | Bug fixes |
-| `docs` | Documentation only |
-| `style` | Formatting, no logic changes |
-| `refactor` | Code restructuring without behavior change |
-| `perf` | Performance improvements |
-| `test` | Adding or updating tests |
-| `build` | Build system or dependency changes |
-| `ci` | CI/CD configuration |
-| `chore` | Maintenance tasks |
-
-#### Message Format
-
-```
-<type>(<scope>): <short summary>
-
-<optional body>
-
-<optional footer>
-```
-
-Scope is auto-detected from file paths (e.g., `asr`, `llm`, `ui`, `config`). Breaking changes must include a `BREAKING CHANGE:` footer.
-
-### Pull Request Guidelines
-
-- Keep PRs focused on a single purpose
-- Ensure the app still builds (`make build`)
-- Verify hold-to-talk and tap-to-toggle both work
-- Update docs if you changed any user-facing behavior
-- See the [Contributing Guide](https://koe.li/docs/contributing) for the full contributor workflow
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions, PR guidelines, and the full contributor workflow.
 
 ## License
 

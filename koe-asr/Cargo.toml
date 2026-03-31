@@ -2,7 +2,7 @@
 name = "koe-asr"
 version = "0.1.0"
 edition = "2021"
-description = "Streaming ASR (Automatic Speech Recognition) client for Volcengine/Doubao"
+description = "Streaming ASR (Automatic Speech Recognition) client for Volcengine/Doubao and Aliyun"
 license = "MIT"
 
 [dependencies]
@@ -11,10 +11,18 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
 futures-util = "0.3"
 flate2 = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 uuid = { version = "1", features = ["v4"] }
-sherpa-onnx = "1.12"
+base64 = "0.22"
+async-trait = "0.1"
+sherpa-onnx = { version = "1.12", optional = true }
+
+[features]
+default = []
+mlx = []
+sherpa-onnx = ["dep:sherpa-onnx"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
