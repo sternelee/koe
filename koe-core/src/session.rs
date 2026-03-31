@@ -97,6 +97,7 @@ impl Session {
                 | (Correcting, PreparingPaste)
                 | (Correcting, Failed)
                 | (PreparingPaste, Pasting)
+                | (PreparingPaste, Completed)
                 | (PreparingPaste, Failed)
                 | (Pasting, RestoringClipboard)
                 | (Pasting, Completed)
