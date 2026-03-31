@@ -768,30 +768,55 @@ async fn run_session(
             llm_config.max_token_parameter,
         );
 
-        // Filter dictionary candidates for prompt
-        let candidates =
-            prompt::filter_dictionary_candidates(&dictionary, &asr_text, dictionary_max_candidates);
-
         log::info!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
-        log::info!(
-            "[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
-            candidates.len(),
-            interim_history.len()
-        );
 
-        let user_prompt = prompt::render_user_prompt(
-            &user_prompt_template,
-            &asr_text,
-            &candidates,
-            &interim_history,
-        );
-        log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
+        let (effective_system_prompt, effective_user_prompt, effective_candidates) =
+            if !llm_config.translate_to.is_empty() {
+                log::info!(
+                    "[{session_id}] LLM mode: translation → \"{}\"",
+                    llm_config.translate_to
+                );
+                let config_dir = config::config_dir();
+                let trans_sys = prompt::load_translation_system_prompt(
+                    &config_dir.join("translation_system_prompt.txt"),
+                );
+                let trans_user_tpl = prompt::load_translation_user_prompt_template(
+                    &config_dir.join("translation_user_prompt.txt"),
+                );
+                let (sys, usr) = prompt::render_translation_prompts(
+                    &trans_sys,
+                    &trans_user_tpl,
+                    &asr_text,
+                    &llm_config.translate_to,
+                );
+                (sys, usr, vec![])
+            } else {
+                // Filter dictionary candidates for correction prompt
+                let candidates = prompt::filter_dictionary_candidates(
+                    &dictionary,
+                    &asr_text,
+                    dictionary_max_candidates,
+                );
+                log::info!(
+                    "[{session_id}] LLM mode: correction — {} dictionary entries, {} interim revisions",
+                    candidates.len(),
+                    interim_history.len()
+                );
+                let user_prompt = prompt::render_user_prompt(
+                    &user_prompt_template,
+                    &asr_text,
+                    &candidates,
+                    &interim_history,
+                );
+                (system_prompt, user_prompt, candidates)
+            };
+        log::debug!("[{session_id}] LLM user prompt:\n{}", effective_user_prompt);
 
         let request = CorrectionRequest {
             asr_text: asr_text.clone(),
-            dictionary_entries: candidates,
-            system_prompt,
-            user_prompt,
+            dictionary_entries: effective_candidates,
+            system_prompt: effective_system_prompt,
+            user_prompt: effective_user_prompt,
         };
 
         match llm.correct(&request).await {

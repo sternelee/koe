@@ -123,6 +123,26 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 @property (nonatomic, strong) NSButton *asrTestButton;
 @property (nonatomic, strong) NSTextField *asrTestResultLabel;
 
+// Doubao advanced toggles
+@property (nonatomic, strong) NSButton *asrDoubaoNonstreamCheck;
+@property (nonatomic, strong) NSButton *asrDoubaoPuncCheck;
+@property (nonatomic, strong) NSButton *asrDoubaoItnCheck;
+@property (nonatomic, strong) NSButton *asrDoubaoDdcCheck;
+
+// Qwen advanced fields
+@property (nonatomic, strong) NSPopUpButton *asrQwenLanguagePopup;
+@property (nonatomic, strong) NSTextField *asrQwenModelField;
+
+// MLX advanced fields
+@property (nonatomic, strong) NSPopUpButton *asrMlxDelayPresetPopup;
+@property (nonatomic, strong) NSPopUpButton *asrMlxLanguagePopup;
+
+// Sherpa-ONNX advanced fields
+@property (nonatomic, strong) NSStepper *asrSherpaNumThreadsStepper;
+@property (nonatomic, strong) NSTextField *asrSherpaNumThreadsLabel;
+@property (nonatomic, strong) NSTextField *asrSherpaHotwordsScoreField;
+@property (nonatomic, strong) NSTextField *asrSherpaEndpointSilenceField;
+
 // Local ASR model selection
 @property (nonatomic, strong) NSPopUpButton *localModelPopup;
 @property (nonatomic, strong) NSTextField *localModelLabel;
@@ -146,6 +166,10 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
 // LLM max token parameter
 @property (nonatomic, strong) NSPopUpButton *maxTokenParamPopup;
+
+// LLM translation target
+@property (nonatomic, strong) NSPopUpButton *llmTranslateToPopup;
+@property (nonatomic, strong) NSTextField *llmTranslateToCustomField;
 
 // Hotkey
 @property (nonatomic, strong) NSPopUpButton *hotkeyPopup;
@@ -308,7 +332,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat rowH = 32;
 
     // Calculate content height
-    CGFloat contentHeight = 260;
+    CGFloat contentHeight = 400;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
     CGFloat y = contentHeight - 48;
@@ -464,6 +488,159 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     qwenKeyLabel.hidden = YES;
     [pane addSubview:qwenKeyLabel];
 
+    // ── Extra rows: shared Y range below provider key rows ──────────────
+    // All providers' extra rows use the same absolute Y positions;
+    // only the relevant ones are shown at a time.
+    CGFloat extraStartY = accessKeyY - rowH; // first extra row Y
+
+    // ── Doubao extra: 4 feature toggle checkboxes ────────────────────
+    NSTextField *doubaoTogglesLabel = [self formLabel:@"Options" frame:NSMakeRect(16, extraStartY, labelW, 22)];
+    doubaoTogglesLabel.tag = 1005;
+    doubaoTogglesLabel.hidden = YES;
+    [pane addSubview:doubaoTogglesLabel];
+
+    CGFloat checkX = fieldX;
+    CGFloat checkW = (fieldW - 8) / 2.0;
+    self.asrDoubaoNonstreamCheck = [NSButton checkboxWithTitle:@"Two-pass recognition"
+                                                       target:nil action:nil];
+    self.asrDoubaoNonstreamCheck.frame = NSMakeRect(checkX, extraStartY, checkW, 22);
+    self.asrDoubaoNonstreamCheck.tag = 1006;
+    self.asrDoubaoNonstreamCheck.hidden = YES;
+    [pane addSubview:self.asrDoubaoNonstreamCheck];
+
+    self.asrDoubaoPuncCheck = [NSButton checkboxWithTitle:@"Auto punctuation"
+                                                   target:nil action:nil];
+    self.asrDoubaoPuncCheck.frame = NSMakeRect(checkX + checkW + 8, extraStartY, checkW, 22);
+    self.asrDoubaoPuncCheck.tag = 1006;
+    self.asrDoubaoPuncCheck.hidden = YES;
+    [pane addSubview:self.asrDoubaoPuncCheck];
+
+    self.asrDoubaoItnCheck = [NSButton checkboxWithTitle:@"Number normalization"
+                                                  target:nil action:nil];
+    self.asrDoubaoItnCheck.frame = NSMakeRect(checkX, extraStartY - rowH + 8, checkW, 22);
+    self.asrDoubaoItnCheck.tag = 1006;
+    self.asrDoubaoItnCheck.hidden = YES;
+    [pane addSubview:self.asrDoubaoItnCheck];
+
+    self.asrDoubaoDdcCheck = [NSButton checkboxWithTitle:@"Disfluency removal"
+                                                  target:nil action:nil];
+    self.asrDoubaoDdcCheck.frame = NSMakeRect(checkX + checkW + 8, extraStartY - rowH + 8, checkW, 22);
+    self.asrDoubaoDdcCheck.tag = 1006;
+    self.asrDoubaoDdcCheck.hidden = YES;
+    [pane addSubview:self.asrDoubaoDdcCheck];
+
+    // ── Qwen extra: language dropdown + model text field ─────────────
+    NSTextField *qwenLangLabel = [self formLabel:@"Language" frame:NSMakeRect(16, extraStartY, labelW, 22)];
+    qwenLangLabel.tag = 1007;
+    qwenLangLabel.hidden = YES;
+    [pane addSubview:qwenLangLabel];
+
+    self.asrQwenLanguagePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, extraStartY - 2, 160, 26) pullsDown:NO];
+    [self.asrQwenLanguagePopup addItemWithTitle:@"Auto"];
+    [self.asrQwenLanguagePopup itemAtIndex:0].representedObject = @"auto";
+    [self.asrQwenLanguagePopup addItemWithTitle:@"Chinese (zh)"];
+    [self.asrQwenLanguagePopup itemAtIndex:1].representedObject = @"zh";
+    [self.asrQwenLanguagePopup addItemWithTitle:@"English (en)"];
+    [self.asrQwenLanguagePopup itemAtIndex:2].representedObject = @"en";
+    self.asrQwenLanguagePopup.tag = 1007;
+    self.asrQwenLanguagePopup.hidden = YES;
+    [pane addSubview:self.asrQwenLanguagePopup];
+
+    NSTextField *qwenModelLabel = [self formLabel:@"Model" frame:NSMakeRect(16, extraStartY - rowH, labelW, 22)];
+    qwenModelLabel.tag = 1007;
+    qwenModelLabel.hidden = YES;
+    [pane addSubview:qwenModelLabel];
+
+    self.asrQwenModelField = [self formTextField:NSMakeRect(fieldX, extraStartY - rowH, fieldW, 22)
+                                     placeholder:@"qwen3-asr-flash-realtime"];
+    self.asrQwenModelField.tag = 1007;
+    self.asrQwenModelField.hidden = YES;
+    [pane addSubview:self.asrQwenModelField];
+
+    // ── MLX extra: delay_preset dropdown + language dropdown ──────────
+    NSTextField *mlxModeLabel = [self formLabel:@"Mode" frame:NSMakeRect(16, extraStartY, labelW, 22)];
+    mlxModeLabel.tag = 1008;
+    mlxModeLabel.hidden = YES;
+    [pane addSubview:mlxModeLabel];
+
+    self.asrMlxDelayPresetPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, extraStartY - 2, 160, 26) pullsDown:NO];
+    [self.asrMlxDelayPresetPopup addItemWithTitle:@"Realtime"];
+    [self.asrMlxDelayPresetPopup itemAtIndex:0].representedObject = @"realtime";
+    [self.asrMlxDelayPresetPopup addItemWithTitle:@"Agent"];
+    [self.asrMlxDelayPresetPopup itemAtIndex:1].representedObject = @"agent";
+    [self.asrMlxDelayPresetPopup addItemWithTitle:@"Subtitle"];
+    [self.asrMlxDelayPresetPopup itemAtIndex:2].representedObject = @"subtitle";
+    self.asrMlxDelayPresetPopup.tag = 1008;
+    self.asrMlxDelayPresetPopup.hidden = YES;
+    [pane addSubview:self.asrMlxDelayPresetPopup];
+
+    NSTextField *mlxLangLabel = [self formLabel:@"Language" frame:NSMakeRect(16, extraStartY - rowH, labelW, 22)];
+    mlxLangLabel.tag = 1008;
+    mlxLangLabel.hidden = YES;
+    [pane addSubview:mlxLangLabel];
+
+    self.asrMlxLanguagePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, extraStartY - rowH - 2, 160, 26) pullsDown:NO];
+    [self.asrMlxLanguagePopup addItemWithTitle:@"Auto"];
+    [self.asrMlxLanguagePopup itemAtIndex:0].representedObject = @"auto";
+    [self.asrMlxLanguagePopup addItemWithTitle:@"Chinese (zh)"];
+    [self.asrMlxLanguagePopup itemAtIndex:1].representedObject = @"zh";
+    [self.asrMlxLanguagePopup addItemWithTitle:@"English (en)"];
+    [self.asrMlxLanguagePopup itemAtIndex:2].representedObject = @"en";
+    self.asrMlxLanguagePopup.tag = 1008;
+    self.asrMlxLanguagePopup.hidden = YES;
+    [pane addSubview:self.asrMlxLanguagePopup];
+
+    // ── Sherpa-ONNX extra: num_threads stepper, hotwords score, endpoint silence ──
+    NSTextField *sherpaThreadsLabel = [self formLabel:@"CPU Threads" frame:NSMakeRect(16, extraStartY, labelW, 22)];
+    sherpaThreadsLabel.tag = 1009;
+    sherpaThreadsLabel.hidden = YES;
+    [pane addSubview:sherpaThreadsLabel];
+
+    self.asrSherpaNumThreadsLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, extraStartY, 28, 22)];
+    self.asrSherpaNumThreadsLabel.bezeled = NO;
+    self.asrSherpaNumThreadsLabel.drawsBackground = NO;
+    self.asrSherpaNumThreadsLabel.editable = NO;
+    self.asrSherpaNumThreadsLabel.selectable = NO;
+    self.asrSherpaNumThreadsLabel.alignment = NSTextAlignmentCenter;
+    self.asrSherpaNumThreadsLabel.stringValue = @"4";
+    self.asrSherpaNumThreadsLabel.tag = 1009;
+    self.asrSherpaNumThreadsLabel.hidden = YES;
+    [pane addSubview:self.asrSherpaNumThreadsLabel];
+
+    self.asrSherpaNumThreadsStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(fieldX + 32, extraStartY - 1, 19, 24)];
+    self.asrSherpaNumThreadsStepper.minValue = 1;
+    self.asrSherpaNumThreadsStepper.maxValue = 8;
+    self.asrSherpaNumThreadsStepper.increment = 1;
+    self.asrSherpaNumThreadsStepper.valueWraps = NO;
+    self.asrSherpaNumThreadsStepper.intValue = 4;
+    self.asrSherpaNumThreadsStepper.target = self;
+    self.asrSherpaNumThreadsStepper.action = @selector(sherpaNumThreadsChanged:);
+    self.asrSherpaNumThreadsStepper.tag = 1009;
+    self.asrSherpaNumThreadsStepper.hidden = YES;
+    [pane addSubview:self.asrSherpaNumThreadsStepper];
+
+    NSTextField *sherpaHotwordsLabel = [self formLabel:@"Hotword Score" frame:NSMakeRect(16, extraStartY - rowH, labelW, 22)];
+    sherpaHotwordsLabel.tag = 1009;
+    sherpaHotwordsLabel.hidden = YES;
+    [pane addSubview:sherpaHotwordsLabel];
+
+    self.asrSherpaHotwordsScoreField = [self formTextField:NSMakeRect(fieldX, extraStartY - rowH, 80, 22)
+                                               placeholder:@"1.5"];
+    self.asrSherpaHotwordsScoreField.tag = 1009;
+    self.asrSherpaHotwordsScoreField.hidden = YES;
+    [pane addSubview:self.asrSherpaHotwordsScoreField];
+
+    NSTextField *sherpaEndpointLabel = [self formLabel:@"Endpoint Silence" frame:NSMakeRect(16, extraStartY - rowH * 2, labelW, 22)];
+    sherpaEndpointLabel.tag = 1009;
+    sherpaEndpointLabel.hidden = YES;
+    [pane addSubview:sherpaEndpointLabel];
+
+    self.asrSherpaEndpointSilenceField = [self formTextField:NSMakeRect(fieldX, extraStartY - rowH * 2, 80, 22)
+                                                 placeholder:@"1.2"];
+    self.asrSherpaEndpointSilenceField.tag = 1009;
+    self.asrSherpaEndpointSilenceField.hidden = YES;
+    [pane addSubview:self.asrSherpaEndpointSilenceField];
+
     // Test result label
     self.asrTestResultLabel = [NSTextField wrappingLabelWithString:@""];
     self.asrTestResultLabel.frame = NSMakeRect(fieldX, 55, fieldW, 42);
@@ -484,7 +661,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat fieldW = paneWidth - fieldX - 32;
     CGFloat rowH = 32;
 
-    CGFloat contentHeight = 540;
+    CGFloat contentHeight = 590;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
     CGFloat y = contentHeight - 48;
@@ -548,6 +725,29 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     tokenHint.frame = NSMakeRect(fieldX, y - 2, fieldW, 32);
     [pane addSubview:tokenHint];
     y -= 44;
+
+    // Translation target language
+    [pane addSubview:[self formLabel:@"Translation" frame:NSMakeRect(16, y, labelW, 22)]];
+    self.llmTranslateToPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 200, 26) pullsDown:NO];
+    [self.llmTranslateToPopup addItemWithTitle:@"Disabled (correction only)"];
+    [self.llmTranslateToPopup itemAtIndex:0].representedObject = @"";
+    [self.llmTranslateToPopup addItemWithTitle:@"English (en)"];
+    [self.llmTranslateToPopup itemAtIndex:1].representedObject = @"en";
+    [self.llmTranslateToPopup addItemWithTitle:@"Chinese (zh)"];
+    [self.llmTranslateToPopup itemAtIndex:2].representedObject = @"zh";
+    [self.llmTranslateToPopup addItemWithTitle:@"Japanese (ja)"];
+    [self.llmTranslateToPopup itemAtIndex:3].representedObject = @"ja";
+    [self.llmTranslateToPopup addItemWithTitle:@"Other..."];
+    [self.llmTranslateToPopup lastItem].representedObject = @"__custom__";
+    [self.llmTranslateToPopup setTarget:self];
+    [self.llmTranslateToPopup setAction:@selector(llmTranslateToChanged:)];
+    [pane addSubview:self.llmTranslateToPopup];
+
+    self.llmTranslateToCustomField = [self formTextField:NSMakeRect(fieldX + 208, y, 80, 22)
+                                             placeholder:@"e.g. fr"];
+    self.llmTranslateToCustomField.hidden = YES;
+    [pane addSubview:self.llmTranslateToCustomField];
+    y -= rowH;
 
     // Test button
     self.llmTestButton = [NSButton buttonWithTitle:@"Test Connection" target:self action:@selector(testLlmConnection:)];
@@ -843,6 +1043,10 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     }
 }
 
+- (void)sherpaNumThreadsChanged:(NSStepper *)sender {
+    self.asrSherpaNumThreadsLabel.stringValue = [NSString stringWithFormat:@"%d", sender.intValue];
+}
+
 - (void)asrProviderChanged:(NSPopUpButton *)sender {
     NSString *selectedProvider = sender.selectedItem.representedObject ?: @"doubao";
     BOOL isDoubao = [selectedProvider isEqualToString:@"doubao"];
@@ -895,6 +1099,16 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     // Hide test button for local providers (no remote connection to test)
     self.asrTestButton.hidden = isLocal;
     self.asrTestResultLabel.hidden = isLocal;
+
+    // Show/hide extra provider-specific fields
+    BOOL isMlx = [selectedProvider isEqualToString:@"mlx"];
+    BOOL isSherpa = [selectedProvider isEqualToString:@"sherpa-onnx"];
+    for (NSView *view in self.currentPaneView.subviews) {
+        if (view.tag == 1005 || view.tag == 1006) view.hidden = !isDoubao;
+        if (view.tag == 1007) view.hidden = !isQwen;
+        if (view.tag == 1008) view.hidden = !isMlx;
+        if (view.tag == 1009) view.hidden = !isSherpa;
+    }
 
     // Clear test result when switching provider
     self.asrTestResultLabel.stringValue = @"";
@@ -1133,6 +1347,45 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
         self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
         self.asrQwenApiKeyField.stringValue = qwenApiKey;
+        // Load Qwen advanced fields
+        NSString *qwenLang = configGet(@"asr.qwen.language");
+        if (qwenLang.length == 0) qwenLang = @"auto";
+        for (NSInteger i = 0; i < self.asrQwenLanguagePopup.numberOfItems; i++) {
+            if ([[self.asrQwenLanguagePopup itemAtIndex:i].representedObject isEqualToString:qwenLang]) {
+                [self.asrQwenLanguagePopup selectItemAtIndex:i]; break;
+            }
+        }
+        NSString *qwenModel = configGet(@"asr.qwen.model");
+        self.asrQwenModelField.stringValue = qwenModel;
+        // Load Doubao advanced toggles
+        self.asrDoubaoNonstreamCheck.state = [[configGet(@"asr.doubao.enable_nonstream") lowercaseString] isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        self.asrDoubaoPuncCheck.state = [[configGet(@"asr.doubao.enable_punc") lowercaseString] isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        self.asrDoubaoItnCheck.state = [[configGet(@"asr.doubao.enable_itn") lowercaseString] isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        self.asrDoubaoDdcCheck.state = [[configGet(@"asr.doubao.enable_ddc") lowercaseString] isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        // Load MLX advanced fields
+        NSString *mlxPreset = configGet(@"asr.mlx.delay_preset");
+        if (mlxPreset.length == 0) mlxPreset = @"realtime";
+        for (NSInteger i = 0; i < self.asrMlxDelayPresetPopup.numberOfItems; i++) {
+            if ([[self.asrMlxDelayPresetPopup itemAtIndex:i].representedObject isEqualToString:mlxPreset]) {
+                [self.asrMlxDelayPresetPopup selectItemAtIndex:i]; break;
+            }
+        }
+        NSString *mlxLang = configGet(@"asr.mlx.language");
+        if (mlxLang.length == 0) mlxLang = @"auto";
+        for (NSInteger i = 0; i < self.asrMlxLanguagePopup.numberOfItems; i++) {
+            if ([[self.asrMlxLanguagePopup itemAtIndex:i].representedObject isEqualToString:mlxLang]) {
+                [self.asrMlxLanguagePopup selectItemAtIndex:i]; break;
+            }
+        }
+        // Load Sherpa-ONNX advanced fields
+        NSString *sherpaThreads = configGet(@"asr.sherpa-onnx.num_threads");
+        int threads = sherpaThreads.length > 0 ? sherpaThreads.intValue : 4;
+        self.asrSherpaNumThreadsStepper.intValue = threads;
+        self.asrSherpaNumThreadsLabel.stringValue = [NSString stringWithFormat:@"%d", threads];
+        NSString *sherpaHotwords = configGet(@"asr.sherpa-onnx.hotwords_score");
+        self.asrSherpaHotwordsScoreField.stringValue = sherpaHotwords.length > 0 ? sherpaHotwords : @"1.5";
+        NSString *sherpaEndpoint = configGet(@"asr.sherpa-onnx.endpoint_silence");
+        self.asrSherpaEndpointSilenceField.stringValue = sherpaEndpoint.length > 0 ? sherpaEndpoint : @"1.2";
         // Reset visibility based on selected provider
         [self asrProviderChanged:self.asrProviderPopup];
         // Select current local model if applicable
@@ -1178,6 +1431,30 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
             }
         }
         self.llmTestResultLabel.stringValue = @"";
+        // Translation target language
+        NSString *translateTo = configGet(@"llm.translate_to");
+        BOOL foundTranslate = NO;
+        for (NSInteger i = 0; i < self.llmTranslateToPopup.numberOfItems; i++) {
+            NSString *repObj = [self.llmTranslateToPopup itemAtIndex:i].representedObject ?: @"";
+            if ([repObj isEqualToString:@"__custom__"]) continue;
+            if ([repObj isEqualToString:translateTo]) {
+                [self.llmTranslateToPopup selectItemAtIndex:i];
+                foundTranslate = YES;
+                break;
+            }
+        }
+        if (!foundTranslate && translateTo.length > 0) {
+            // Custom language code — select "Other..." and show custom field
+            for (NSInteger i = 0; i < self.llmTranslateToPopup.numberOfItems; i++) {
+                if ([[self.llmTranslateToPopup itemAtIndex:i].representedObject isEqualToString:@"__custom__"]) {
+                    [self.llmTranslateToPopup selectItemAtIndex:i]; break;
+                }
+            }
+            self.llmTranslateToCustomField.stringValue = translateTo;
+            self.llmTranslateToCustomField.hidden = NO;
+        } else {
+            self.llmTranslateToCustomField.hidden = YES;
+        }
         [self updateLlmFieldsEnabled];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
         NSString *triggerKeyRaw = configGet(@"hotkey.trigger_key");
@@ -1275,6 +1552,24 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         // Save Qwen fields
         NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
         saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
+        // Save Qwen advanced fields
+        NSString *qwenLang = self.asrQwenLanguagePopup.selectedItem.representedObject ?: @"auto";
+        saveOk &= configSet(@"asr.qwen.language", qwenLang);
+        saveOk &= configSet(@"asr.qwen.model", self.asrQwenModelField.stringValue);
+        // Save Doubao advanced toggles
+        saveOk &= configSet(@"asr.doubao.enable_nonstream", self.asrDoubaoNonstreamCheck.state == NSControlStateValueOn ? @"true" : @"false");
+        saveOk &= configSet(@"asr.doubao.enable_punc", self.asrDoubaoPuncCheck.state == NSControlStateValueOn ? @"true" : @"false");
+        saveOk &= configSet(@"asr.doubao.enable_itn", self.asrDoubaoItnCheck.state == NSControlStateValueOn ? @"true" : @"false");
+        saveOk &= configSet(@"asr.doubao.enable_ddc", self.asrDoubaoDdcCheck.state == NSControlStateValueOn ? @"true" : @"false");
+        // Save MLX advanced fields
+        NSString *mlxPreset = self.asrMlxDelayPresetPopup.selectedItem.representedObject ?: @"realtime";
+        saveOk &= configSet(@"asr.mlx.delay_preset", mlxPreset);
+        NSString *mlxLang = self.asrMlxLanguagePopup.selectedItem.representedObject ?: @"auto";
+        saveOk &= configSet(@"asr.mlx.language", mlxLang);
+        // Save Sherpa-ONNX advanced fields
+        saveOk &= configSet(@"asr.sherpa-onnx.num_threads", [NSString stringWithFormat:@"%d", self.asrSherpaNumThreadsStepper.intValue]);
+        saveOk &= configSet(@"asr.sherpa-onnx.hotwords_score", self.asrSherpaHotwordsScoreField.stringValue);
+        saveOk &= configSet(@"asr.sherpa-onnx.endpoint_silence", self.asrSherpaEndpointSilenceField.stringValue);
         // Save local model selection
         if ([selectedProvider isEqualToString:@"mlx"]) {
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
@@ -1295,6 +1590,12 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         saveOk &= configSet(@"llm.model", self.llmModelField.stringValue);
         NSString *selectedTokenParam = self.maxTokenParamPopup.selectedItem.representedObject ?: @"max_completion_tokens";
         saveOk &= configSet(@"llm.max_token_parameter", selectedTokenParam);
+        // Save translation target
+        NSString *translateToRep = self.llmTranslateToPopup.selectedItem.representedObject ?: @"";
+        NSString *translateToValue = [translateToRep isEqualToString:@"__custom__"]
+            ? self.llmTranslateToCustomField.stringValue
+            : translateToRep;
+        saveOk &= configSet(@"llm.translate_to", translateToValue);
     }
 
     // Update hotkey
@@ -1364,12 +1665,19 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [self updateLlmFieldsEnabled];
 }
 
+- (void)llmTranslateToChanged:(NSPopUpButton *)sender {
+    NSString *selected = sender.selectedItem.representedObject ?: @"";
+    self.llmTranslateToCustomField.hidden = ![selected isEqualToString:@"__custom__"];
+}
+
 - (void)updateLlmFieldsEnabled {
     BOOL enabled = (self.llmEnabledCheckbox.state == NSControlStateValueOn);
     self.llmBaseUrlField.enabled = enabled;
     self.llmApiKeyField.enabled = enabled;
     self.llmModelField.enabled = enabled;
     self.maxTokenParamPopup.enabled = enabled;
+    self.llmTranslateToPopup.enabled = enabled;
+    self.llmTranslateToCustomField.enabled = enabled;
     self.llmTestButton.enabled = enabled;
 }
 
