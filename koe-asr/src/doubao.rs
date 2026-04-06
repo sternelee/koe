@@ -303,34 +303,49 @@ impl AsrProvider for DoubaoWsProvider {
             .into_client_request()
             .map_err(|e| AsrError::Connection(format!("invalid URL: {e}")))?;
 
-        let headers = request.headers_mut();
-        headers.insert(
-            "X-Api-App-Key",
-            config
-                .app_key
-                .parse()
-                .map_err(|_| AsrError::Connection("invalid app_key".into()))?,
-        );
-        headers.insert(
-            "X-Api-Access-Key",
-            config
-                .access_key
-                .parse()
-                .map_err(|_| AsrError::Connection("invalid access_key".into()))?,
-        );
-        headers.insert(
-            "X-Api-Resource-Id",
-            config
-                .resource_id
-                .parse()
-                .map_err(|_| AsrError::Connection("invalid resource_id".into()))?,
-        );
-        headers.insert(
-            "X-Api-Connect-Id",
-            self.connect_id
-                .parse()
-                .map_err(|_| AsrError::Connection("invalid connect_id".into()))?,
-        );
+        if config.custom_headers.is_empty() {
+            let headers = request.headers_mut();
+            headers.insert(
+                "X-Api-App-Key",
+                config
+                    .app_key
+                    .parse()
+                    .map_err(|_| AsrError::Connection("invalid app_key".into()))?,
+            );
+            headers.insert(
+                "X-Api-Access-Key",
+                config
+                    .access_key
+                    .parse()
+                    .map_err(|_| AsrError::Connection("invalid access_key".into()))?,
+            );
+            headers.insert(
+                "X-Api-Resource-Id",
+                config
+                    .resource_id
+                    .parse()
+                    .map_err(|_| AsrError::Connection("invalid resource_id".into()))?,
+            );
+            headers.insert(
+                "X-Api-Connect-Id",
+                self.connect_id
+                    .parse()
+                    .map_err(|_| AsrError::Connection("invalid connect_id".into()))?,
+            );
+        } else {
+            let headers = request.headers_mut();
+            for (key, value) in &config.custom_headers {
+                let header_name: tokio_tungstenite::tungstenite::http::HeaderName = key
+                    .parse()
+                    .map_err(|_| AsrError::Connection(format!("invalid header name: {key}")))?;
+                headers.insert(
+                    header_name,
+                    value
+                        .parse()
+                        .map_err(|_| AsrError::Connection(format!("invalid header value for {key}")))?,
+                );
+            }
+        }
 
         let (ws_stream, response) = timeout(connect_timeout, async {
             connect_async(request)

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Configuration for an ASR session.
 #[derive(Debug, Clone)]
 pub struct AsrConfig {
@@ -27,6 +29,8 @@ pub struct AsrConfig {
     pub hotwords: Vec<String>,
     /// Language code for ASR (e.g. "zh", "en") - used by Qwen ASR
     pub language: Option<String>,
+    /// Custom HTTP headers for WebSocket connection
+    pub custom_headers: HashMap<String, String>,
 }
 
 impl Default for AsrConfig {
@@ -45,6 +49,7 @@ impl Default for AsrConfig {
             enable_nonstream: true,
             hotwords: Vec::new(),
             language: Some("zh".to_string()),
+            custom_headers: HashMap::new(),
         }
     }
 }

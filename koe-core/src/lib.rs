@@ -348,6 +348,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
                 enable_nonstream: false,
                 hotwords: Vec::new(),
                 language: Some(qwen.language.clone()),
+                custom_headers: qwen.headers.clone(),
             };
             (config, Box::new(QwenAsrProvider::new()))
         }
@@ -408,6 +409,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
                 enable_nonstream: doubao.enable_nonstream,
                 hotwords: core.dictionary.clone(),
                 language: Some("zh".to_string()),
+                custom_headers: doubao.headers.clone(),
             };
             (config, Box::new(DoubaoWsProvider::new()))
         }

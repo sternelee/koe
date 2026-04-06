@@ -60,6 +60,9 @@ pub struct QwenAsrConfig {
     pub connect_timeout_ms: u64,
     #[serde(default = "default_final_wait_timeout")]
     pub final_wait_timeout_ms: u64,
+    /// Custom HTTP headers for WebSocket connection
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
 }
 
 impl Default for QwenAsrConfig {
@@ -71,6 +74,7 @@ impl Default for QwenAsrConfig {
             language: default_qwen_language(),
             connect_timeout_ms: default_connect_timeout(),
             final_wait_timeout_ms: default_final_wait_timeout(),
+            headers: std::collections::HashMap::new(),
         }
     }
 }
@@ -97,6 +101,9 @@ pub struct DoubaoAsrConfig {
     pub enable_punc: bool,
     #[serde(default = "default_true")]
     pub enable_nonstream: bool,
+    /// Custom HTTP headers for WebSocket connection
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -985,6 +992,8 @@ asr:
     enable_itn: true     # 文本规范化 (数字、日期等)
     enable_punc: true    # 自动标点
     enable_nonstream: true  # 二遍识别 (流式+非流式, 提升准确率)
+    # headers:           # custom HTTP headers for WebSocket connection
+    #   X-Custom-Header: "value"
 
   # Qwen (Aliyun DashScope) Realtime ASR
   qwen:
@@ -994,6 +1003,8 @@ asr:
     language: "zh"
     connect_timeout_ms: 3000
     final_wait_timeout_ms: 5000
+    # headers:           # custom HTTP headers for WebSocket connection
+    #   X-Custom-Header: "value"
 
   # Apple Speech local ASR (macOS 26+, zero-config, no model download)
   apple-speech:

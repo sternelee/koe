@@ -225,12 +225,26 @@ impl AsrProvider for QwenAsrProvider {
             .into_client_request()
             .map_err(|e| AsrError::Connection(format!("invalid URL: {e}")))?;
 
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Bearer {}", api_key)
-                .parse()
-                .map_err(|_| AsrError::Connection("invalid api_key".into()))?,
-        );
+        if config.custom_headers.is_empty() {
+            request.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {}", api_key)
+                    .parse()
+                    .map_err(|_| AsrError::Connection("invalid api_key".into()))?,
+            );
+        } else {
+            for (key, value) in &config.custom_headers {
+                let header_name: tokio_tungstenite::tungstenite::http::HeaderName = key
+                    .parse()
+                    .map_err(|_| AsrError::Connection(format!("invalid header name: {key}")))?;
+                request.headers_mut().insert(
+                    header_name,
+                    value
+                        .parse()
+                        .map_err(|_| AsrError::Connection(format!("invalid header value for {key}")))?,
+                );
+            }
+        }
 
         let (ws_stream, response) =
             timeout(Duration::from_millis(config.connect_timeout_ms), async {
