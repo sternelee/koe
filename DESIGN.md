@@ -115,6 +115,7 @@ Instead of a CLI tool, the app provides a menu bar dropdown with:
 - **Utility actions**: `Setup Wizard...`, `Open Config Folder...`, `Check for Updates...`, `Launch at Login`, and `Quit Koe`
 
 Section headers use custom `NSView` with bold labels (not selectable, not grayed out). The idle icon is a 5-bar audio waveform for easy recognition.
+The current Setup Wizard exposes panes for ASR, LLM, Controls, Dictionary, and System Prompt. Advanced knobs such as `user_prompt.txt`, cloud-provider custom `headers`, and `llm.no_reasoning_control` remain config-file-driven.
 
 ### 4.3 Floating Overlay
 
@@ -723,7 +724,7 @@ Conclusion:
 
 ```yaml
 asr:
-  # ASR provider selection. Currently only "doubao" is implemented.
+  # ASR provider selection: "doubao", "qwen", "apple-speech", "mlx", "sherpa-onnx"
   provider: "doubao"
 
   # Doubao ASR 2.0 (优化版双向流式)
@@ -738,17 +739,48 @@ asr:
     enable_itn: true         # 文本规范化 (inverse text normalization)
     enable_punc: true        # 自动标点
     enable_nonstream: true   # 二遍识别 (two-pass: streaming + re-recognition)
+    # headers:
+    #   X-Custom-Header: "value"
+
+  # Qwen Realtime ASR
+  qwen:
+    url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    api_key: ""
+    model: "qwen3-asr-flash-realtime"
+    language: "zh"
+    connect_timeout_ms: 3000
+    final_wait_timeout_ms: 5000
+    # headers:
+    #   X-Custom-Header: "value"
+
+  # Apple Speech local ASR (macOS 26+)
+  apple-speech:
+    locale: "zh_CN"
+
+  # MLX local ASR (Apple Silicon)
+  mlx:
+    model: "mlx/Qwen3-ASR-0.6B-4bit"
+    delay_preset: "realtime"
+    language: "auto"
+
+  # sherpa-onnx local ASR (CPU)
+  sherpa-onnx:
+    model: "sherpa-onnx/bilingual-zh-en"
+    num_threads: 2
+    hotwords_score: 1.5
+    endpoint_silence: 1.2
 
 llm:
   enabled: true
-  base_url: ""             # OpenAI-compatible endpoint
+  base_url: "https://api.openai.com/v1"
   api_key: "${LLM_API_KEY}"
-  model: ""
+  model: "gpt-5.4-nano"
   temperature: 0
   top_p: 1
   timeout_ms: 8000
   max_output_tokens: 1024
   max_token_parameter: "max_completion_tokens"
+  no_reasoning_control: "reasoning_effort"
   dictionary_max_candidates: 0  # 0 = send all entries to LLM
   system_prompt_path: "system_prompt.txt"
   user_prompt_path: "user_prompt.txt"
@@ -762,11 +794,13 @@ dictionary:
   path: "dictionary.txt"
 
 hotkey:
+  # Supported symbolic values: fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # Raw macOS keycode numbers are also allowed, for example 96 (F5) or 122 (F1).
   trigger_key: "fn"
   cancel_key: "left_option"
 ```
 
-> **Note:** The tap/hold threshold (180ms), audio framing, and paste timing are still hardcoded. Hotkeys, provider credentials, and cue sounds are user-configurable.
+> **Note:** The tap/hold threshold (180ms), audio framing, and paste timing are still hardcoded. Provider credentials, local model or locale selection, hotkeys, cue sounds, and prompt file paths are user-configurable. Advanced fields such as custom ASR headers, raw keycodes, and `llm.no_reasoning_control` are currently edited in `config.yaml`.
 
 ### 14.2 Configuration Rules
 
@@ -786,6 +820,9 @@ The hotkey layer now exposes both a configurable `trigger_key` and a separate
 - `right_option`
 - `left_command`
 - `right_command`
+- `left_control`
+- `right_control`
+- raw macOS keycode numbers in `config.yaml`, such as `96` (`F5`) or `122` (`F1`)
 
 Behavior:
 
@@ -1651,11 +1688,11 @@ The final recommended implementation approach is as follows:
 - User dictionary: `dictionary.txt`
 - Hotkey mode: default `Fn` trigger plus `left_option` cancel, configurable with supported fallback keys
 - Recording strategy: hold to record and release to end, or tap to start and tap again to end
-- ASR: provider-based config, currently backed by Doubao WebSocket streaming recognition
-- Correction: LLM minimal necessary correction
+- ASR: provider-based config across Doubao, Qwen, Apple Speech, MLX, and sherpa-onnx; cloud providers can also use custom WebSocket headers for compatible gateways
+- Correction: OpenAI-compatible LLM minimal-necessary correction with configurable token field and optional no-reasoning control
 - Filler words: removed by LLM in context
 - Input injection: clipboard + `Cmd+V`
-- Permissions: Microphone + Input Monitoring + Accessibility
+- Permissions: Microphone + Input Monitoring + Accessibility, plus optional Notifications and provider-specific Speech Recognition when Apple Speech is used
 - Distribution: standard app bundle, signed, notarized, no visible GUI
 
 ## 30. Local ASR Support
@@ -1670,6 +1707,7 @@ The `AsrProvider` trait defines a uniform interface for all ASR backends:
 All providers emit the same event types (`Connected`, `Interim`, `Definite`, `Final`, `Closed`, `Error`), making them interchangeable via `config.yaml`.
 
 Local providers receive configuration through their constructor (`new(config)`), not through the shared `AsrConfig` parameter in `connect()`. This avoids polluting the cloud-oriented `AsrConfig` with local-specific fields.
+Cloud providers additionally support user-defined `headers` for third-party-compatible WebSocket gateways; when supplied, those headers are sent as-is instead of the built-in auth header set.
 
 Apple Speech differs from other local providers in that it uses system-managed model assets (no download required). It does not participate in the model management system (`~/.koe/models/`). Instead, SpeechAnalyzer + SpeechTranscriber handle model lifecycle automatically.
 
@@ -1686,6 +1724,8 @@ Each manifest describes the provider, model files, sizes, sha256 checksums, and 
 Default manifests are embedded in the binary and installed on first launch via `ensure_defaults()`. The `koe` CLI provides `model list`, `model pull`, `model status`, and `manifest generate` commands for model management.
 
 ### 30.3 Setup Wizard Integration
+
+The Setup Wizard exposes panes for ASR, LLM, Controls, Dictionary, and System Prompt. The Prompt pane edits `system_prompt.txt`; `user_prompt.txt`, cloud-provider custom headers, and `llm.no_reasoning_control` remain file-edited settings.
 
 The Setup Wizard's ASR pane includes local provider support. When the user selects MLX or Sherpa-ONNX as the provider:
 

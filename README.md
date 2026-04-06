@@ -67,17 +67,19 @@ The feed file lives at `docs/update-feed.json` and should contain at least:
 
 ```json
 {
-  "version": "1.0.10",
-  "build": 11,
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.10/Koe-macOS-arm64.zip"
+  "version": "1.0.13",
+  "build": 14,
+  "minimum_system_version": "14.0",
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.13/Koe-macOS-arm64.zip"
 }
 ```
 
 Optional fields such as `minimum_system_version`, `release_notes_url`, `published_at`,
 and `notes` can also be included. On launch, Koe checks this raw feed automatically,
 checks again periodically, and you can also trigger a manual check from the menu bar
-with `Check for Updates...`. When an update is found, Koe opens the release download
-URL instead of patching the installed app in place.
+with `Check for Updates...`. The current implementation performs the first automatic
+check shortly after launch and then re-checks every 6 hours. When an update is found,
+Koe opens the release download URL instead of patching the installed app in place.
 
 ### Build from Source
 
@@ -119,7 +121,9 @@ open ~/Library/Developer/Xcode/DerivedData/Koe-*/Build/Products/Release/Koe.app
 
 ### Permissions
 
-Koe requires **three macOS permissions** to function. You'll be prompted to grant them on first launch. All three are mandatory — without any one of them, Koe cannot complete its core workflow.
+Koe requires **three core macOS permissions** to function, plus one provider-specific
+permission when you use Apple Speech. You'll be prompted to grant them on first launch.
+Without any of the three core permissions, Koe cannot complete its main workflow.
 
 | Permission | Why it's needed | What happens without it |
 |---|---|---|
@@ -128,16 +132,21 @@ Koe requires **three macOS permissions** to function. You'll be prompted to gran
 | **Input Monitoring** | Listens for the trigger key (default: **Fn**, configurable) globally so Koe can detect when you press/release it, regardless of which app is in the foreground. | Koe cannot detect the hotkey. You won't be able to trigger recording. |
 | **Speech Recognition** | Required only when using the Apple Speech provider (macOS 26+). Allows on-device speech recognition. | Other providers (cloud, MLX, sherpa-onnx) work without this permission. |
 
-To grant permissions: **System Settings → Privacy & Security** → enable Koe under each of the three categories above.
+To grant permissions: **System Settings → Privacy & Security** → enable Koe under the relevant categories above.
+
+Koe may also ask for **Notifications** permission. This is optional and is only used
+for warning/error notifications and update-related diagnostics.
 
 ## Configuration
 
 All config files live in `~/.koe/` and are auto-generated on first launch. You
 can edit them directly, or use the built-in settings window (Setup Wizard) from
 the menu bar. The settings window includes tabs for ASR, LLM, Controls, Dictionary,
-and Prompt. When a local ASR provider is selected, the ASR tab shows provider-specific
-controls: model picker with download/delete for MLX and Sherpa-ONNX, or language
-picker with asset status and download for Apple Speech.
+and Prompt. The Prompt tab edits `system_prompt.txt`; advanced knobs such as
+`user_prompt.txt`, ASR custom `headers`, and `llm.no_reasoning_control` remain
+file-based settings. When a local ASR provider is selected, the ASR tab shows
+provider-specific controls: model picker with download/delete for MLX and
+Sherpa-ONNX, or language picker with asset status and download for Apple Speech.
 
 ```
 ~/.koe/
@@ -209,6 +218,24 @@ asr:
     # Recommended: true.
     enable_nonstream: true
 
+    # Optional custom HTTP headers for compatible third-party WS gateways.
+    # When set, Koe sends exactly these headers instead of the built-in auth set.
+    # headers:
+    #   X-Custom-Header: "value"
+
+  # Qwen (DashScope) streaming ASR
+  qwen:
+    url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    api_key: ""
+    model: "qwen3-asr-flash-realtime"
+    language: "zh"
+    connect_timeout_ms: 3000
+    final_wait_timeout_ms: 5000
+
+    # Optional custom HTTP headers for compatible third-party WS gateways.
+    # headers:
+    #   X-Custom-Header: "value"
+
   # Apple Speech local ASR (macOS 26+, system-managed assets)
   apple-speech:
     locale: "zh_CN"                        # available locales depend on system; see Setup Wizard
@@ -278,6 +305,12 @@ llm:
   # Use "max_tokens" for older model endpoints.
   max_token_parameter: "max_completion_tokens"
 
+  # Optional control for providers that expose reasoning/thinking knobs.
+  # "reasoning_effort" sends reasoning_effort: "none" on GPT-5/o-series style APIs.
+  # "thinking" sends thinking: {"type":"disabled"} for providers that use that shape.
+  # "none" sends nothing.
+  no_reasoning_control: "reasoning_effort"
+
   # How many dictionary entries to include in the LLM prompt.
   # 0 = send all entries (recommended for dictionaries under ~500 entries).
   # Set a limit if your dictionary is very large and you want to reduce prompt size.
@@ -304,9 +337,10 @@ feedback:
 hotkey:
   # Trigger key for voice input.
   # Options: fn | left_option | right_option | left_command | right_command | left_control | right_control
+  # You can also use a raw macOS keycode number such as 96 (F5) or 122 (F1).
   trigger_key: "fn"
   # Cancel key for aborting the current session.
-  # Must be different from trigger_key.
+  # Must be different from trigger_key. Raw keycodes are also supported here.
   cancel_key: "left_option"
 ```
 
@@ -323,7 +357,9 @@ hotkey:
 Hotkey changes take effect automatically within a few seconds. The trigger key
 starts voice input, and the cancel key aborts the current session without output.
 If the configured trigger key and cancel key collide, Koe normalizes them and
-writes the corrected pair back to `config.yaml`.
+writes the corrected pair back to `config.yaml`. For common raw keycodes, the
+menu bar and Setup Wizard show a friendly label such as `F5` or `Escape` instead
+of only the numeric value.
 
 #### Dictionary
 
@@ -377,6 +413,9 @@ The LLM correction behavior is fully customizable via two prompt files:
 - **`~/.koe/system_prompt.txt`** — defines the correction rules (capitalization, spacing, punctuation, filler word removal, etc.)
 - **`~/.koe/user_prompt.txt`** — template that assembles the ASR output, interim history, and dictionary into the final LLM request
 
+The Setup Wizard edits `system_prompt.txt` directly. `user_prompt.txt` is still
+supported, but it is an advanced manual-edit file rather than a first-class UI pane.
+
 Available template placeholders in `user_prompt.txt`:
 
 | Placeholder | Description |
@@ -386,6 +425,8 @@ Available template placeholders in `user_prompt.txt`:
 | `{{dictionary_entries}}` | Filtered dictionary entries for LLM context |
 
 The default prompts are tuned for software developers working in mixed Chinese-English, but you can adapt them for any language or domain.
+If either prompt file is missing or empty, Koe falls back to the built-in defaults
+compiled into `koe-core`.
 
 ## Usage Statistics
 
