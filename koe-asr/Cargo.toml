@@ -1,6 +1,6 @@
 [package]
 name = "koe-asr"
-description = "Streaming ASR (Automatic Speech Recognition) client for Volcengine/Doubao and Aliyun"
+description = "Streaming ASR (Automatic Speech Recognition) library with multiple provider backends (Doubao, Qwen, Apple Speech, MLX Whisper, Sherpa-ONNX)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
