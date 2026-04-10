@@ -528,9 +528,7 @@ async fn ensure_credentials(credential_path: &Path) -> Result<DeviceCredentials>
         log::info!(
             "[DoubaoIME] Using cached credentials (device_id={}, token_age={}s)",
             creds.device_id,
-            unix_timestamp_ms()
-                .saturating_sub(creds.token_updated_at_ms)
-                / 1000
+            unix_timestamp_ms().saturating_sub(creds.token_updated_at_ms) / 1000
         );
         return Ok(creds);
     }
@@ -553,9 +551,7 @@ async fn ensure_credentials(credential_path: &Path) -> Result<DeviceCredentials>
         }
         Err(err) => {
             if !creds.token.is_empty() {
-                log::warn!(
-                    "[DoubaoIME] Token refresh failed, falling back to cached token: {err}"
-                );
+                log::warn!("[DoubaoIME] Token refresh failed, falling back to cached token: {err}");
                 Ok(creds)
             } else {
                 Err(err)
