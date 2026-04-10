@@ -87,6 +87,28 @@ static void bridge_on_interim_text(uint64_t token, const char *text) {
     }
 }
 
+static void bridge_on_asr_final_text(uint64_t token, const char *text) {
+    NSString *txt = text ? [NSString stringWithUTF8String:text] : @"";
+    id<SPRustBridgeDelegate> delegate = _bridgeDelegate;
+    if (delegate) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (token != _currentSessionToken) return;
+            [delegate rustBridgeDidReceiveAsrFinalText:txt];
+        });
+    }
+}
+
+static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
+    NSString *txt = text ? [NSString stringWithUTF8String:text] : @"";
+    id<SPRustBridgeDelegate> delegate = _bridgeDelegate;
+    if (delegate) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (token != _currentSessionToken) return;
+            [delegate rustBridgeDidReceiveRewriteText:txt];
+        });
+    }
+}
+
 // ─── Download callback context ─────────────────────────────────────
 
 @interface _KoeDownloadContext : NSObject
@@ -127,6 +149,8 @@ static void bridge_on_interim_text(uint64_t token, const char *text) {
         .on_log_event = bridge_on_log_event,
         .on_state_changed = bridge_on_state_changed,
         .on_interim_text = bridge_on_interim_text,
+        .on_asr_final_text = bridge_on_asr_final_text,
+        .on_rewrite_text_ready = bridge_on_rewrite_text_ready,
     };
     sp_core_register_callbacks(callbacks);
 
@@ -274,6 +298,30 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
 
 - (NSInteger)removeModelFiles:(NSString *)modelPath {
     return sp_core_remove_model_files(modelPath.UTF8String);
+}
+
+// ─── Rewrite / Prompt Templates ───────────────────────────────────
+
+- (NSArray<NSDictionary *> *)promptTemplates {
+    char *json = sp_core_get_prompt_templates_json();
+    if (!json) return @[];
+    NSString *jsonStr = [NSString stringWithUTF8String:json];
+    sp_core_free_string(json);
+    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) return @[];
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return arr ?: @[];
+}
+
+- (BOOL)setPromptTemplates:(NSArray<NSDictionary *> *)templates {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:templates options:0 error:nil];
+    if (!data) return NO;
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return sp_core_set_prompt_templates_json(json.UTF8String) == 0;
+}
+
+- (BOOL)rewriteWithTemplateIndex:(NSInteger)index asrText:(NSString *)text {
+    return sp_core_rewrite_with_template((int32_t)index, text.UTF8String) == 0;
 }
 
 @end

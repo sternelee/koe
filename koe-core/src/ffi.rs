@@ -48,6 +48,12 @@ pub struct SPCallbacks {
     /// Called when an interim (partial) ASR result arrives during recording
     /// text is a UTF-8 C string, caller must NOT free it
     pub on_interim_text: Option<extern "C" fn(token: u64, text: *const c_char)>,
+    /// Called when ASR finalization completes with the final recognized text,
+    /// before LLM correction begins. Used to display ASR result in the overlay.
+    pub on_asr_final_text: Option<extern "C" fn(token: u64, text: *const c_char)>,
+    /// Called when a rewrite (using an alternative prompt template) completes.
+    /// text is a UTF-8 C string, caller must NOT free it.
+    pub on_rewrite_text_ready: Option<extern "C" fn(token: u64, text: *const c_char)>,
 }
 
 static CALLBACKS: Mutex<Option<SPCallbacks>> = Mutex::new(None);
@@ -126,6 +132,26 @@ pub fn invoke_interim_text(token: u64, text: &str) {
     }
 }
 
+pub fn invoke_asr_final_text(token: u64, text: &str) {
+    let cb = CALLBACKS.lock().unwrap();
+    if let Some(ref cbs) = *cb {
+        if let Some(f) = cbs.on_asr_final_text {
+            let c_text = CString::new(text).unwrap_or_default();
+            f(token, c_text.as_ptr());
+        }
+    }
+}
+
+pub fn invoke_rewrite_text_ready(token: u64, text: &str) {
+    let cb = CALLBACKS.lock().unwrap();
+    if let Some(ref cbs) = *cb {
+        if let Some(f) = cbs.on_rewrite_text_ready {
+            let c_text = CString::new(text).unwrap_or_default();
+            f(token, c_text.as_ptr());
+        }
+    }
+}
+
 /// Feedback configuration exposed to the Obj-C layer
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -143,14 +169,14 @@ pub struct SPHotkeyConfig {
     pub trigger_key_code: u16,
     /// Trigger hotkey alternative key code (e.g. 179 for Globe key), 0 if none
     pub trigger_alt_key_code: u16,
-    /// Trigger hotkey modifier flag (e.g. 0x800000 for Fn)
+    /// Trigger hotkey modifier flag. For modifier-only hotkeys this is the
+    /// observed key-state flag; for keyDown hotkeys this is the required
+    /// generic modifier mask.
     pub trigger_modifier_flag: u64,
-    /// Cancel hotkey primary key code
-    pub cancel_key_code: u16,
-    /// Cancel hotkey alternative key code, 0 if none
-    pub cancel_alt_key_code: u16,
-    /// Cancel hotkey modifier flag
-    pub cancel_modifier_flag: u64,
+    /// Trigger hotkey match kind: 0 = modifier-only, 1 = keyDown/keyUp.
+    pub trigger_match_kind: u8,
+    /// Trigger mode: 0 = hold (press-and-hold), 1 = toggle (tap to start/stop)
+    pub trigger_mode: u8,
 }
 
 /// Helper to convert a C string pointer to a Rust &str

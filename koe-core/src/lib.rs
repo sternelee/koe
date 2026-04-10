@@ -11,9 +11,10 @@ pub mod telemetry;
 
 use crate::config::Config;
 use crate::ffi::{
-    cstr_to_str, invoke_final_text_ready, invoke_interim_text, invoke_session_error,
-    invoke_session_ready, invoke_session_warning, invoke_state_changed, SPCallbacks,
-    SPFeedbackConfig, SPHotkeyConfig, SPSessionContext, SPSessionMode,
+    cstr_to_str, invoke_asr_final_text, invoke_final_text_ready, invoke_interim_text,
+    invoke_rewrite_text_ready, invoke_session_error, invoke_session_ready,
+    invoke_session_warning, invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPHotkeyConfig,
+    SPSessionContext, SPSessionMode,
 };
 #[cfg(feature = "mlx")]
 use crate::llm::mlx::MlxLlmProvider;
@@ -34,6 +35,7 @@ use koe_asr::{MlxConfig, MlxProvider};
 use koe_asr::{SherpaOnnxConfig, SherpaOnnxProvider};
 use reqwest::Client;
 
+use std::collections::HashSet;
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -67,6 +69,9 @@ struct Core {
     user_prompt_template: String,
     llm_http_client: Client,
     llm_warmup_state: Arc<Mutex<LlmWarmupState>>,
+    /// Session token from the most recent sp_core_session_begin call.
+    /// Used by sp_core_rewrite_with_template to route callbacks.
+    current_session_token: u64,
 }
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
@@ -146,6 +151,7 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         user_prompt_template,
         llm_http_client,
         llm_warmup_state: Arc::new(Mutex::new(LlmWarmupState::default())),
+        current_session_token: 0,
     };
 
     let mut global = CORE.lock().unwrap();
@@ -269,6 +275,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let session = Session::new(context.mode, bundle_id, context.frontmost_pid);
     let session_id = session.id.clone();
     let session_token = context.session_token;
+    core.current_session_token = session_token;
     let mode = context.mode;
 
     // Abort any still-running old session: signal its cancelled flag and close
@@ -540,6 +547,252 @@ pub extern "C" fn sp_core_session_cancel() -> i32 {
     0
 }
 
+fn validate_prompt_templates(templates: &[config::PromptTemplate]) -> std::result::Result<(), String> {
+    if templates.len() > 9 {
+        return Err("Prompt templates are limited to 9 entries.".into());
+    }
+
+    let mut used_shortcuts = HashSet::new();
+    for template in templates {
+        if !(1..=9).contains(&template.shortcut) {
+            return Err(format!(
+                "Template '{}' uses invalid shortcut {}. Shortcuts must be between 1 and 9.",
+                template.name, template.shortcut
+            ));
+        }
+        if !used_shortcuts.insert(template.shortcut) {
+            return Err(format!(
+                "Duplicate template shortcut {} detected. Each template needs a unique shortcut.",
+                template.shortcut
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Return prompt templates as JSON array.
+/// Each entry mirrors config::PromptTemplate for lossless round-tripping.
+/// Caller must free with sp_core_free_string().
+#[no_mangle]
+pub extern "C" fn sp_core_get_prompt_templates_json() -> *mut c_char {
+    let global = CORE.lock().unwrap();
+    if let Some(ref core) = *global {
+        let json = serde_json::to_string(&core.config.prompt_templates).unwrap_or_else(|_| "[]".into());
+        CString::new(json).unwrap_or_default().into_raw()
+    } else {
+        CString::new("[]").unwrap_or_default().into_raw()
+    }
+}
+
+/// Set prompt templates from a JSON array string.
+/// Each entry: {"name":"...", "shortcut":N, "system_prompt":"..."}
+/// Writes to config.yaml and reloads config.
+///
+/// # Safety
+/// `json_str` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn sp_core_set_prompt_templates_json(json_str: *const c_char) -> i32 {
+    let json = match unsafe { cstr_to_str(json_str) } {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    let templates: Vec<config::PromptTemplate> = match serde_json::from_str(json) {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("sp_core_set_prompt_templates_json: parse error: {e}");
+            return -1;
+        }
+    };
+    if let Err(message) = validate_prompt_templates(&templates) {
+        log::error!("sp_core_set_prompt_templates_json: validation error: {message}");
+        return -1;
+    }
+
+    // Update config file
+    let path = config::config_path();
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut root: serde_yaml::Value = if raw.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        match serde_yaml::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("sp_core_set_prompt_templates_json: yaml parse error: {e}");
+                return -1;
+            }
+        }
+    };
+
+    // Serialize templates to YAML value
+    let yaml_templates = match serde_yaml::to_value(&templates) {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("sp_core_set_prompt_templates_json: serialize error: {e}");
+            return -1;
+        }
+    };
+
+    if let Some(mapping) = root.as_mapping_mut() {
+        mapping.insert(
+            serde_yaml::Value::String("prompt_templates".into()),
+            yaml_templates,
+        );
+    }
+
+    let serialized = match serde_yaml::to_string(&root) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("sp_core_set_prompt_templates_json: serialize error: {e}");
+            return -1;
+        }
+    };
+
+    if let Err(e) = config::atomic_write_config(&serialized) {
+        log::error!("sp_core_set_prompt_templates_json: write error: {e}");
+        return -1;
+    }
+
+    // Reload config in core
+    let mut global = CORE.lock().unwrap();
+    if let Some(ref mut core) = *global {
+        match config::load_config() {
+            Ok(cfg) => core.config = cfg,
+            Err(e) => log::error!("sp_core_set_prompt_templates_json: reload error: {e}"),
+        }
+    }
+
+    0
+}
+
+/// Rewrite ASR text using a specific prompt template.
+/// template_index is 0-based into the prompt_templates array.
+/// The rewrite runs asynchronously; result delivered via on_rewrite_text_ready callback.
+///
+/// # Safety
+/// `asr_text_ptr` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn sp_core_rewrite_with_template(
+    template_index: i32,
+    asr_text_ptr: *const c_char,
+) -> i32 {
+    let asr_text = match unsafe { cstr_to_str(asr_text_ptr) } {
+        Some(s) => s.to_string(),
+        None => return -1,
+    };
+
+    let global = CORE.lock().unwrap();
+    let core = match global.as_ref() {
+        Some(c) => c,
+        None => return -1,
+    };
+
+    let idx = template_index as usize;
+    let template = match core.config.prompt_templates.get(idx) {
+        Some(t) => t.clone(),
+        None => {
+            log::error!(
+                "sp_core_rewrite_with_template: invalid index {idx}"
+            );
+            return -1;
+        }
+    };
+
+    let template_system_prompt = match template.resolve_system_prompt() {
+        Some(p) => p,
+        None => {
+            log::error!(
+                "sp_core_rewrite_with_template: no system prompt for template '{}'",
+                template.name
+            );
+            return -1;
+        }
+    };
+
+    // Gather LLM config and dependencies
+    let llm_config = core.config.llm.clone();
+    let dictionary = core.dictionary.clone();
+    let user_prompt_template = core.user_prompt_template.clone();
+    let llm_http_client = core.llm_http_client.clone();
+    let session_token = core.current_session_token;
+    let runtime_handle = core.runtime.handle().clone();
+
+    drop(global); // Release lock before spawning
+
+    runtime_handle.spawn(async move {
+        log::info!(
+            "rewrite: using template '{}' with {} chars of ASR text",
+            template.name,
+            asr_text.len()
+        );
+
+        let llm: Box<dyn LlmProvider> = match llm_config.provider.as_str() {
+            #[cfg(feature = "mlx")]
+            "mlx" => {
+                let model_path = config::resolve_model_dir(&llm_config.mlx.model)
+                    .to_string_lossy()
+                    .to_string();
+                Box::new(MlxLlmProvider::new(
+                    model_path,
+                    llm_config.temperature,
+                    llm_config.top_p,
+                    llm_config.max_output_tokens,
+                    llm_config.timeout_ms,
+                ))
+            }
+            _ => Box::new(OpenAiCompatibleProvider::new(
+                llm_http_client,
+                llm_config.base_url.clone(),
+                llm_config.api_key.clone(),
+                llm_config.model.clone(),
+                llm_config.temperature,
+                llm_config.top_p,
+                llm_config.max_output_tokens,
+                llm_config.max_token_parameter,
+                llm_config.no_reasoning_control,
+            )),
+        };
+
+        let candidates = prompt::filter_dictionary_candidates(
+            &dictionary,
+            &asr_text,
+            llm_config.dictionary_max_candidates,
+        );
+        let user_prompt =
+            prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, &[]);
+
+        let request = CorrectionRequest {
+            asr_text: asr_text.clone(),
+            dictionary_entries: candidates,
+            system_prompt: template_system_prompt,
+            user_prompt,
+        };
+
+        match llm.correct(&request).await {
+            Ok(result) => {
+                log::info!(
+                    "rewrite: template '{}' produced {} chars",
+                    template.name,
+                    result.len()
+                );
+                invoke_rewrite_text_ready(session_token, &result);
+            }
+            Err(e) => {
+                log::error!("rewrite: template '{}' failed: {e}", template.name);
+                invoke_session_warning(
+                    session_token,
+                    &format!("Rewrite failed: {e}"),
+                );
+                // Fall back to original ASR text
+                invoke_rewrite_text_ready(session_token, &asr_text);
+            }
+        }
+    });
+
+    0
+}
+
 /// Query current feedback configuration.
 #[no_mangle]
 pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
@@ -560,28 +813,27 @@ pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
 }
 
 /// Query current hotkey configuration.
-/// Returns key codes and modifier flags for the configured trigger/cancel keys.
+/// Returns key codes and modifier flags for the configured trigger key.
 #[no_mangle]
 pub extern "C" fn sp_core_get_hotkey_config() -> SPHotkeyConfig {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
         let params = core.config.hotkey.resolve();
+        let trigger_mode: u8 = if core.config.hotkey.trigger_mode == "toggle" { 1 } else { 0 };
         SPHotkeyConfig {
-            trigger_key_code: params.trigger.key_code,
-            trigger_alt_key_code: params.trigger.alt_key_code,
-            trigger_modifier_flag: params.trigger.modifier_flag,
-            cancel_key_code: params.cancel.key_code,
-            cancel_alt_key_code: params.cancel.alt_key_code,
-            cancel_modifier_flag: params.cancel.modifier_flag,
+            trigger_key_code: params.key_code,
+            trigger_alt_key_code: params.alt_key_code,
+            trigger_modifier_flag: params.modifier_flag,
+            trigger_match_kind: params.match_kind as u8,
+            trigger_mode,
         }
     } else {
         SPHotkeyConfig {
             trigger_key_code: 63,
             trigger_alt_key_code: 179,
             trigger_modifier_flag: 0x00800000,
-            cancel_key_code: 58,
-            cancel_alt_key_code: 0,
-            cancel_modifier_flag: 0x00000020,
+            trigger_match_kind: 0,
+            trigger_mode: 0,
         }
     }
 }
@@ -748,10 +1000,11 @@ async fn run_session(
 
     let asr_text = aggregator.best_text().to_string();
     if asr_text.is_empty() {
-        log::warn!("[{session_id}] no ASR text available: no speech recognized");
-        invoke_session_error(session_token, "no speech recognized");
-        invoke_state_changed(session_token, "failed");
+        // A silent recording is a valid no-op, not a user-visible failure.
+        // Exit quietly so the app returns to idle without error sounds or alerts.
+        log::info!("[{session_id}] no ASR text available: treating silent recording as empty result");
         cleanup_session(&session_arc);
+        invoke_state_changed(session_token, "idle");
         return;
     }
 
@@ -769,6 +1022,10 @@ async fn run_session(
             session.asr_text = Some(asr_text.clone());
         }
     }
+
+    // Notify ObjC of the final ASR text so the overlay can display it
+    // during the LLM correction phase.
+    invoke_asr_final_text(session_token, &asr_text);
 
     // --- LLM Correction ---
     // Check cancellation before the (potentially slow) LLM call so that an
@@ -1152,19 +1409,8 @@ pub unsafe extern "C" fn sp_config_set(key_path: *const c_char, value: *const c_
 #[no_mangle]
 pub extern "C" fn sp_config_resolved_trigger_key() -> *mut c_char {
     let key = match config::load_config() {
-        Ok(cfg) => cfg.hotkey.normalized_keys().0,
+        Ok(cfg) => cfg.hotkey.normalized_trigger_key(),
         Err(_) => "fn".into(),
-    };
-    CString::new(key).unwrap_or_default().into_raw()
-}
-
-/// Returns the resolved cancel hotkey name after normalization and dedup.
-/// The caller must free the returned string with sp_core_free_string().
-#[no_mangle]
-pub extern "C" fn sp_config_resolved_cancel_key() -> *mut c_char {
-    let key = match config::load_config() {
-        Ok(cfg) => cfg.hotkey.normalized_keys().1,
-        Err(_) => "left_option".into(),
     };
     CString::new(key).unwrap_or_default().into_raw()
 }
@@ -1211,6 +1457,7 @@ pub unsafe extern "C" fn sp_llm_test(
     // Build an LlmSection that merges UI-editable fields with disk config
     let llm_cfg = config::LlmSection {
         enabled: true,
+        prompt_templates_enabled: cfg.llm.prompt_templates_enabled,
         provider: "openai".into(),
         base_url,
         api_key,
@@ -1547,10 +1794,10 @@ mod tests {
 
     /// Simulates the post-ASR decision: should the session fail?
     /// Mirrors the logic from run_session after asr.close().
-    fn should_fail_session(asr_error: &Option<String>, asr_text: &str) -> bool {
-        // Fail if there was an error (regardless of accumulated text)
-        // or if there's no text at all
-        asr_error.is_some() || asr_text.is_empty()
+    fn should_fail_session(asr_error: &Option<String>, _asr_text: &str) -> bool {
+        // Only real ASR errors should fail the session.
+        // An empty transcript is treated as a quiet no-op.
+        asr_error.is_some()
     }
 
     #[test]
@@ -1572,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    fn no_error_no_text_fails() {
-        assert!(should_fail_session(&None, ""));
+    fn no_error_no_text_does_not_fail() {
+        assert!(!should_fail_session(&None, ""));
     }
 }

@@ -1,6 +1,8 @@
 #import "SPSetupWizardWindowController.h"
+#import "SPOverlayPanel.h"
 #import "SPRustBridge.h"
 #import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>
 #import <Speech/Speech.h>
 
 // Apple Speech asset management FFI (KoeAppleSpeech Swift package)
@@ -17,13 +19,30 @@ extern uint8_t *koe_apple_speech_supported_locales(uint32_t *outLen);
 static NSString *const kConfigDir = @".koe";
 static NSString *const kDictionaryFile = @"dictionary.txt";
 static NSString *const kSystemPromptFile = @"system_prompt.txt";
+static NSString *const kTemplateEditablePromptKey = @"__editable_prompt";
+static NSString *const kTemplateOriginalPromptKey = @"__original_prompt";
+static NSString *const kOverlayFontFamilyDefault = @"system";
+static NSString *const kOverlayFontFamilySystemLabel = @"System Default";
+static const NSInteger kOverlayFontSizeDefault = 13;
+static const NSInteger kOverlayFontSizeMin = 12;
+static const NSInteger kOverlayFontSizeMax = 28;
+static const NSInteger kOverlayBottomMarginDefault = 10;
+static const NSInteger kOverlayBottomMarginMax = 180;
+static const BOOL kOverlayLimitVisibleLinesDefault = YES;
+static const NSInteger kOverlayMaxVisibleLinesDefault = 3;
+static const NSInteger kOverlayMaxVisibleLinesMin = 3;
+static const NSInteger kOverlayMaxVisibleLinesMax = 5;
+static NSString *const kOverlayPreviewSampleText = @"今天下午三点我们先开评审会，然后把设计方案、PR 评论和接口联调一起过一遍；如果我这段话持续很久，也希望底部实时字幕保持稳定，不要遮住文字边缘，同时完整保留整段转写内容。";
 
 // Toolbar item identifiers
 static NSToolbarItemIdentifier const kToolbarASR = @"asr";
 static NSToolbarItemIdentifier const kToolbarLLM = @"llm";
+static NSToolbarItemIdentifier const kToolbarOverlay = @"overlay";
 static NSToolbarItemIdentifier const kToolbarHotkey = @"hotkey";
 static NSToolbarItemIdentifier const kToolbarDictionary = @"dictionary";
 static NSToolbarItemIdentifier const kToolbarSystemPrompt = @"system_prompt";
+static NSToolbarItemIdentifier const kToolbarTemplates = @"templates";
+static NSToolbarItemIdentifier const kToolbarAbout = @"about";
 
 // ─── Config helpers (backed by sp_config_get / sp_config_set) ───────
 #import "koe_core.h"
@@ -45,6 +64,84 @@ static BOOL configSet(NSString *keyPath, NSString *value) {
     return sp_config_set(keyPath.UTF8String, (value ?: @"").UTF8String) == 0;
 }
 
+static NSInteger clampedOverlayFontSizeValue(NSInteger value) {
+    return MAX(kOverlayFontSizeMin, MIN(kOverlayFontSizeMax, value));
+}
+
+static NSInteger clampedOverlayBottomMarginValue(NSInteger value) {
+    return MAX(0, MIN(kOverlayBottomMarginMax, value));
+}
+
+static NSInteger clampedOverlayMaxVisibleLinesValue(NSInteger value) {
+    return MAX(kOverlayMaxVisibleLinesMin, MIN(kOverlayMaxVisibleLinesMax, value));
+}
+
+static BOOL overlayLimitVisibleLinesEnabledValue(NSString *value) {
+    NSString *normalized = [[[value ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString] copy];
+    if (normalized.length == 0) {
+        return kOverlayLimitVisibleLinesDefault;
+    }
+
+    if ([normalized isEqualToString:@"1"] ||
+        [normalized isEqualToString:@"true"] ||
+        [normalized isEqualToString:@"yes"] ||
+        [normalized isEqualToString:@"on"]) {
+        return YES;
+    }
+
+    if ([normalized isEqualToString:@"0"] ||
+        [normalized isEqualToString:@"false"] ||
+        [normalized isEqualToString:@"no"] ||
+        [normalized isEqualToString:@"off"]) {
+        return NO;
+    }
+
+    return kOverlayLimitVisibleLinesDefault;
+}
+
+static NSString *normalizedOverlayFontFamilyValue(NSString *value) {
+    NSString *normalized = [[value ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+    if (normalized.length == 0) {
+        return kOverlayFontFamilyDefault;
+    }
+    return normalized;
+}
+
+static BOOL overlayUsesSystemFontFamily(NSString *value) {
+    return [normalizedOverlayFontFamilyValue(value) caseInsensitiveCompare:kOverlayFontFamilyDefault] == NSOrderedSame;
+}
+
+static NSFont *overlayFontForFamily(NSString *fontFamily, CGFloat fontSize) {
+    CGFloat clampedFontSize = clampedOverlayFontSizeValue(lround(fontSize));
+    NSString *normalized = normalizedOverlayFontFamilyValue(fontFamily);
+
+    if (overlayUsesSystemFontFamily(normalized)) {
+        return [NSFont systemFontOfSize:clampedFontSize weight:NSFontWeightMedium];
+    }
+
+    NSFont *font = [NSFont fontWithName:normalized size:clampedFontSize];
+    if (font) {
+        return font;
+    }
+
+    NSFontManager *fontManager = [NSFontManager sharedFontManager];
+    font = [fontManager fontWithFamily:normalized traits:0 weight:5 size:clampedFontSize];
+    if (font) {
+        return font;
+    }
+
+    for (NSArray *member in [fontManager availableMembersOfFontFamily:normalized]) {
+        if (member.count == 0) continue;
+        NSString *memberName = member[0];
+        font = [NSFont fontWithName:memberName size:clampedFontSize];
+        if (font) {
+            return font;
+        }
+    }
+
+    return [NSFont systemFontOfSize:clampedFontSize weight:NSFontWeightMedium];
+}
+
 static BOOL isNumericKeycode(NSString *value) {
     if (value.length == 0) return NO;
     NSScanner *scanner = [NSScanner scannerWithString:value];
@@ -52,7 +149,83 @@ static BOOL isNumericKeycode(NSString *value) {
     return [scanner scanInt:&intValue] && [scanner isAtEnd];
 }
 
-static NSString *normalizedHotkeyValue(NSString *value) {
+static NSString *displayCharacterForKeycode(NSInteger keycode) {
+    TISInputSourceRef inputSource = TISCopyCurrentKeyboardLayoutInputSource();
+    if (!inputSource) return nil;
+
+    CFDataRef layoutData = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData);
+    if (!layoutData) {
+        CFRelease(inputSource);
+        return nil;
+    }
+
+    const UCKeyboardLayout *keyboardLayout = (const UCKeyboardLayout *)CFDataGetBytePtr(layoutData);
+    if (!keyboardLayout) {
+        CFRelease(inputSource);
+        return nil;
+    }
+
+    UInt32 deadKeyState = 0;
+    UniChar chars[4];
+    UniCharCount length = 0;
+    OSStatus status = UCKeyTranslate(keyboardLayout,
+                                     (UInt16)keycode,
+                                     kUCKeyActionDisplay,
+                                     0,
+                                     LMGetKbdType(),
+                                     kUCKeyTranslateNoDeadKeysBit,
+                                     &deadKeyState,
+                                     sizeof(chars) / sizeof(chars[0]),
+                                     &length,
+                                     chars);
+    CFRelease(inputSource);
+
+    if (status != noErr || length == 0) return nil;
+
+    NSString *result = [[NSString stringWithCharacters:chars length:(NSUInteger)length]
+        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (result.length == 0) return nil;
+    return result.uppercaseString;
+}
+
+static NSString *displayNameForKeycodeValue(NSString *value) {
+    NSInteger keycode = value.integerValue;
+    switch (keycode) {
+        case 122: return @"F1";
+        case 120: return @"F2";
+        case 99:  return @"F3";
+        case 118: return @"F4";
+        case 96:  return @"F5";
+        case 97:  return @"F6";
+        case 98:  return @"F7";
+        case 100: return @"F8";
+        case 101: return @"F9";
+        case 109: return @"F10";
+        case 103: return @"F11";
+        case 111: return @"F12";
+        case 49:  return @"Space";
+        case 53:  return @"Escape";
+        case 48:  return @"Tab";
+        case 57:  return @"Caps Lock";
+        case 36:  return @"Return";
+        case 51:  return @"Delete";
+        case 117: return @"Forward Delete";
+        case 115: return @"Home";
+        case 119: return @"End";
+        case 116: return @"Page Up";
+        case 121: return @"Page Down";
+        case 123: return @"Left Arrow";
+        case 124: return @"Right Arrow";
+        case 125: return @"Down Arrow";
+        case 126: return @"Up Arrow";
+        default: {
+            NSString *displayCharacter = displayCharacterForKeycode(keycode);
+            return displayCharacter.length > 0 ? displayCharacter : [NSString stringWithFormat:@"Key %ld", (long)keycode];
+        }
+    }
+}
+
+static NSSet<NSString *> *presetHotkeyValues(void) {
     static NSSet<NSString *> *validValues;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -66,58 +239,169 @@ static NSString *normalizedHotkeyValue(NSString *value) {
             @"right_control",
         ]];
     });
-    if ([validValues containsObject:value]) return value;
-    if (isNumericKeycode(value)) return value;
+    return validValues;
+}
+
+static NSArray<NSString *> *comboModifierOrder(void) {
+    return @[@"command", @"option", @"control", @"shift", @"fn"];
+}
+
+static NSDictionary<NSString *, NSString *> *comboModifierDisplayNames(void) {
+    static NSDictionary<NSString *, NSString *> *displayNames;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        displayNames = @{
+            @"command": @"Command",
+            @"option": @"Option",
+            @"control": @"Control",
+            @"shift": @"Shift",
+            @"fn": @"Fn",
+        };
+    });
+    return displayNames;
+}
+
+static NSString *normalizedHotkeyComboValue(NSString *value) {
+    if (![value containsString:@"+"]) return nil;
+
+    NSMutableOrderedSet<NSString *> *modifiers = [NSMutableOrderedSet orderedSet];
+    NSString *keyToken = nil;
+
+    for (NSString *rawPart in [value componentsSeparatedByString:@"+"]) {
+        NSString *part = [[rawPart stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+        if (part.length == 0) return nil;
+
+        NSString *normalizedModifier = nil;
+        if ([part isEqualToString:@"cmd"] || [part isEqualToString:@"command"]) {
+            normalizedModifier = @"command";
+        } else if ([part isEqualToString:@"alt"] || [part isEqualToString:@"option"]) {
+            normalizedModifier = @"option";
+        } else if ([part isEqualToString:@"ctrl"] || [part isEqualToString:@"control"]) {
+            normalizedModifier = @"control";
+        } else if ([part isEqualToString:@"shift"]) {
+            normalizedModifier = @"shift";
+        } else if ([part isEqualToString:@"fn"] || [part isEqualToString:@"function"] || [part isEqualToString:@"globe"]) {
+            normalizedModifier = @"fn";
+        }
+
+        if (normalizedModifier) {
+            [modifiers addObject:normalizedModifier];
+            continue;
+        }
+
+        if (keyToken != nil || !isNumericKeycode(part)) {
+            return nil;
+        }
+        keyToken = [NSString stringWithFormat:@"%ld", (long)part.integerValue];
+    }
+
+    if (modifiers.count == 0 || keyToken.length == 0) return nil;
+
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (NSString *modifier in comboModifierOrder()) {
+        if ([modifiers containsObject:modifier]) {
+            [parts addObject:modifier];
+        }
+    }
+    [parts addObject:keyToken];
+    return [parts componentsJoinedByString:@"+"];
+}
+
+static NSString *normalizedHotkeyValue(NSString *value) {
+    NSString *trimmedValue = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([presetHotkeyValues() containsObject:trimmedValue]) return trimmedValue;
+    if (isNumericKeycode(trimmedValue)) {
+        return [NSString stringWithFormat:@"%ld", (long)trimmedValue.integerValue];
+    }
+    NSString *normalizedCombo = normalizedHotkeyComboValue(trimmedValue);
+    if (normalizedCombo.length > 0) return normalizedCombo;
     return @"fn";
 }
 
-static NSString *displayNameForCustomKeycode(NSString *value) {
-    int keycode = value.intValue;
-    switch (keycode) {
-        case 122: return @"F1 (Keycode 122)";
-        case 120: return @"F2 (Keycode 120)";
-        case 99:  return @"F3 (Keycode 99)";
-        case 118: return @"F4 (Keycode 118)";
-        case 96:  return @"F5 (Keycode 96)";
-        case 97:  return @"F6 (Keycode 97)";
-        case 98:  return @"F7 (Keycode 98)";
-        case 100: return @"F8 (Keycode 100)";
-        case 101: return @"F9 (Keycode 101)";
-        case 109: return @"F10 (Keycode 109)";
-        case 103: return @"F11 (Keycode 103)";
-        case 111: return @"F12 (Keycode 111)";
-        case 49:  return @"Space (Keycode 49)";
-        case 53:  return @"Escape (Keycode 53)";
-        case 48:  return @"Tab (Keycode 48)";
-        case 57:  return @"CapsLock (Keycode 57)";
-        default:  return [NSString stringWithFormat:@"Keycode %d", keycode];
+static NSString *displayNameForHotkeyValue(NSString *value) {
+    NSString *normalizedValue = normalizedHotkeyValue(value);
+    if ([normalizedValue isEqualToString:@"left_option"]) return @"Left Option (⌥)";
+    if ([normalizedValue isEqualToString:@"right_option"]) return @"Right Option (⌥)";
+    if ([normalizedValue isEqualToString:@"left_command"]) return @"Left Command (⌘)";
+    if ([normalizedValue isEqualToString:@"right_command"]) return @"Right Command (⌘)";
+    if ([normalizedValue isEqualToString:@"left_control"]) return @"Left Control (⌃)";
+    if ([normalizedValue isEqualToString:@"right_control"]) return @"Right Control (⌃)";
+    if ([normalizedValue isEqualToString:@"fn"]) return @"Fn (Globe)";
+    NSString *normalizedCombo = normalizedHotkeyComboValue(normalizedValue);
+    if (normalizedCombo.length > 0) {
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        NSArray<NSString *> *tokens = [normalizedCombo componentsSeparatedByString:@"+"];
+        NSDictionary<NSString *, NSString *> *displayNames = comboModifierDisplayNames();
+        for (NSInteger idx = 0; idx < (NSInteger)tokens.count; idx++) {
+            NSString *token = tokens[idx];
+            if (idx == (NSInteger)tokens.count - 1) {
+                [parts addObject:displayNameForKeycodeValue(token)];
+            } else {
+                [parts addObject:displayNames[token] ?: token.capitalizedString];
+            }
+        }
+        return [parts componentsJoinedByString:@" + "];
     }
+    if (isNumericKeycode(normalizedValue)) return displayNameForKeycodeValue(normalizedValue);
+    return normalizedValue;
 }
 
-/// If the value is a numeric keycode, add a custom item to the popup and select it.
-static void ensureCustomKeycodeInPopup(NSPopUpButton *popup, NSString *value) {
-    if (!isNumericKeycode(value)) return;
-    NSString *title = displayNameForCustomKeycode(value);
-    [popup addItemWithTitle:title];
-    [popup lastItem].representedObject = value;
+static BOOL hotkeyValueUsesCustomPopupItem(NSString *value) {
+    NSString *normalizedValue = normalizedHotkeyValue(value);
+    return isNumericKeycode(normalizedValue) || normalizedHotkeyComboValue(normalizedValue).length > 0;
+}
+
+/// If the value is a custom hotkey (recorded combo or raw keycode), add a
+/// custom popup item and select it.
+static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
+    NSString *normalizedValue = normalizedHotkeyValue(value);
+    if (!hotkeyValueUsesCustomPopupItem(normalizedValue)) return;
+
+    NSMutableArray<NSMenuItem *> *itemsToRemove = [NSMutableArray array];
+    for (NSMenuItem *item in popup.itemArray) {
+        NSString *representedObject = [item.representedObject isKindOfClass:[NSString class]] ? item.representedObject : nil;
+        if (representedObject.length > 0 &&
+            ![presetHotkeyValues() containsObject:representedObject] &&
+            ![representedObject isEqualToString:normalizedValue]) {
+            [itemsToRemove addObject:item];
+        }
+        if ([representedObject isEqualToString:normalizedValue]) {
+            [popup selectItem:item];
+            return;
+        }
+    }
+
+    for (NSMenuItem *item in itemsToRemove) {
+        [popup.menu removeItem:item];
+    }
+
+    [popup addItemWithTitle:displayNameForHotkeyValue(normalizedValue)];
+    [popup lastItem].representedObject = normalizedValue;
     [popup selectItem:[popup lastItem]];
 }
 
-static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
-    if (isNumericKeycode(triggerKey)) return @"left_option";
-    NSString *normalizedTrigger = normalizedHotkeyValue(triggerKey);
-    if ([normalizedTrigger isEqualToString:@"fn"]) return @"left_option";
-    if ([normalizedTrigger isEqualToString:@"left_option"]) return @"right_option";
-    if ([normalizedTrigger isEqualToString:@"right_option"]) return @"left_command";
-    if ([normalizedTrigger isEqualToString:@"left_command"]) return @"right_command";
-    if ([normalizedTrigger isEqualToString:@"right_command"]) return @"left_control";
-    if ([normalizedTrigger isEqualToString:@"left_control"]) return @"right_control";
-    return @"fn";
+@interface SPTemplateRowView : NSTableRowView
+@end
+
+@implementation SPTemplateRowView
+
+- (void)drawSelectionInRect:(NSRect)dirtyRect {
+    if (!self.isSelected) return;
+
+    NSRect selectionRect = NSInsetRect(self.bounds, 2.0, 2.0);
+    NSBezierPath *selectionPath = [NSBezierPath bezierPathWithRoundedRect:selectionRect xRadius:8.0 yRadius:8.0];
+    [[NSColor colorWithRed:0.231 green:0.431 blue:0.902 alpha:0.08] setFill];
+    [selectionPath fill];
 }
+
+- (void)drawSeparatorInRect:(NSRect)dirtyRect {
+}
+
+@end
 
 // ─── Window Controller ──────────────────────────────────────────────
 
-@interface SPSetupWizardWindowController () <NSToolbarDelegate>
+@interface SPSetupWizardWindowController () <NSToolbarDelegate, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate>
 
 // Current pane
 @property (nonatomic, copy) NSString *currentPaneIdentifier;
@@ -150,7 +434,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 @property (nonatomic, strong) NSPopUpButton *appleSpeechLocalePopup;
 
 // LLM fields
-@property (nonatomic, strong) NSButton *llmEnabledCheckbox;
+@property (nonatomic, strong) NSSwitch *llmEnabledCheckbox;
 @property (nonatomic, strong) NSPopUpButton *llmProviderPopup;
 @property (nonatomic, strong) NSTextField *llmBaseUrlField;
 @property (nonatomic, strong) NSTextField *llmApiKeyField;
@@ -173,16 +457,44 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
 // Hotkey
 @property (nonatomic, strong) NSPopUpButton *hotkeyPopup;
-@property (nonatomic, strong) NSPopUpButton *cancelHotkeyPopup;
-@property (nonatomic, strong) NSButton *startSoundCheckbox;
-@property (nonatomic, strong) NSButton *stopSoundCheckbox;
-@property (nonatomic, strong) NSButton *errorSoundCheckbox;
+@property (nonatomic, strong) NSButton *recordTriggerHotkeyButton;
+@property (nonatomic, strong) NSButton *resetTriggerHotkeyButton;
+@property (nonatomic, strong) id hotkeyRecordingMonitor;
+@property (nonatomic, copy) NSString *recordingHotkeyTarget;
+// Trigger mode
+@property (nonatomic, strong) NSPopUpButton *triggerModePopup;
+@property (nonatomic, strong) NSSwitch *startSoundCheckbox;
+@property (nonatomic, strong) NSSwitch *stopSoundCheckbox;
+@property (nonatomic, strong) NSSwitch *errorSoundCheckbox;
+
+// Overlay
+@property (nonatomic, strong) NSPopUpButton *overlayFontFamilyPopup;
+@property (nonatomic, copy) NSArray<NSString *> *overlayAvailableFontFamilies;
+@property (nonatomic, strong) NSSlider *overlayFontSizeSlider;
+@property (nonatomic, strong) NSTextField *overlayFontSizeValueLabel;
+@property (nonatomic, strong) NSSlider *overlayBottomMarginSlider;
+@property (nonatomic, strong) NSTextField *overlayBottomMarginValueLabel;
+@property (nonatomic, strong) NSSwitch *overlayLimitVisibleLinesSwitch;
+@property (nonatomic, strong) NSPopUpButton *overlayMaxVisibleLinesPopup;
 
 // Dictionary
 @property (nonatomic, strong) NSTextView *dictionaryTextView;
 
 // System Prompt
 @property (nonatomic, strong) NSTextView *systemPromptTextView;
+
+// Templates
+@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *templatesData;
+@property (nonatomic, strong) NSTableView *templatesTableView;
+@property (nonatomic, strong) NSSwitch *templatesEnabledSwitch;
+@property (nonatomic, strong) NSSegmentedControl *templatePrimaryActionsControl;
+@property (nonatomic, strong) NSSegmentedControl *templateReorderActionsControl;
+@property (nonatomic, strong) NSTextField *templateNameField;
+@property (nonatomic, strong) NSSwitch *templateItemEnabledSwitch;
+@property (nonatomic, strong) NSTextView *templatePromptTextView;
+@property (nonatomic, assign) NSInteger selectedTemplateIndex;
+@property (nonatomic, assign) BOOL suppressTemplateSync;
+@property (nonatomic, assign) BOOL templateEditorDirty;
 
 @end
 
@@ -202,6 +514,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     self = [super initWithWindow:window];
     if (self) {
         _verifyQueue = dispatch_queue_create("koe.model.verify", DISPATCH_QUEUE_SERIAL);
+        window.delegate = self;
         [self setupToolbar];
     }
     return self;
@@ -217,6 +530,11 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (void)windowWillClose:(NSNotification *)notification {
+    [self endHotkeyRecording];
+    [self hideRuntimeOverlayPreview];
+}
+
 // ─── Toolbar ────────────────────────────────────────────────────────
 
 - (void)setupToolbar {
@@ -228,15 +546,15 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarSelectableItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
 }
 
 - (NSToolbarItem *)toolbar:(NSToolbar *)toolbar itemForItemIdentifier:(NSToolbarItemIdentifier)itemIdentifier willBeInsertedIntoToolbar:(BOOL)flag {
@@ -250,6 +568,9 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     } else if ([itemIdentifier isEqualToString:kToolbarLLM]) {
         item.label = @"LLM";
         item.image = [NSImage imageWithSystemSymbolName:@"cpu" accessibilityDescription:@"LLM"];
+    } else if ([itemIdentifier isEqualToString:kToolbarOverlay]) {
+        item.label = @"Overlay";
+        item.image = [NSImage imageWithSystemSymbolName:@"captions.bubble" accessibilityDescription:@"Overlay"];
     } else if ([itemIdentifier isEqualToString:kToolbarHotkey]) {
         item.label = @"Controls";
         item.image = [NSImage imageWithSystemSymbolName:@"slider.horizontal.3" accessibilityDescription:@"Controls"];
@@ -259,6 +580,12 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     } else if ([itemIdentifier isEqualToString:kToolbarSystemPrompt]) {
         item.label = @"Prompt";
         item.image = [NSImage imageWithSystemSymbolName:@"text.bubble" accessibilityDescription:@"System Prompt"];
+    } else if ([itemIdentifier isEqualToString:kToolbarTemplates]) {
+        item.label = @"Templates";
+        item.image = [NSImage imageWithSystemSymbolName:@"sparkles" accessibilityDescription:@"Templates"];
+    } else if ([itemIdentifier isEqualToString:kToolbarAbout]) {
+        item.label = @"About";
+        item.image = [NSImage imageWithSystemSymbolName:@"info.circle" accessibilityDescription:@"About"];
     }
 
     return item;
@@ -272,6 +599,15 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
 
 - (void)switchToPane:(NSString *)identifier {
     if ([self.currentPaneIdentifier isEqualToString:identifier]) return;
+
+    // Save template edits before switching away
+    if ([self.currentPaneIdentifier isEqualToString:kToolbarTemplates]) {
+        [self saveCurrentTemplateEdits];
+    } else if ([self.currentPaneIdentifier isEqualToString:kToolbarOverlay]) {
+        [self hideRuntimeOverlayPreview];
+    }
+    [self endHotkeyRecording];
+
     self.currentPaneIdentifier = identifier;
 
     // Remove old pane
@@ -283,12 +619,18 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         paneView = [self buildAsrPane];
     } else if ([identifier isEqualToString:kToolbarLLM]) {
         paneView = [self buildLlmPane];
+    } else if ([identifier isEqualToString:kToolbarOverlay]) {
+        paneView = [self buildOverlayPane];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
         paneView = [self buildHotkeyPane];
     } else if ([identifier isEqualToString:kToolbarDictionary]) {
         paneView = [self buildDictionaryPane];
     } else if ([identifier isEqualToString:kToolbarSystemPrompt]) {
         paneView = [self buildSystemPromptPane];
+    } else if ([identifier isEqualToString:kToolbarTemplates]) {
+        paneView = [self buildTemplatesPane];
+    } else if ([identifier isEqualToString:kToolbarAbout]) {
+        paneView = [self buildAboutPane];
     }
 
     if (!paneView) return;
@@ -330,18 +672,28 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat fieldX = labelW + 24;
     CGFloat fieldW = paneWidth - fieldX - 32;
     CGFloat rowH = 32;
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
 
     // Calculate content height
     CGFloat contentHeight = 260;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
 
-    CGFloat y = contentHeight - 48;
+    CGFloat y = contentHeight - 30.0;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"Choose the ASR provider used for transcription."];
-    desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
-    [pane addSubview:desc];
-    y -= 52;
+    NSTextField *desc = [self addSettingsDescriptionText:@"Choose the ASR provider used for transcription."
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+
+    NSTextField *sectionTitle = [self sectionTitleLabel:@"Connection"
+                                                  frame:NSMakeRect(contentX, floor(NSMinY(desc.frame) - 36.0), contentW, 20)];
+    [pane addSubview:sectionTitle];
+    y = NSMinY(sectionTitle.frame) - 32.0;
+    CGFloat formStartY = y;
 
     // Provider
     [pane addSubview:[self formLabel:@"Provider" frame:NSMakeRect(16, y, labelW, 22)]];
@@ -471,7 +823,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     y -= rowH;
 
     // Access Key (Doubao) — fixed at row 2 (same as Qwen API Key)
-    CGFloat accessKeyY = contentHeight - 48 - 52 - rowH - rowH;
+    CGFloat accessKeyY = formStartY - rowH - rowH;
     CGFloat eyeW = 28;
     CGFloat secFieldW = fieldW - eyeW - 4;
 
@@ -490,7 +842,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [pane addSubview:accessKeyLabel];
 
     // Qwen API Key — fixed at row 1 (same position as App Key)
-    CGFloat qwenY = contentHeight - 48 - 52 - rowH;
+    CGFloat qwenY = formStartY - rowH;
     self.asrQwenApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, qwenY, secFieldW, 22)];
     self.asrQwenApiKeySecureField.placeholderString = @"DashScope API Key (sk-xxx)";
     self.asrQwenApiKeySecureField.font = [NSFont systemFontOfSize:13];
@@ -527,25 +879,35 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat fieldX = labelW + 24;
     CGFloat fieldW = paneWidth - fieldX - 32;
     CGFloat rowH = 32;
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
 
     CGFloat contentHeight = 540;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
 
-    CGFloat y = contentHeight - 48;
+    CGFloat y = contentHeight - 30.0;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"Configure LLM for post-correction. When disabled, raw ASR output is used directly."];
-    desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
-    [pane addSubview:desc];
-    y -= 52;
+    NSTextField *desc = [self addSettingsDescriptionText:@"Configure LLM for post-correction. When disabled, raw ASR output is used directly."
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+    y = NSMinY(desc.frame) - 16.0;
 
     // Enabled toggle
-    self.llmEnabledCheckbox = [NSButton checkboxWithTitle:@"Enable LLM Correction"
-                                                   target:self
-                                                   action:@selector(llmEnabledToggled:)];
-    self.llmEnabledCheckbox.frame = NSMakeRect(fieldX, y, 300, 22);
-    [pane addSubview:self.llmEnabledCheckbox];
-    y -= rowH + 8;
+    self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
+    NSView *llmEnabledCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48.0, contentW, 48.0)
+                                                         title:@"LLM Correction"
+                                                        toggle:self.llmEnabledCheckbox];
+    [pane addSubview:llmEnabledCard];
+    y = NSMinY(llmEnabledCard.frame) - 24.0;
+
+    NSTextField *sectionTitle = [self sectionTitleLabel:@"Connection"
+                                                  frame:NSMakeRect(contentX, floor(y - 20.0), contentW, 20.0)];
+    [pane addSubview:sectionTitle];
+    y = NSMinY(sectionTitle.frame) - 32.0;
 
     // Provider
     [pane addSubview:[self formLabel:@"Provider" frame:NSMakeRect(16, y, labelW, 22)]];
@@ -560,6 +922,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [self.llmProviderPopup setAction:@selector(llmProviderChanged:)];
     [pane addSubview:self.llmProviderPopup];
     y -= rowH;
+    CGFloat providerDetailStartY = y;
 
     // --- OpenAI fields (tag 2001-2006 for show/hide) ---
 
@@ -640,7 +1003,7 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     [pane addSubview:self.llmTestResultLabel];
 
     // --- MLX fields (tag 2010-2012 for show/hide, initially hidden) ---
-    CGFloat mlxY = contentHeight - 48 - 52 - rowH - 8 - rowH;  // same Y as Base URL row
+    CGFloat mlxY = providerDetailStartY;  // same Y as Base URL row
 
     // MLX Model popup + Download button
     NSTextField *llmModelLabel = [self formLabel:@"Model" frame:NSMakeRect(16, mlxY, labelW, 22)];
@@ -720,142 +1083,459 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     return pane;
 }
 
-- (NSView *)buildHotkeyPane {
-    CGFloat paneWidth = 600;
-    CGFloat labelW = 130;
-    CGFloat fieldX = labelW + 24;
-    CGFloat rowH = 32;
+- (NSView *)buildOverlayPane {
+    CGFloat paneWidth = 600.0;
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
+    NSString *descriptionText = @"Adjust the bottom live transcript overlay. Choose a system font, tune text size, set the bottom distance, and decide whether long live text stays capped to a few lines or expands fully. Every change is previewed directly in the real desktop overlay position.";
 
-    CGFloat contentHeight = 360;
-    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    self.overlayFontFamilyPopup = [self overlayFontFamilyPopupControl];
 
-    CGFloat y = contentHeight - 48;
+    self.overlayFontSizeSlider = [self overlaySliderWithMin:kOverlayFontSizeMin
+                                                        max:kOverlayFontSizeMax
+                                                     action:@selector(overlayControlChanged:)];
+    self.overlayFontSizeValueLabel = [self overlayValueLabel];
+    NSView *fontSliderControl = [self sliderControlWithSlider:self.overlayFontSizeSlider
+                                                   valueLabel:self.overlayFontSizeValueLabel
+                                                        width:290.0];
 
-    // Description
-    NSTextField *desc = [self descriptionLabel:@"Choose a trigger key for voice input and a separate cancel key to abort the current session."];
-    desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
-    [pane addSubview:desc];
-    y -= 52;
+    self.overlayBottomMarginSlider = [self overlaySliderWithMin:0
+                                                            max:kOverlayBottomMarginMax
+                                                         action:@selector(overlayControlChanged:)];
+    self.overlayBottomMarginValueLabel = [self overlayValueLabel];
+    NSView *bottomSliderControl = [self sliderControlWithSlider:self.overlayBottomMarginSlider
+                                                     valueLabel:self.overlayBottomMarginValueLabel
+                                                          width:290.0];
 
-    // Trigger Key
-    [pane addSubview:[self formLabel:@"Trigger Key" frame:NSMakeRect(16, y, labelW, 22)]];
+    self.overlayLimitVisibleLinesSwitch = [self settingsSwitchWithAction:@selector(overlayControlChanged:)];
+    self.overlayMaxVisibleLinesPopup = [self overlayMaxVisibleLinesPopupControl];
 
-    self.hotkeyPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 220, 26) pullsDown:NO];
-    [self.hotkeyPopup addItemsWithTitles:@[
-        @"Fn (Globe)",
-        @"Left Option (\u2325)",
-        @"Right Option (\u2325)",
-        @"Left Command (\u2318)",
-        @"Right Command (\u2318)",
-        @"Left Control (\u2303)",
-        @"Right Control (\u2303)",
-    ]];
-    [self.hotkeyPopup itemAtIndex:0].representedObject = @"fn";
-    [self.hotkeyPopup itemAtIndex:1].representedObject = @"left_option";
-    [self.hotkeyPopup itemAtIndex:2].representedObject = @"right_option";
-    [self.hotkeyPopup itemAtIndex:3].representedObject = @"left_command";
-    [self.hotkeyPopup itemAtIndex:4].representedObject = @"right_command";
-    [self.hotkeyPopup itemAtIndex:5].representedObject = @"left_control";
-    [self.hotkeyPopup itemAtIndex:6].representedObject = @"right_control";
-    [pane addSubview:self.hotkeyPopup];
-    y -= rowH + 16;
+    NSButton *resetButton = [NSButton buttonWithTitle:@"Reset to Default"
+                                               target:self
+                                               action:@selector(resetOverlaySettings:)];
+    resetButton.bezelStyle = NSBezelStyleRounded;
+    resetButton.frame = NSMakeRect(0, 0, 126.0, 28.0);
 
-    // Cancel Key
-    [pane addSubview:[self formLabel:@"Cancel Key" frame:NSMakeRect(16, y, labelW, 22)]];
+    NSView *controlsCard = [self cardWithTitle:@"Overlay"
+                                          rows:@[
+        [self cardRowWithLabel:@"Font" control:self.overlayFontFamilyPopup],
+        [self cardRowWithLabel:@"Text Size" control:fontSliderControl],
+        [self cardRowWithLabel:@"Distance from Bottom" control:bottomSliderControl],
+        [self cardRowWithLabel:@"Limit Visible Lines" control:self.overlayLimitVisibleLinesSwitch],
+        [self cardRowWithLabel:@"Max Visible Lines" control:self.overlayMaxVisibleLinesPopup],
+        [self cardRowWithLabel:@"Defaults" control:resetButton],
+    ]
+                                         width:contentW];
+    CGFloat descriptionHeight = [self fittingHeightForWrappingLabel:[self descriptionLabel:descriptionText] width:contentW];
+    CGFloat paneHeight = 30.0 + descriptionHeight + 18.0 + 20.0 + 12.0 + controlsCard.frame.size.height + 60.0;
 
-    self.cancelHotkeyPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 220, 26) pullsDown:NO];
-    [self.cancelHotkeyPopup addItemsWithTitles:@[
-        @"Fn (Globe)",
-        @"Left Option (\u2325)",
-        @"Right Option (\u2325)",
-        @"Left Command (\u2318)",
-        @"Right Command (\u2318)",
-        @"Left Control (\u2303)",
-        @"Right Control (\u2303)",
-    ]];
-    [self.cancelHotkeyPopup itemAtIndex:0].representedObject = @"fn";
-    [self.cancelHotkeyPopup itemAtIndex:1].representedObject = @"left_option";
-    [self.cancelHotkeyPopup itemAtIndex:2].representedObject = @"right_option";
-    [self.cancelHotkeyPopup itemAtIndex:3].representedObject = @"left_command";
-    [self.cancelHotkeyPopup itemAtIndex:4].representedObject = @"right_command";
-    [self.cancelHotkeyPopup itemAtIndex:5].representedObject = @"left_control";
-    [self.cancelHotkeyPopup itemAtIndex:6].representedObject = @"right_control";
-    [pane addSubview:self.cancelHotkeyPopup];
-    y -= rowH + 8;
+    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, paneHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
 
-    NSTextField *hotkeyHint = [self descriptionLabel:@"Trigger Key and Cancel Key must be different."];
-    hotkeyHint.frame = NSMakeRect(fieldX, y + 2, paneWidth - fieldX - 32, 24);
-    [pane addSubview:hotkeyHint];
-    y -= 30;
+    CGFloat y = paneHeight - 30.0;
+    NSTextField *desc = [self addSettingsDescriptionText:descriptionText
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+    y = NSMinY(desc.frame) - 18.0;
 
-    // Feedback sounds
-    [pane addSubview:[self formLabel:@"Feedback Sounds" frame:NSMakeRect(16, y, labelW, 22)]];
+    CGFloat controlsTitleY = y - 20.0;
+    NSTextField *controlsTitle = [self sectionTitleLabel:@"Style Controls"
+                                                   frame:NSMakeRect(contentX, controlsTitleY, contentW, 20.0)];
+    [pane addSubview:controlsTitle];
+    controlsCard.frame = NSMakeRect(contentX,
+                                    NSMinY(controlsTitle.frame) - 12.0 - controlsCard.frame.size.height,
+                                    contentW,
+                                    controlsCard.frame.size.height);
+    [pane addSubview:controlsCard];
+    NSView *controlsCardBody = controlsCard.subviews.count > 1 ? controlsCard.subviews[1] : controlsCard.subviews[0];
+    [self layoutCardRowControls:controlsCardBody width:contentW];
+    [self updateOverlayLineLimitControlsEnabled];
 
-    self.startSoundCheckbox = [NSButton checkboxWithTitle:@"Play a sound when recording starts"
-                                                   target:nil
-                                                   action:nil];
-    self.startSoundCheckbox.frame = NSMakeRect(fieldX, y - 4, 300, 22);
-    [pane addSubview:self.startSoundCheckbox];
-    y -= 28;
-
-    self.stopSoundCheckbox = [NSButton checkboxWithTitle:@"Play a sound when recording stops"
-                                                  target:nil
-                                                  action:nil];
-    self.stopSoundCheckbox.frame = NSMakeRect(fieldX, y - 4, 300, 22);
-    [pane addSubview:self.stopSoundCheckbox];
-    y -= 28;
-
-    self.errorSoundCheckbox = [NSButton checkboxWithTitle:@"Play a sound when an error occurs"
-                                                   target:nil
-                                                   action:nil];
-    self.errorSoundCheckbox.frame = NSMakeRect(fieldX, y - 4, 300, 22);
-    [pane addSubview:self.errorSoundCheckbox];
-    y -= 32;
-
-    NSTextField *feedbackHint = [self descriptionLabel:@"These toggle the built-in cue sounds for start, stop, and error events."];
-    feedbackHint.frame = NSMakeRect(fieldX, y - 2, paneWidth - fieldX - 32, 24);
-    [pane addSubview:feedbackHint];
-    y -= 34;
-
-    // Save / Cancel buttons
-    [self addButtonsToPane:pane atY:y width:paneWidth];
+    [self addButtonsToPane:pane atY:16 width:paneWidth];
 
     return pane;
+}
+
+- (void)updateOverlayControlValueLabels {
+    self.overlayFontSizeValueLabel.stringValue = [NSString stringWithFormat:@"%ld pt", (long)clampedOverlayFontSizeValue(lround(self.overlayFontSizeSlider.doubleValue))];
+    self.overlayBottomMarginValueLabel.stringValue = [NSString stringWithFormat:@"%ld pt", (long)clampedOverlayBottomMarginValue(lround(self.overlayBottomMarginSlider.doubleValue))];
+}
+
+- (SPOverlayPanel *)runtimeOverlayPanel {
+    id appDelegate = NSApp.delegate;
+    if (!appDelegate) {
+        return nil;
+    }
+
+    id overlayPanel = nil;
+    @try {
+        overlayPanel = [appDelegate valueForKey:@"overlayPanel"];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+
+    if (![overlayPanel isKindOfClass:[SPOverlayPanel class]]) {
+        return nil;
+    }
+    return (SPOverlayPanel *)overlayPanel;
+}
+
+- (void)showRuntimeOverlayPreview {
+    SPOverlayPanel *overlayPanel = [self runtimeOverlayPanel];
+    if (!overlayPanel) return;
+
+    NSInteger fontSize = clampedOverlayFontSizeValue(lround(self.overlayFontSizeSlider.doubleValue));
+    NSInteger bottomMargin = clampedOverlayBottomMarginValue(lround(self.overlayBottomMarginSlider.doubleValue));
+    NSString *fontFamily = [self selectedOverlayFontFamilyValue];
+    BOOL limitVisibleLines = self.overlayLimitVisibleLinesSwitch.state == NSControlStateValueOn;
+    NSInteger maxVisibleLines = [self selectedOverlayMaxVisibleLinesValue];
+    [overlayPanel showPreviewWithText:kOverlayPreviewSampleText
+                             fontSize:(CGFloat)fontSize
+                           fontFamily:fontFamily
+                         bottomMargin:(CGFloat)bottomMargin
+                    limitVisibleLines:limitVisibleLines
+                      maxVisibleLines:maxVisibleLines];
+}
+
+- (void)hideRuntimeOverlayPreview {
+    [[self runtimeOverlayPanel] hidePreview];
+}
+
+- (void)syncOverlayPreviewFromControls {
+    [self updateOverlayLineLimitControlsEnabled];
+    [self updateOverlayControlValueLabels];
+    [self showRuntimeOverlayPreview];
+}
+
+- (void)overlayControlChanged:(id)sender {
+    [self syncOverlayPreviewFromControls];
+}
+
+- (void)resetOverlaySettings:(id)sender {
+    [self selectOverlayFontFamilyValue:kOverlayFontFamilyDefault];
+    self.overlayFontSizeSlider.integerValue = kOverlayFontSizeDefault;
+    self.overlayBottomMarginSlider.integerValue = kOverlayBottomMarginDefault;
+    self.overlayLimitVisibleLinesSwitch.state = kOverlayLimitVisibleLinesDefault ? NSControlStateValueOn : NSControlStateValueOff;
+    [self selectOverlayMaxVisibleLinesValue:kOverlayMaxVisibleLinesDefault];
+    [self syncOverlayPreviewFromControls];
+}
+
+- (NSView *)buildHotkeyPane {
+    CGFloat paneWidth = 600;
+    CGFloat cardWidth = paneWidth - 48;
+    CGFloat cardSpacing = 16.0;
+    CGFloat topPad = 24.0;
+
+    // ── Trigger Key ──
+    self.hotkeyPopup = [self hotkeyPresetPopup];
+    self.hotkeyPopup.target = self;
+    self.hotkeyPopup.action = @selector(triggerHotkeyChanged:);
+    self.recordTriggerHotkeyButton = [NSButton buttonWithTitle:@"Record" target:self action:@selector(recordTriggerHotkey:)];
+    self.recordTriggerHotkeyButton.bezelStyle = NSBezelStyleRounded;
+    self.recordTriggerHotkeyButton.frame = NSMakeRect(0, 0, 70, 28);
+    self.resetTriggerHotkeyButton = [NSButton buttonWithTitle:@"Reset" target:self action:@selector(resetTriggerHotkey:)];
+    self.resetTriggerHotkeyButton.bezelStyle = NSBezelStyleRounded;
+    self.resetTriggerHotkeyButton.frame = NSMakeRect(0, 0, 58, 28);
+    NSView *triggerShortcutControl = [self hotkeyPickerControlWithPopup:self.hotkeyPopup
+                                                           recordButton:self.recordTriggerHotkeyButton
+                                                            resetButton:self.resetTriggerHotkeyButton];
+
+    // ── Trigger Mode ──
+    self.triggerModePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 220, 26) pullsDown:NO];
+    [self.triggerModePopup addItemsWithTitles:@[
+        @"Hold (Press & Hold)",
+        @"Toggle (Tap to Start/Stop)",
+    ]];
+    [self.triggerModePopup itemAtIndex:0].representedObject = @"hold";
+    [self.triggerModePopup itemAtIndex:1].representedObject = @"toggle";
+
+    // ── Trigger card ──
+    NSView *triggerCard = [self cardWithTitle:@"Trigger" rows:@[
+        [self cardRowWithLabel:@"Trigger Shortcut" control:triggerShortcutControl],
+        [self cardRowWithLabel:@"Trigger Mode" control:self.triggerModePopup],
+    ] width:cardWidth];
+
+    // ── Feedback Sounds ──
+    self.startSoundCheckbox = [self settingsSwitchWithAction:NULL];
+    self.stopSoundCheckbox = [self settingsSwitchWithAction:NULL];
+    self.errorSoundCheckbox = [self settingsSwitchWithAction:NULL];
+
+    NSView *feedbackCard = [self cardWithTitle:@"Feedback Sounds" rows:@[
+        [self cardRowWithLabel:@"Recording starts" control:self.startSoundCheckbox],
+        [self cardRowWithLabel:@"Recording stops" control:self.stopSoundCheckbox],
+        [self cardRowWithLabel:@"Error occurs" control:self.errorSoundCheckbox],
+    ] width:cardWidth];
+
+    // ── Layout ──
+    CGFloat triggerH = triggerCard.frame.size.height;
+    CGFloat feedbackH = feedbackCard.frame.size.height;
+    CGFloat contentHeight = topPad + triggerH + cardSpacing + feedbackH + 56;
+
+    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+
+    CGFloat y = contentHeight - topPad;
+
+    y -= triggerH;
+    triggerCard.frame = NSMakeRect(24, y, cardWidth, triggerH);
+    [pane addSubview:triggerCard];
+    // Fix control positions — the card's child (index 1) is the white card view
+    NSView *triggerCardBody = triggerCard.subviews.count > 1 ? triggerCard.subviews[1] : triggerCard.subviews[0];
+    [self layoutCardRowControls:triggerCardBody width:cardWidth];
+
+    y -= cardSpacing + feedbackH;
+    feedbackCard.frame = NSMakeRect(24, y, cardWidth, feedbackH);
+    [pane addSubview:feedbackCard];
+    NSView *feedbackCardBody = feedbackCard.subviews.count > 1 ? feedbackCard.subviews[1] : feedbackCard.subviews[0];
+    [self layoutCardRowControls:feedbackCardBody width:cardWidth];
+
+    [self addButtonsToPane:pane atY:16 width:paneWidth];
+
+    return pane;
+}
+
+- (NSPopUpButton *)hotkeyPresetPopup {
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 168, 26) pullsDown:NO];
+    NSArray<NSString *> *titles = @[
+        @"Fn (Globe)",
+        @"Left Option (\u2325)",
+        @"Right Option (\u2325)",
+        @"Left Command (\u2318)",
+        @"Right Command (\u2318)",
+        @"Left Control (\u2303)",
+        @"Right Control (\u2303)",
+    ];
+    NSArray<NSString *> *values = @[
+        @"fn",
+        @"left_option",
+        @"right_option",
+        @"left_command",
+        @"right_command",
+        @"left_control",
+        @"right_control",
+    ];
+    [popup addItemsWithTitles:titles];
+    for (NSInteger idx = 0; idx < (NSInteger)values.count; idx++) {
+        [popup itemAtIndex:idx].representedObject = values[idx];
+    }
+    return popup;
+}
+
+- (NSView *)hotkeyPickerControlWithPopup:(NSPopUpButton *)popup
+                            recordButton:(NSButton *)button
+                             resetButton:(NSButton *)resetButton {
+    CGFloat spacing = 6.0;
+    CGFloat width = popup.frame.size.width + spacing + button.frame.size.width + spacing + resetButton.frame.size.width;
+    CGFloat height = MAX(popup.frame.size.height, button.frame.size.height);
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+
+    popup.frame = NSMakeRect(0, floor((height - popup.frame.size.height) / 2.0), popup.frame.size.width, popup.frame.size.height);
+    button.frame = NSMakeRect(CGRectGetMaxX(popup.frame) + spacing,
+                              floor((height - button.frame.size.height) / 2.0),
+                              button.frame.size.width,
+                              button.frame.size.height);
+    resetButton.frame = NSMakeRect(CGRectGetMaxX(button.frame) + spacing,
+                                   floor((height - resetButton.frame.size.height) / 2.0),
+                                   resetButton.frame.size.width,
+                                   resetButton.frame.size.height);
+    [container addSubview:popup];
+    [container addSubview:button];
+    [container addSubview:resetButton];
+    return container;
+}
+
+- (void)setRuntimeHotkeyMonitoringSuspended:(BOOL)suspended {
+    id appDelegate = NSApp.delegate;
+    if (!appDelegate) return;
+
+    id monitor = nil;
+    @try {
+        monitor = [appDelegate valueForKey:@"hotkeyMonitor"];
+    } @catch (__unused NSException *exception) {
+        return;
+    }
+
+    if ([monitor respondsToSelector:@selector(setSuspended:)]) {
+        [monitor setSuspended:suspended];
+    }
+}
+
+- (void)selectHotkeyValue:(NSString *)value inPopup:(NSPopUpButton *)popup {
+    NSString *normalizedValue = normalizedHotkeyValue(value);
+    if (hotkeyValueUsesCustomPopupItem(normalizedValue)) {
+        ensureCustomHotkeyInPopup(popup, normalizedValue);
+        return;
+    }
+
+    NSMutableArray<NSMenuItem *> *itemsToRemove = [NSMutableArray array];
+    for (NSMenuItem *item in popup.itemArray) {
+        NSString *representedObject = [item.representedObject isKindOfClass:[NSString class]] ? item.representedObject : nil;
+        if (representedObject.length > 0 && ![presetHotkeyValues() containsObject:representedObject]) {
+            [itemsToRemove addObject:item];
+        }
+    }
+    for (NSMenuItem *item in itemsToRemove) {
+        [popup.menu removeItem:item];
+    }
+
+    for (NSMenuItem *item in popup.itemArray) {
+        if ([[item.representedObject description] isEqualToString:normalizedValue]) {
+            [popup selectItem:item];
+            return;
+        }
+    }
+
+    [popup selectItemAtIndex:0];
+}
+
+- (void)triggerHotkeyChanged:(id)sender {
+}
+
+- (void)updateHotkeyRecordingButtons {
+    BOOL recordingTrigger = [self.recordingHotkeyTarget isEqualToString:@"trigger"];
+
+    self.recordTriggerHotkeyButton.enabled = YES;
+    self.resetTriggerHotkeyButton.enabled = !recordingTrigger;
+    [self.recordTriggerHotkeyButton setTitle:(recordingTrigger ? @"Press..." : @"Record")];
+}
+
+- (NSString *)recordedHotkeyValueFromEvent:(NSEvent *)event {
+    NSInteger keyCode = event.keyCode;
+    switch (keyCode) {
+        case 54:
+        case 55:
+        case 56:
+        case 57:
+        case 58:
+        case 59:
+        case 60:
+        case 61:
+        case 62:
+        case 63:
+            return nil;
+        default:
+            break;
+    }
+
+    NSUInteger flags = event.modifierFlags & (NSEventModifierFlagCommand |
+                                              NSEventModifierFlagOption |
+                                              NSEventModifierFlagControl |
+                                              NSEventModifierFlagShift |
+                                              NSEventModifierFlagFunction);
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    if ((flags & NSEventModifierFlagCommand) != 0) [parts addObject:@"command"];
+    if ((flags & NSEventModifierFlagOption) != 0) [parts addObject:@"option"];
+    if ((flags & NSEventModifierFlagControl) != 0) [parts addObject:@"control"];
+    if ((flags & NSEventModifierFlagShift) != 0) [parts addObject:@"shift"];
+    if ((flags & NSEventModifierFlagFunction) != 0) [parts addObject:@"fn"];
+    [parts addObject:[NSString stringWithFormat:@"%ld", (long)keyCode]];
+    return normalizedHotkeyValue([parts componentsJoinedByString:@"+"]);
+}
+
+- (void)endHotkeyRecording {
+    if (self.hotkeyRecordingMonitor) {
+        [NSEvent removeMonitor:self.hotkeyRecordingMonitor];
+        self.hotkeyRecordingMonitor = nil;
+    }
+    self.recordingHotkeyTarget = nil;
+    [self setRuntimeHotkeyMonitoringSuspended:NO];
+    [self updateHotkeyRecordingButtons];
+}
+
+- (void)beginHotkeyRecordingForTarget:(NSString *)target popup:(NSPopUpButton *)popup {
+    [self endHotkeyRecording];
+
+    self.recordingHotkeyTarget = target;
+    [self setRuntimeHotkeyMonitoringSuspended:YES];
+    [self updateHotkeyRecordingButtons];
+
+    __weak typeof(self) weakSelf = self;
+    self.hotkeyRecordingMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskFlagsChanged)
+                                                                        handler:^NSEvent *(NSEvent *event) {
+        if (![weakSelf.recordingHotkeyTarget isEqualToString:target]) {
+            return event;
+        }
+
+        if (event.type == NSEventTypeKeyDown && event.keyCode == 53) {
+            [weakSelf endHotkeyRecording];
+            return nil;
+        }
+
+        if (event.type != NSEventTypeKeyDown || [event isARepeat]) {
+            return nil;
+        }
+
+        NSString *recordedValue = [weakSelf recordedHotkeyValueFromEvent:event];
+        if (recordedValue.length == 0) {
+            return nil;
+        }
+
+        [weakSelf selectHotkeyValue:recordedValue inPopup:popup];
+        [weakSelf endHotkeyRecording];
+        return nil;
+    }];
+}
+
+- (void)recordTriggerHotkey:(id)sender {
+    [self beginHotkeyRecordingForTarget:@"trigger" popup:self.hotkeyPopup];
+}
+
+- (void)resetTriggerHotkey:(id)sender {
+    [self endHotkeyRecording];
+    [self selectHotkeyValue:@"fn" inPopup:self.hotkeyPopup];
 }
 
 - (NSView *)buildDictionaryPane {
     CGFloat paneWidth = 600;
     CGFloat contentHeight = 440;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
 
-    CGFloat y = contentHeight - 48;
+    CGFloat y = contentHeight - 30.0;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"User dictionary \u2014 one term per line. These terms are prioritized during LLM correction. Lines starting with # are comments."];
-    desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
-    [pane addSubview:desc];
-    y -= 44;
+    NSTextField *desc = [self addSettingsDescriptionText:@"User dictionary \u2014 one term per line. These terms are prioritized during LLM correction. Lines starting with # are comments."
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+
+    NSTextField *sectionTitle = [self sectionTitleLabel:@"Dictionary"
+                                                  frame:NSMakeRect(contentX, floor(NSMinY(desc.frame) - 36.0), contentW, 20)];
+    [pane addSubview:sectionTitle];
 
     // Text editor
-    CGFloat editorHeight = y - 56;
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(24, 56, paneWidth - 48, editorHeight)];
+    CGFloat editorCardY = 56.0;
+    CGFloat editorTopY = NSMinY(sectionTitle.frame) - 12.0;
+    CGFloat editorHeight = editorTopY - editorCardY;
+    NSView *editorCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, editorCardY, contentW, editorHeight)];
+    [pane addSubview:editorCard];
+
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(12, 12, contentW - 24, editorHeight - 24)];
     scrollView.hasVerticalScroller = YES;
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    scrollView.borderType = NSBezelBorder;
+    scrollView.borderType = NSNoBorder;
+    scrollView.drawsBackground = NO;
+    scrollView.scrollerStyle = NSScrollerStyleOverlay;
 
-    self.dictionaryTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth - 54, editorHeight)];
-    self.dictionaryTextView.minSize = NSMakeSize(0, editorHeight);
+    self.dictionaryTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, contentW - 24, editorHeight - 24)];
+    self.dictionaryTextView.minSize = NSMakeSize(0, editorHeight - 24);
     self.dictionaryTextView.maxSize = NSMakeSize(FLT_MAX, FLT_MAX);
     self.dictionaryTextView.verticallyResizable = YES;
     self.dictionaryTextView.horizontallyResizable = NO;
     self.dictionaryTextView.autoresizingMask = NSViewWidthSizable;
-    self.dictionaryTextView.textContainer.containerSize = NSMakeSize(paneWidth - 54, FLT_MAX);
+    self.dictionaryTextView.textContainer.containerSize = NSMakeSize(contentW - 24, FLT_MAX);
     self.dictionaryTextView.textContainer.widthTracksTextView = YES;
+    self.dictionaryTextView.textContainerInset = NSMakeSize(8, 10);
     self.dictionaryTextView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
     self.dictionaryTextView.allowsUndo = YES;
 
     scrollView.documentView = self.dictionaryTextView;
-    [pane addSubview:scrollView];
+    [editorCard addSubview:scrollView];
 
     // Save / Cancel buttons
     [self addButtonsToPane:pane atY:16 width:paneWidth];
@@ -867,40 +1547,671 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     CGFloat paneWidth = 600;
     CGFloat contentHeight = 440;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
 
-    CGFloat y = contentHeight - 48;
+    CGFloat y = contentHeight - 30.0;
 
     // Description
-    NSTextField *desc = [self descriptionLabel:@"System prompt sent to the LLM for text correction. Edit to customize behavior."];
-    desc.frame = NSMakeRect(24, y - 10, paneWidth - 48, 36);
-    [pane addSubview:desc];
-    y -= 44;
+    NSTextField *desc = [self addSettingsDescriptionText:@"System prompt sent to the LLM for text correction. Edit to customize behavior."
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+
+    NSTextField *sectionTitle = [self sectionTitleLabel:@"System Prompt"
+                                                  frame:NSMakeRect(contentX, floor(NSMinY(desc.frame) - 36.0), contentW, 20)];
+    [pane addSubview:sectionTitle];
 
     // Text editor
-    CGFloat editorHeight = y - 56;
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(24, 56, paneWidth - 48, editorHeight)];
+    CGFloat editorCardY = 56.0;
+    CGFloat editorTopY = NSMinY(sectionTitle.frame) - 12.0;
+    CGFloat editorHeight = editorTopY - editorCardY;
+    NSView *editorCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, editorCardY, contentW, editorHeight)];
+    [pane addSubview:editorCard];
+
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(12, 12, contentW - 24, editorHeight - 24)];
     scrollView.hasVerticalScroller = YES;
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    scrollView.borderType = NSBezelBorder;
+    scrollView.borderType = NSNoBorder;
+    scrollView.drawsBackground = NO;
+    scrollView.scrollerStyle = NSScrollerStyleOverlay;
 
-    self.systemPromptTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth - 54, editorHeight)];
-    self.systemPromptTextView.minSize = NSMakeSize(0, editorHeight);
+    self.systemPromptTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, contentW - 24, editorHeight - 24)];
+    self.systemPromptTextView.minSize = NSMakeSize(0, editorHeight - 24);
     self.systemPromptTextView.maxSize = NSMakeSize(FLT_MAX, FLT_MAX);
     self.systemPromptTextView.verticallyResizable = YES;
     self.systemPromptTextView.horizontallyResizable = NO;
     self.systemPromptTextView.autoresizingMask = NSViewWidthSizable;
-    self.systemPromptTextView.textContainer.containerSize = NSMakeSize(paneWidth - 54, FLT_MAX);
+    self.systemPromptTextView.textContainer.containerSize = NSMakeSize(contentW - 24, FLT_MAX);
     self.systemPromptTextView.textContainer.widthTracksTextView = YES;
+    self.systemPromptTextView.textContainerInset = NSMakeSize(8, 10);
     self.systemPromptTextView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
     self.systemPromptTextView.allowsUndo = YES;
 
     scrollView.documentView = self.systemPromptTextView;
-    [pane addSubview:scrollView];
+    [editorCard addSubview:scrollView];
 
     // Save / Cancel buttons
     [self addButtonsToPane:pane atY:16 width:paneWidth];
 
     return pane;
+}
+
+// ─── Templates Pane ────────────────────────────────────────────────
+
+- (NSView *)buildTemplatesPane {
+    CGFloat paneWidth = 600;
+    CGFloat contentHeight = 568;
+    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
+    CGFloat y = contentHeight - 30.0;
+
+    NSTextField *desc = [self addSettingsDescriptionText:@"Manage overlay templates. Reorder them, control visibility, and edit each prompt here."
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+    y = NSMinY(desc.frame) - 16.0;
+
+    self.templatesEnabledSwitch = [self settingsSwitchWithAction:NULL];
+    NSView *visibilityCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48, contentW, 48)
+                                                         title:@"Show template buttons in overlay"
+                                                        toggle:self.templatesEnabledSwitch];
+    [pane addSubview:visibilityCard];
+
+    CGFloat sectionTitleY = NSMinY(visibilityCard.frame) - 44.0;
+    CGFloat mainCardY = 60.0;
+    CGFloat mainCardH = sectionTitleY - mainCardY - 12.0;
+    CGFloat listW = 214.0;
+    CGFloat cardGap = 16.0;
+    CGFloat editorW = contentW - listW - cardGap;
+    CGFloat editorX = contentX + listW + cardGap;
+
+    NSTextField *listTitle = [self sectionTitleLabel:@"Template Library"
+                                               frame:NSMakeRect(contentX, sectionTitleY, listW, 20)];
+    [pane addSubview:listTitle];
+
+    NSTextField *editorTitle = [self sectionTitleLabel:@"Template Editor"
+                                                 frame:NSMakeRect(editorX, sectionTitleY, editorW, 20)];
+    [pane addSubview:editorTitle];
+
+    NSView *listCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, mainCardY, listW, mainCardH)];
+    [pane addSubview:listCard];
+
+    NSView *editorCard = [self surfaceCardViewWithFrame:NSMakeRect(editorX, mainCardY, editorW, mainCardH)];
+    [pane addSubview:editorCard];
+
+    CGFloat headerH = 34.0;
+    CGFloat footerH = 34.0;
+
+    NSTextField *libraryCaption = [NSTextField labelWithString:@"Templates"];
+    libraryCaption.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    libraryCaption.textColor = [NSColor colorWithRed:0.114 green:0.114 blue:0.122 alpha:1.0];
+    libraryCaption.frame = NSMakeRect(14, mainCardH - headerH + 9, 120, 18);
+    [listCard addSubview:libraryCaption];
+
+    NSView *headerSeparator = [[NSView alloc] initWithFrame:NSMakeRect(0, mainCardH - headerH, listW, 1)];
+    headerSeparator.wantsLayer = YES;
+    headerSeparator.layer.backgroundColor = [NSColor colorWithRed:0.898 green:0.898 blue:0.918 alpha:1.0].CGColor;
+    [listCard addSubview:headerSeparator];
+
+    NSView *footerSeparator = [[NSView alloc] initWithFrame:NSMakeRect(0, footerH, listW, 1)];
+    footerSeparator.wantsLayer = YES;
+    footerSeparator.layer.backgroundColor = [NSColor colorWithRed:0.898 green:0.898 blue:0.918 alpha:1.0].CGColor;
+    [listCard addSubview:footerSeparator];
+
+    self.templatePrimaryActionsControl = [self templateActionSegmentedControlWithSymbols:@[@"plus", @"minus"]
+                                                                                toolTips:@[@"Add template", @"Remove selected template"]
+                                                                                  action:@selector(handleTemplatePrimaryActions:)];
+    self.templatePrimaryActionsControl.frame = NSMakeRect(12, 5, 50, 24);
+    [listCard addSubview:self.templatePrimaryActionsControl];
+
+    self.templateReorderActionsControl = [self templateActionSegmentedControlWithSymbols:@[@"arrow.up", @"arrow.down"]
+                                                                                 toolTips:@[@"Move selected template up", @"Move selected template down"]
+                                                                                   action:@selector(handleTemplateReorderActions:)];
+    self.templateReorderActionsControl.frame = NSMakeRect(listW - 12 - 50, 5, 50, 24);
+    [listCard addSubview:self.templateReorderActionsControl];
+
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(10, footerH + 10, listW - 20, mainCardH - headerH - footerH - 20)];
+    scrollView.hasVerticalScroller = YES;
+    scrollView.autohidesScrollers = YES;
+    scrollView.borderType = NSNoBorder;
+    scrollView.drawsBackground = NO;
+    scrollView.wantsLayer = YES;
+    scrollView.layer.cornerRadius = 8.0;
+    scrollView.layer.borderWidth = 1.0;
+    scrollView.layer.borderColor = [NSColor colorWithRed:0.922 green:0.929 blue:0.945 alpha:1.0].CGColor;
+    scrollView.scrollerStyle = NSScrollerStyleOverlay;
+    [listCard addSubview:scrollView];
+
+    self.templatesTableView = [[NSTableView alloc] initWithFrame:scrollView.bounds];
+    NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"name"];
+    col.title = @"Template";
+    col.width = scrollView.bounds.size.width;
+    col.resizingMask = NSTableColumnAutoresizingMask;
+    [self.templatesTableView addTableColumn:col];
+    self.templatesTableView.headerView = nil;
+    self.templatesTableView.rowHeight = 34.0;
+    self.templatesTableView.intercellSpacing = NSMakeSize(0, 0);
+    self.templatesTableView.backgroundColor = [NSColor clearColor];
+    self.templatesTableView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleRegular;
+    self.templatesTableView.focusRingType = NSFocusRingTypeNone;
+    self.templatesTableView.columnAutoresizingStyle = NSTableViewFirstColumnOnlyAutoresizingStyle;
+    self.templatesTableView.delegate = (id)self;
+    self.templatesTableView.dataSource = (id)self;
+    scrollView.documentView = self.templatesTableView;
+
+    NSTextField *nameLabel = [self sectionTitleLabel:@"Name" frame:NSMakeRect(16, mainCardH - 34, editorW - 32, 18)];
+    [editorCard addSubview:nameLabel];
+
+    self.templateNameField = [self formTextField:NSMakeRect(16, mainCardH - 64, editorW - 32, 24) placeholder:@"Template name"];
+    self.templateNameField.delegate = self;
+    [editorCard addSubview:self.templateNameField];
+
+    self.templateItemEnabledSwitch = [self settingsSwitchWithAction:@selector(toggleSelectedTemplateEnabled:)
+                                                        controlSize:NSControlSizeSmall];
+    CGFloat templateItemToggleW = self.templateItemEnabledSwitch.frame.size.width;
+    CGFloat templateItemToggleH = self.templateItemEnabledSwitch.frame.size.height;
+    CGFloat templateVisibilityCenterY = mainCardH - 86.0;
+
+    NSTextField *templateVisibilityLabel = [self settingsRowLabelWithString:@"Visible in overlay"];
+    templateVisibilityLabel.frame = NSMakeRect(16,
+                                               floor(templateVisibilityCenterY - 10.0),
+                                               editorW - templateItemToggleW - 44.0,
+                                               20);
+    [editorCard addSubview:templateVisibilityLabel];
+
+    self.templateItemEnabledSwitch.frame = NSMakeRect(editorW - 16 - templateItemToggleW,
+                                                      floor(templateVisibilityCenterY - (templateItemToggleH / 2.0)),
+                                                      templateItemToggleW,
+                                                      templateItemToggleH);
+    [editorCard addSubview:self.templateItemEnabledSwitch];
+
+    NSTextField *promptLabel = [self sectionTitleLabel:@"Prompt" frame:NSMakeRect(16, mainCardH - 124, editorW - 32, 18)];
+    [editorCard addSubview:promptLabel];
+
+    NSScrollView *promptScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16, 16, editorW - 32, mainCardH - 146)];
+    promptScroll.hasVerticalScroller = YES;
+    promptScroll.borderType = NSNoBorder;
+    promptScroll.drawsBackground = NO;
+    promptScroll.wantsLayer = YES;
+    promptScroll.layer.cornerRadius = 8.0;
+    promptScroll.layer.borderWidth = 1.0;
+    promptScroll.layer.borderColor = [NSColor colorWithRed:0.922 green:0.929 blue:0.945 alpha:1.0].CGColor;
+
+    self.templatePromptTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, editorW - 48, mainCardH - 146)];
+    self.templatePromptTextView.minSize = NSMakeSize(0, mainCardH - 146);
+    self.templatePromptTextView.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+    self.templatePromptTextView.verticallyResizable = YES;
+    self.templatePromptTextView.horizontallyResizable = NO;
+    self.templatePromptTextView.textContainerInset = NSMakeSize(8, 10);
+    self.templatePromptTextView.textContainer.containerSize = NSMakeSize(editorW - 48, CGFLOAT_MAX);
+    self.templatePromptTextView.textContainer.widthTracksTextView = YES;
+    self.templatePromptTextView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    self.templatePromptTextView.allowsUndo = YES;
+    self.templatePromptTextView.delegate = self;
+    promptScroll.documentView = self.templatePromptTextView;
+    [editorCard addSubview:promptScroll];
+
+    // Save / Cancel buttons
+    [self addButtonsToPane:pane atY:16 width:paneWidth];
+
+    return pane;
+}
+
+#pragma mark - Templates Table Data Source & Delegate
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    if (tableView == self.templatesTableView) {
+        return (NSInteger)self.templatesData.count;
+    }
+    return 0;
+}
+
+- (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
+    if (tableView != self.templatesTableView) return nil;
+
+    NSTableCellView *cell = [tableView makeViewWithIdentifier:@"TemplateCell" owner:self];
+    if (!cell) {
+        cell = [[NSTableCellView alloc] initWithFrame:NSMakeRect(0, 0, tableColumn.width, tableView.rowHeight)];
+        cell.identifier = @"TemplateCell";
+        cell.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+        NSTextField *titleLabel = [NSTextField labelWithString:@""];
+        titleLabel.identifier = @"TemplateTitleLabel";
+        titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+        titleLabel.alignment = NSTextAlignmentLeft;
+        titleLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        titleLabel.textColor = [NSColor colorWithRed:0.114 green:0.114 blue:0.122 alpha:1.0];
+        titleLabel.autoresizingMask = NSViewWidthSizable;
+        titleLabel.frame = NSMakeRect(12, 7, tableColumn.width - 24, 20);
+        cell.textField = titleLabel;
+        [cell addSubview:titleLabel];
+    }
+
+    if (row < (NSInteger)self.templatesData.count) {
+        NSDictionary *tmpl = self.templatesData[row];
+        NSString *name = tmpl[@"name"] ?: @"Untitled";
+        BOOL enabled = [self isTemplateEnabled:tmpl];
+
+        NSTextField *titleLabel = nil;
+        for (NSView *subview in cell.subviews) {
+            if ([subview.identifier isEqualToString:@"TemplateTitleLabel"]) {
+                titleLabel = (NSTextField *)subview;
+            }
+        }
+
+        titleLabel.stringValue = name;
+        titleLabel.frame = NSMakeRect(12, 7, tableColumn.width - 24, 20);
+        titleLabel.textColor = enabled ? [NSColor colorWithRed:0.114 green:0.114 blue:0.122 alpha:1.0] : [NSColor secondaryLabelColor];
+        titleLabel.alphaValue = enabled ? 1.0 : 0.6;
+    }
+    return cell;
+}
+
+- (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+    if (tableView != self.templatesTableView) return nil;
+    return [[SPTemplateRowView alloc] initWithFrame:NSMakeRect(0, 0, tableView.bounds.size.width, tableView.rowHeight)];
+}
+
+- (NSString *)resolvedPromptTextForTemplate:(NSDictionary *)templateData {
+    id inlinePrompt = templateData[@"system_prompt"];
+    if ([inlinePrompt isKindOfClass:[NSString class]]) {
+        NSString *inlineText = (NSString *)inlinePrompt;
+        if (inlineText.length > 0) {
+            return inlineText;
+        }
+    }
+
+    id promptPath = templateData[@"system_prompt_path"];
+    if ([promptPath isKindOfClass:[NSString class]] && [promptPath length] > 0) {
+        NSString *path = (NSString *)promptPath;
+        NSString *resolvedPath = path.isAbsolutePath ? path : [configDirPath() stringByAppendingPathComponent:path];
+        NSString *filePrompt = [NSString stringWithContentsOfFile:resolvedPath
+                                                        encoding:NSUTF8StringEncoding
+                                                           error:nil];
+        if ([filePrompt isKindOfClass:[NSString class]]) {
+            return filePrompt;
+        }
+    }
+
+    return @"";
+}
+
+- (NSString *)editablePromptTextForTemplate:(NSMutableDictionary *)templateData {
+    id editablePrompt = templateData[kTemplateEditablePromptKey];
+    if ([editablePrompt isKindOfClass:[NSString class]]) {
+        return editablePrompt ?: @"";
+    }
+
+    NSString *resolvedPrompt = [self resolvedPromptTextForTemplate:templateData];
+    templateData[kTemplateEditablePromptKey] = resolvedPrompt ?: @"";
+    if (![templateData[kTemplateOriginalPromptKey] isKindOfClass:[NSString class]]) {
+        templateData[kTemplateOriginalPromptKey] = resolvedPrompt ?: @"";
+    }
+    return resolvedPrompt ?: @"";
+}
+
+- (BOOL)isTemplateEnabled:(NSDictionary *)templateData {
+    id enabledValue = templateData[@"enabled"];
+    return ![enabledValue isKindOfClass:[NSNumber class]] || [enabledValue boolValue];
+}
+
+// ─── Template List: selection only loads, NEVER saves back automatically ───
+//
+// Design: templatesData is the source of truth. The editor fields are just
+// a view into one entry. We sync editor→data ONLY on explicit actions:
+// (1) user clicks Save button  (2) user clicks + to add  (3) switching tabs
+//
+// tableViewSelectionDidChange just loads the new row into the editor.
+// It first writes back the editor content for the OLD row, which is safe
+// because selectedTemplateIndex still points to the old row at that moment.
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    if (notification.object != self.templatesTableView) return;
+    if (self.suppressTemplateSync) return;
+
+    NSInteger newRow = self.templatesTableView.selectedRow;
+    if (newRow == self.selectedTemplateIndex) return;
+
+    // Write editor content back to the OLD row before loading the new one
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+
+    self.selectedTemplateIndex = newRow;
+    [self loadEditorFromIndex:newRow];
+    [self updateTemplateActionButtons];
+}
+
+/// Write current editor fields into templatesData[index]. Safe to call with -1.
+- (void)flushEditorToIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.templatesData.count) return;
+    if (!self.templateNameField) return;
+    if (!self.templateEditorDirty) return;
+
+    NSMutableDictionary *templateData = self.templatesData[index];
+    NSString *editedPrompt = self.templatePromptTextView.string ?: @"";
+
+    templateData[@"name"] = self.templateNameField.stringValue ?: @"";
+    templateData[kTemplateEditablePromptKey] = editedPrompt;
+
+    NSString *originalPrompt = [templateData[kTemplateOriginalPromptKey] isKindOfClass:[NSString class]]
+        ? templateData[kTemplateOriginalPromptKey]
+        : [self resolvedPromptTextForTemplate:templateData];
+    NSString *inlinePrompt = [templateData[@"system_prompt"] isKindOfClass:[NSString class]]
+        ? templateData[@"system_prompt"]
+        : nil;
+    NSString *promptPath = [templateData[@"system_prompt_path"] isKindOfClass:[NSString class]]
+        ? templateData[@"system_prompt_path"]
+        : nil;
+
+    BOOL preservePromptPath = (inlinePrompt.length == 0
+                               && promptPath.length > 0
+                               && [editedPrompt isEqualToString:(originalPrompt ?: @"")]);
+    if (preservePromptPath) {
+        [templateData removeObjectForKey:@"system_prompt"];
+        return;
+    }
+
+    templateData[@"system_prompt"] = editedPrompt;
+    [templateData removeObjectForKey:@"system_prompt_path"];
+    templateData[kTemplateOriginalPromptKey] = editedPrompt;
+    self.templateEditorDirty = NO;
+}
+
+/// Load templatesData[index] into the editor fields. -1 clears everything.
+- (void)loadEditorFromIndex:(NSInteger)index {
+    BOOL previousSuppress = self.suppressTemplateSync;
+    self.suppressTemplateSync = YES;
+
+    if (index >= 0 && index < (NSInteger)self.templatesData.count) {
+        NSMutableDictionary *tmpl = self.templatesData[index];
+        self.templateNameField.stringValue = tmpl[@"name"] ?: @"";
+        self.templateItemEnabledSwitch.state = [self isTemplateEnabled:tmpl] ? NSControlStateValueOn : NSControlStateValueOff;
+        self.templatePromptTextView.string = [self editablePromptTextForTemplate:tmpl];
+        self.templateNameField.enabled = YES;
+        self.templateItemEnabledSwitch.enabled = YES;
+        self.templatePromptTextView.editable = YES;
+    } else {
+        self.templateNameField.stringValue = @"";
+        self.templateItemEnabledSwitch.state = NSControlStateValueOff;
+        self.templatePromptTextView.string = @"";
+        self.templateNameField.enabled = NO;
+        self.templateItemEnabledSwitch.enabled = NO;
+        self.templatePromptTextView.editable = NO;
+    }
+
+    self.templateEditorDirty = NO;
+    self.suppressTemplateSync = previousSuppress;
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+    if (self.suppressTemplateSync) return;
+    if (notification.object != self.templateNameField) return;
+    if (self.selectedTemplateIndex < 0 || self.selectedTemplateIndex >= (NSInteger)self.templatesData.count) return;
+
+    self.templateEditorDirty = YES;
+    self.templatesData[self.selectedTemplateIndex][@"name"] = self.templateNameField.stringValue ?: @"";
+
+    NSIndexSet *rows = [NSIndexSet indexSetWithIndex:(NSUInteger)self.selectedTemplateIndex];
+    NSIndexSet *columns = [NSIndexSet indexSetWithIndex:0];
+    [self.templatesTableView reloadDataForRowIndexes:rows columnIndexes:columns];
+}
+
+- (void)textDidChange:(NSNotification *)notification {
+    if (self.suppressTemplateSync) return;
+    if (notification.object != self.templatePromptTextView) return;
+
+    self.templateEditorDirty = YES;
+}
+
+- (void)toggleSelectedTemplateEnabled:(id)sender {
+    if (self.selectedTemplateIndex < 0 || self.selectedTemplateIndex >= (NSInteger)self.templatesData.count) return;
+
+    self.templatesData[self.selectedTemplateIndex][@"enabled"] = @(self.templateItemEnabledSwitch.state == NSControlStateValueOn);
+    NSIndexSet *rows = [NSIndexSet indexSetWithIndex:(NSUInteger)self.selectedTemplateIndex];
+    NSIndexSet *columns = [NSIndexSet indexSetWithIndex:0];
+    [self.templatesTableView reloadDataForRowIndexes:rows columnIndexes:columns];
+}
+
+/// Flush editor, then reload table (used by Save button & tab switch).
+- (void)saveCurrentTemplateEdits {
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+    [self reindexTemplateShortcuts];
+}
+
+- (void)updateTemplateActionButtons {
+    BOOL canAdd = self.templatesData.count < 9;
+    BOOL hasSelection = self.templatesTableView.selectedRow >= 0;
+    BOOL canMoveUp = hasSelection && self.templatesTableView.selectedRow > 0;
+    BOOL canMoveDown = hasSelection && self.templatesTableView.selectedRow < (NSInteger)self.templatesData.count - 1;
+
+    [self.templatePrimaryActionsControl setEnabled:canAdd forSegment:0];
+    [self.templatePrimaryActionsControl setEnabled:hasSelection forSegment:1];
+    [self.templateReorderActionsControl setEnabled:canMoveUp forSegment:0];
+    [self.templateReorderActionsControl setEnabled:canMoveDown forSegment:1];
+}
+
+- (void)reindexTemplateShortcuts {
+    [self.templatesData enumerateObjectsUsingBlock:^(NSMutableDictionary *templateData, NSUInteger idx, BOOL *stop) {
+        templateData[@"shortcut"] = @((NSInteger)idx + 1);
+        if (![templateData[@"enabled"] isKindOfClass:[NSNumber class]]) {
+            templateData[@"enabled"] = @YES;
+        }
+    }];
+}
+
+- (void)reloadTemplateTableSelectingRow:(NSInteger)row {
+    NSInteger selectedRow = (row >= 0 && row < (NSInteger)self.templatesData.count) ? row : -1;
+    self.selectedTemplateIndex = selectedRow;
+
+    self.suppressTemplateSync = YES;
+    [self.templatesTableView reloadData];
+    if (selectedRow >= 0) {
+        [self.templatesTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)selectedRow] byExtendingSelection:NO];
+    } else {
+        [self.templatesTableView deselectAll:nil];
+    }
+    self.suppressTemplateSync = NO;
+
+    [self loadEditorFromIndex:selectedRow];
+    [self updateTemplateActionButtons];
+}
+
+- (NSArray<NSDictionary *> *)serializedTemplatesData {
+    [self reindexTemplateShortcuts];
+    NSMutableArray<NSDictionary *> *serialized = [NSMutableArray arrayWithCapacity:self.templatesData.count];
+
+    for (NSDictionary *templateData in self.templatesData) {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        result[@"name"] = [templateData[@"name"] isKindOfClass:[NSString class]] ? templateData[@"name"] : @"";
+        result[@"enabled"] = @([self isTemplateEnabled:templateData]);
+        result[@"shortcut"] = [templateData[@"shortcut"] isKindOfClass:[NSNumber class]] ? templateData[@"shortcut"] : @0;
+
+        NSString *systemPrompt = [templateData[@"system_prompt"] isKindOfClass:[NSString class]] ? templateData[@"system_prompt"] : nil;
+        NSString *systemPromptPath = [templateData[@"system_prompt_path"] isKindOfClass:[NSString class]] ? templateData[@"system_prompt_path"] : nil;
+        if (systemPrompt != nil) {
+            result[@"system_prompt"] = systemPrompt;
+        }
+        if (systemPromptPath.length > 0) {
+            result[@"system_prompt_path"] = systemPromptPath;
+        }
+
+        [serialized addObject:result];
+    }
+
+    return serialized;
+}
+
+- (BOOL)validateTemplatesDataWithMessage:(NSString **)message {
+    if (self.templatesData.count > 9) {
+        if (message) *message = @"You can add up to 9 prompt templates.";
+        return NO;
+    }
+
+    NSMutableSet<NSNumber *> *used = [NSMutableSet set];
+    for (NSDictionary *tmpl in self.templatesData) {
+        NSNumber *shortcut = [tmpl[@"shortcut"] isKindOfClass:[NSNumber class]] ? tmpl[@"shortcut"] : nil;
+        NSInteger value = shortcut.integerValue;
+        if (!shortcut || value < 1 || value > 9) {
+            if (message) *message = @"Each prompt template needs a shortcut between 1 and 9.";
+            return NO;
+        }
+        if ([used containsObject:@(value)]) {
+            if (message) *message = @"Each prompt template shortcut must be unique.";
+            return NO;
+        }
+        [used addObject:@(value)];
+    }
+
+    return YES;
+}
+
+- (void)addTemplate:(id)sender {
+    if (self.templatesData.count >= 9) {
+        [self showAlert:@"Template limit reached"
+                   info:@"You can add up to 9 prompt templates because the overlay only supports number keys 1-9."];
+        return;
+    }
+
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+    [self.templatesData addObject:[NSMutableDictionary dictionaryWithDictionary:@{
+        @"name": @"New Template",
+        @"enabled": @YES,
+        @"shortcut": @((NSInteger)self.templatesData.count + 1),
+        @"system_prompt": @"",
+        kTemplateEditablePromptKey: @"",
+        kTemplateOriginalPromptKey: @"",
+    }]];
+
+    NSInteger newRow = (NSInteger)self.templatesData.count - 1;
+    [self reindexTemplateShortcuts];
+    [self reloadTemplateTableSelectingRow:newRow];
+}
+
+- (void)handleTemplatePrimaryActions:(NSSegmentedControl *)sender {
+    NSInteger segment = sender.selectedSegment;
+    if (segment == 0) {
+        [self addTemplate:sender];
+    } else if (segment == 1) {
+        [self removeTemplate:sender];
+    }
+}
+
+- (void)handleTemplateReorderActions:(NSSegmentedControl *)sender {
+    NSInteger segment = sender.selectedSegment;
+    if (segment == 0) {
+        [self moveTemplateUp:sender];
+    } else if (segment == 1) {
+        [self moveTemplateDown:sender];
+    }
+}
+
+- (void)removeTemplate:(id)sender {
+    NSInteger row = self.templatesTableView.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.templatesData.count) return;
+
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+    [self.templatesData removeObjectAtIndex:row];
+    [self reindexTemplateShortcuts];
+
+    NSInteger nextSelection = MIN(row, (NSInteger)self.templatesData.count - 1);
+    [self reloadTemplateTableSelectingRow:nextSelection];
+}
+
+- (void)moveTemplateUp:(id)sender {
+    NSInteger row = self.templatesTableView.selectedRow;
+    if (row <= 0 || row >= (NSInteger)self.templatesData.count) return;
+
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+    NSMutableDictionary *templateData = self.templatesData[row];
+    [self.templatesData removeObjectAtIndex:row];
+    [self.templatesData insertObject:templateData atIndex:row - 1];
+    [self reindexTemplateShortcuts];
+    [self reloadTemplateTableSelectingRow:row - 1];
+}
+
+- (void)moveTemplateDown:(id)sender {
+    NSInteger row = self.templatesTableView.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.templatesData.count - 1) return;
+
+    [self flushEditorToIndex:self.selectedTemplateIndex];
+    NSMutableDictionary *templateData = self.templatesData[row];
+    [self.templatesData removeObjectAtIndex:row];
+    [self.templatesData insertObject:templateData atIndex:row + 1];
+    [self reindexTemplateShortcuts];
+    [self reloadTemplateTableSelectingRow:row + 1];
+}
+
+- (NSView *)buildAboutPane {
+    CGFloat paneWidth = 600;
+    CGFloat contentHeight = 300;
+    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+
+    CGFloat y = contentHeight - 48;
+
+    // App name
+    NSTextField *appName = [NSTextField labelWithString:@"Koe (\u58f0)"];
+    appName.font = [NSFont systemFontOfSize:28 weight:NSFontWeightBold];
+    appName.alignment = NSTextAlignmentCenter;
+    appName.frame = NSMakeRect(24, y - 4, paneWidth - 48, 36);
+    [pane addSubview:appName];
+    y -= 44;
+
+    // Version
+    NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"dev";
+    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"0";
+    NSTextField *versionLabel = [self descriptionLabel:[NSString stringWithFormat:@"Version %@ (%@)", version, build]];
+    versionLabel.alignment = NSTextAlignmentCenter;
+    versionLabel.frame = NSMakeRect(24, y, paneWidth - 48, 20);
+    [pane addSubview:versionLabel];
+    y -= 32;
+
+    // Description
+    NSTextField *desc = [self descriptionLabel:@"A background-first macOS voice input tool.\nPress a hotkey, speak, and the corrected text is pasted into whatever app you\u2019re using."];
+    desc.alignment = NSTextAlignmentCenter;
+    desc.frame = NSMakeRect(60, y - 10, paneWidth - 120, 40);
+    [pane addSubview:desc];
+    y -= 60;
+
+    // GitHub button
+    NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub Repository" target:self action:@selector(openGitHub:)];
+    githubButton.bezelStyle = NSBezelStyleRounded;
+    githubButton.image = [NSImage imageWithSystemSymbolName:@"arrow.up.right" accessibilityDescription:nil];
+    githubButton.imagePosition = NSImageTrailing;
+    githubButton.frame = NSMakeRect((paneWidth - 180) / 2.0, y, 180, 32);
+    [pane addSubview:githubButton];
+    y -= 40;
+
+    // Documentation link
+    NSButton *docsButton = [NSButton buttonWithTitle:@"Documentation" target:self action:@selector(openDocs:)];
+    docsButton.bezelStyle = NSBezelStyleRounded;
+    docsButton.image = [NSImage imageWithSystemSymbolName:@"arrow.up.right" accessibilityDescription:nil];
+    docsButton.imagePosition = NSImageTrailing;
+    docsButton.frame = NSMakeRect((paneWidth - 180) / 2.0, y, 180, 32);
+    [pane addSubview:docsButton];
+    y -= 48;
+
+    // License
+    NSTextField *license = [self descriptionLabel:@"MIT License \u00b7 Made with Rust + Objective-C"];
+    license.alignment = NSTextAlignmentCenter;
+    license.frame = NSMakeRect(24, y, paneWidth - 48, 20);
+    [pane addSubview:license];
+
+    return pane;
+}
+
+- (void)openGitHub:(id)sender {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/missuo/koe"]];
+}
+
+- (void)openDocs:(id)sender {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/missuo/koe/blob/main/README.md"]];
 }
 
 // ─── Shared button bar ──────────────────────────────────────────────
@@ -939,11 +2250,370 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     return field;
 }
 
+- (NSSlider *)overlaySliderWithMin:(double)minValue max:(double)maxValue action:(SEL)action {
+    NSSlider *slider = [[NSSlider alloc] initWithFrame:NSMakeRect(0, 0, 228, 24)];
+    slider.minValue = minValue;
+    slider.maxValue = maxValue;
+    slider.numberOfTickMarks = 0;
+    slider.continuous = YES;
+    slider.target = self;
+    slider.action = action;
+    return slider;
+}
+
+- (NSTextField *)overlayValueLabel {
+    NSTextField *label = [NSTextField labelWithString:@""];
+    label.alignment = NSTextAlignmentRight;
+    label.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium];
+    label.textColor = [NSColor secondaryLabelColor];
+    label.frame = NSMakeRect(0, 0, 54, 18);
+    return label;
+}
+
+- (NSArray<NSString *> *)availableOverlayFontFamilies {
+    if (self.overlayAvailableFontFamilies.count > 0) {
+        return self.overlayAvailableFontFamilies;
+    }
+
+    NSMutableOrderedSet<NSString *> *families = [NSMutableOrderedSet orderedSet];
+    for (NSString *family in [[NSFontManager sharedFontManager] availableFontFamilies]) {
+        NSString *normalized = normalizedOverlayFontFamilyValue(family);
+        if (!overlayUsesSystemFontFamily(normalized)) {
+            [families addObject:normalized];
+        }
+    }
+
+    NSArray<NSString *> *sortedFamilies = [[families array] sortedArrayUsingComparator:^NSComparisonResult(NSString *lhs, NSString *rhs) {
+        return [lhs localizedStandardCompare:rhs];
+    }];
+    self.overlayAvailableFontFamilies = sortedFamilies;
+    return sortedFamilies;
+}
+
+- (NSAttributedString *)overlayFontMenuTitleWithLabel:(NSString *)label value:(NSString *)value {
+    NSFont *font = overlayFontForFamily(value, 13.0);
+    return [[NSAttributedString alloc] initWithString:label
+                                           attributes:@{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: [NSColor labelColor],
+    }];
+}
+
+- (NSPopUpButton *)overlayFontFamilyPopupControl {
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 290, 26) pullsDown:NO];
+    popup.target = self;
+    popup.action = @selector(overlayControlChanged:);
+
+    [popup removeAllItems];
+
+    NSMenuItem *systemItem = [[NSMenuItem alloc] initWithTitle:kOverlayFontFamilySystemLabel action:nil keyEquivalent:@""];
+    systemItem.representedObject = kOverlayFontFamilyDefault;
+    systemItem.attributedTitle = [self overlayFontMenuTitleWithLabel:kOverlayFontFamilySystemLabel value:kOverlayFontFamilyDefault];
+    [popup.menu addItem:systemItem];
+
+    for (NSString *family in [self availableOverlayFontFamilies]) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:family action:nil keyEquivalent:@""];
+        item.representedObject = family;
+        item.attributedTitle = [self overlayFontMenuTitleWithLabel:family value:family];
+        [popup.menu addItem:item];
+    }
+
+    return popup;
+}
+
+- (NSPopUpButton *)overlayMaxVisibleLinesPopupControl {
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 118.0, 28.0) pullsDown:NO];
+    popup.target = self;
+    popup.action = @selector(overlayControlChanged:);
+
+    for (NSInteger value = kOverlayMaxVisibleLinesMin; value <= kOverlayMaxVisibleLinesMax; value++) {
+        NSString *title = [NSString stringWithFormat:@"%ld lines", (long)value];
+        [popup addItemWithTitle:title];
+        popup.lastItem.representedObject = @(value);
+    }
+
+    [popup selectItemAtIndex:0];
+    return popup;
+}
+
+- (NSString *)selectedOverlayFontFamilyValue {
+    NSString *selectedValue = self.overlayFontFamilyPopup.selectedItem.representedObject;
+    return normalizedOverlayFontFamilyValue(selectedValue);
+}
+
+- (NSInteger)selectedOverlayMaxVisibleLinesValue {
+    NSNumber *selectedValue = [self.overlayMaxVisibleLinesPopup.selectedItem.representedObject isKindOfClass:[NSNumber class]]
+        ? self.overlayMaxVisibleLinesPopup.selectedItem.representedObject
+        : nil;
+    return clampedOverlayMaxVisibleLinesValue(selectedValue.integerValue > 0 ? selectedValue.integerValue : kOverlayMaxVisibleLinesDefault);
+}
+
+- (void)selectOverlayFontFamilyValue:(NSString *)value {
+    NSString *normalized = normalizedOverlayFontFamilyValue(value);
+
+    for (NSMenuItem *item in self.overlayFontFamilyPopup.itemArray) {
+        NSString *representedValue = item.representedObject;
+        if (representedValue.length == 0) continue;
+        if ([representedValue isEqualToString:normalized]) {
+            [self.overlayFontFamilyPopup selectItem:item];
+            return;
+        }
+    }
+
+    [self.overlayFontFamilyPopup selectItemAtIndex:0];
+}
+
+- (void)selectOverlayMaxVisibleLinesValue:(NSInteger)value {
+    NSInteger clampedValue = clampedOverlayMaxVisibleLinesValue(value);
+    for (NSMenuItem *item in self.overlayMaxVisibleLinesPopup.itemArray) {
+        NSNumber *representedValue = [item.representedObject isKindOfClass:[NSNumber class]] ? item.representedObject : nil;
+        if (representedValue.integerValue == clampedValue) {
+            [self.overlayMaxVisibleLinesPopup selectItem:item];
+            return;
+        }
+    }
+
+    [self.overlayMaxVisibleLinesPopup selectItemAtIndex:0];
+}
+
+- (void)updateOverlayLineLimitControlsEnabled {
+    self.overlayMaxVisibleLinesPopup.enabled = self.overlayLimitVisibleLinesSwitch.state == NSControlStateValueOn;
+}
+
+- (NSView *)sliderControlWithSlider:(NSSlider *)slider valueLabel:(NSTextField *)valueLabel width:(CGFloat)width {
+    CGFloat spacing = 10.0;
+    CGFloat height = MAX(slider.frame.size.height, valueLabel.frame.size.height);
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+
+    slider.frame = NSMakeRect(0,
+                              floor((height - slider.frame.size.height) / 2.0),
+                              width - valueLabel.frame.size.width - spacing,
+                              slider.frame.size.height);
+    valueLabel.frame = NSMakeRect(CGRectGetMaxX(slider.frame) + spacing,
+                                  floor((height - valueLabel.frame.size.height) / 2.0),
+                                  valueLabel.frame.size.width,
+                                  valueLabel.frame.size.height);
+    [container addSubview:slider];
+    [container addSubview:valueLabel];
+    return container;
+}
+
 - (NSTextField *)descriptionLabel:(NSString *)text {
     NSTextField *label = [NSTextField wrappingLabelWithString:text];
     label.font = [NSFont systemFontOfSize:12];
     label.textColor = [NSColor secondaryLabelColor];
     return label;
+}
+
+- (CGFloat)fittingHeightForWrappingLabel:(NSTextField *)label width:(CGFloat)width {
+    NSTextFieldCell *cell = (NSTextFieldCell *)label.cell;
+    NSSize measuredSize = [cell cellSizeForBounds:NSMakeRect(0, 0, width, CGFLOAT_MAX)];
+    return ceil(MAX(18.0, measuredSize.height));
+}
+
+- (NSTextField *)addSettingsDescriptionText:(NSString *)text
+                                     toPane:(NSView *)pane
+                                      topY:(CGFloat)topY
+                                         x:(CGFloat)x
+                                     width:(CGFloat)width {
+    NSTextField *label = [self descriptionLabel:text];
+    CGFloat height = [self fittingHeightForWrappingLabel:label width:width];
+    label.frame = NSMakeRect(x, floor(topY - height), width, height);
+    [pane addSubview:label];
+    return label;
+}
+
+- (NSTextField *)settingsRowLabelWithString:(NSString *)text {
+    NSTextField *label = [NSTextField labelWithString:text];
+    label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightRegular];
+    label.textColor = [NSColor colorWithRed:0.114 green:0.114 blue:0.122 alpha:1.0];
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    return label;
+}
+
+- (NSSwitch *)settingsSwitchWithAction:(SEL)action {
+    return [self settingsSwitchWithAction:action controlSize:NSControlSizeRegular];
+}
+
+- (NSSwitch *)settingsSwitchWithAction:(SEL)action controlSize:(NSControlSize)controlSize {
+    NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+    toggle.controlSize = controlSize;
+    toggle.target = self;
+    toggle.action = action;
+    [toggle sizeToFit];
+    return toggle;
+}
+
+- (void)enumerateSubviewsRecursivelyInView:(NSView *)view usingBlock:(void (^)(NSView *subview))block {
+    for (NSView *subview in view.subviews) {
+        block(subview);
+        [self enumerateSubviewsRecursivelyInView:subview usingBlock:block];
+    }
+}
+
+- (void)setHidden:(BOOL)hidden forViewsMatchingTags:(NSIndexSet *)tags inView:(NSView *)view {
+    [self enumerateSubviewsRecursivelyInView:view usingBlock:^(NSView *subview) {
+        if ([tags containsIndex:(NSUInteger)subview.tag]) {
+            subview.hidden = hidden;
+        }
+    }];
+}
+
+- (void)setHidden:(BOOL)hidden forViewsWithTagInRange:(NSRange)range inView:(NSView *)view {
+    [self enumerateSubviewsRecursivelyInView:view usingBlock:^(NSView *subview) {
+        if (NSLocationInRange((NSUInteger)subview.tag, range)) {
+            subview.hidden = hidden;
+        }
+    }];
+}
+
+- (void)applySettingsPaneBackgroundToView:(NSView *)pane {
+    pane.wantsLayer = YES;
+    pane.layer.backgroundColor = [NSColor colorWithRed:0.961 green:0.961 blue:0.969 alpha:1.0].CGColor;
+}
+
+- (NSTextField *)sectionTitleLabel:(NSString *)title frame:(NSRect)frame {
+    NSTextField *label = [NSTextField labelWithString:title.uppercaseString];
+    label.frame = frame;
+    label.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    label.textColor = [NSColor colorWithRed:0.525 green:0.525 blue:0.557 alpha:1.0];
+    return label;
+}
+
+- (NSView *)surfaceCardViewWithFrame:(NSRect)frame {
+    NSView *card = [[NSView alloc] initWithFrame:frame];
+    card.wantsLayer = YES;
+    card.layer.backgroundColor = [NSColor whiteColor].CGColor;
+    card.layer.cornerRadius = 12.0;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = [NSColor colorWithRed:0.898 green:0.898 blue:0.918 alpha:1.0].CGColor;
+    return card;
+}
+
+- (NSView *)settingsToggleCardWithFrame:(NSRect)frame title:(NSString *)title toggle:(NSSwitch *)toggle {
+    NSView *card = [self surfaceCardViewWithFrame:frame];
+    CGFloat toggleW = toggle.frame.size.width;
+    CGFloat toggleH = toggle.frame.size.height;
+    if (toggleW <= 0.0 || toggleH <= 0.0) {
+        [toggle sizeToFit];
+        toggleW = toggle.frame.size.width;
+        toggleH = toggle.frame.size.height;
+    }
+
+    NSTextField *label = [self settingsRowLabelWithString:title];
+    label.frame = NSMakeRect(14.0,
+                             floor((frame.size.height - 20.0) / 2.0),
+                             MAX(80.0, frame.size.width - toggleW - 40.0),
+                             20.0);
+    [card addSubview:label];
+
+    toggle.frame = NSMakeRect(frame.size.width - 14.0 - toggleW,
+                              floor((frame.size.height - toggleH) / 2.0),
+                              toggleW,
+                              toggleH);
+    [card addSubview:toggle];
+
+    return card;
+}
+
+- (NSSegmentedControl *)templateActionSegmentedControlWithSymbols:(NSArray<NSString *> *)symbolNames
+                                                         toolTips:(NSArray<NSString *> *)toolTips
+                                                           action:(SEL)action {
+    NSSegmentedControl *control = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(0, 0, 50, 24)];
+    control.segmentCount = symbolNames.count;
+    control.segmentStyle = NSSegmentStyleTexturedRounded;
+    control.trackingMode = NSSegmentSwitchTrackingMomentary;
+    control.controlSize = NSControlSizeSmall;
+    control.target = self;
+    control.action = action;
+
+    for (NSInteger idx = 0; idx < (NSInteger)symbolNames.count; idx++) {
+        NSString *symbolName = symbolNames[idx];
+        NSString *toolTip = idx < (NSInteger)toolTips.count ? toolTips[idx] : @"";
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:toolTip];
+        image.size = NSMakeSize(12, 12);
+        [control setImage:image forSegment:idx];
+        [control setWidth:24 forSegment:idx];
+        [[control cell] setToolTip:toolTip forSegment:idx];
+    }
+
+    return control;
+}
+
+// ─── Card Layout Helpers ───────────────────────────────────────────
+
+- (NSView *)cardWithTitle:(NSString *)title rows:(NSArray<NSView *> *)rows width:(CGFloat)width {
+    CGFloat rowHeight = 44.0;
+    CGFloat cardPad = 16.0;
+
+    CGFloat cardHeight = rows.count * rowHeight;
+    CGFloat titleHeight = title.length > 0 ? 28.0 : 0.0;
+    CGFloat totalHeight = titleHeight + cardHeight;
+
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, totalHeight)];
+
+    if (title.length > 0) {
+        NSTextField *titleLabel = [NSTextField labelWithString:title.uppercaseString];
+        titleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+        titleLabel.textColor = [NSColor colorWithRed:0.525 green:0.525 blue:0.557 alpha:1.0];
+        titleLabel.frame = NSMakeRect(cardPad, cardHeight, width - 2 * cardPad, 20);
+        [container addSubview:titleLabel];
+    }
+
+    NSView *card = [self surfaceCardViewWithFrame:NSMakeRect(0, 0, width, cardHeight)];
+    [container addSubview:card];
+
+    for (NSUInteger i = 0; i < rows.count; i++) {
+        NSView *row = rows[i];
+        CGFloat rowY = cardHeight - (i + 1) * rowHeight;
+        row.frame = NSMakeRect(0, rowY, width, rowHeight);
+        [card addSubview:row];
+
+        if (i < rows.count - 1) {
+            NSView *sep = [[NSView alloc] initWithFrame:NSMakeRect(cardPad, rowY, width - cardPad, 1)];
+            sep.wantsLayer = YES;
+            sep.layer.backgroundColor = [NSColor colorWithRed:0.898 green:0.898 blue:0.918 alpha:1.0].CGColor;
+            [card addSubview:sep];
+        }
+    }
+
+    return container;
+}
+
+- (NSView *)cardRowWithLabel:(NSString *)label control:(NSView *)control {
+    CGFloat rowHeight = 44.0;
+    CGFloat pad = 16.0;
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, rowHeight)];
+
+    NSTextField *lbl = [NSTextField labelWithString:label];
+    lbl.font = [NSFont systemFontOfSize:13 weight:NSFontWeightRegular];
+    lbl.textColor = [NSColor colorWithRed:0.114 green:0.114 blue:0.122 alpha:1.0];
+    lbl.frame = NSMakeRect(pad, (rowHeight - 20) / 2.0, 200, 20);
+    [row addSubview:lbl];
+
+    CGFloat controlW = control.frame.size.width;
+    CGFloat controlH = control.frame.size.height;
+    // Will be repositioned when parent sets the row's frame width
+    control.frame = NSMakeRect(0, (rowHeight - controlH) / 2.0, controlW, controlH);
+    control.autoresizingMask = NSViewMinXMargin;
+    [row addSubview:control];
+
+    return row;
+}
+
+- (void)layoutCardRowControls:(NSView *)card width:(CGFloat)width {
+    CGFloat pad = 16.0;
+    for (NSView *row in card.subviews) {
+        for (NSView *sub in row.subviews) {
+            if (sub.autoresizingMask & NSViewMinXMargin) {
+                CGFloat controlW = sub.frame.size.width;
+                CGFloat controlH = sub.frame.size.height;
+                sub.frame = NSMakeRect(width - pad - controlW,
+                                       (row.frame.size.height - controlH) / 2.0,
+                                       controlW, controlH);
+            }
+        }
+    }
 }
 
 - (NSButton *)eyeButtonWithFrame:(NSRect)frame action:(SEL)action {
@@ -1003,33 +2673,27 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
     BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isAppleSpeech;
 
     // Show/hide Doubao fields
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag == 1001 || view.tag == 1002) { // App Key and Access Key labels
-            view.hidden = !isDoubao;
-        }
-    }
+    [self setHidden:!isDoubao
+ forViewsMatchingTags:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1001, 2)]
+             inView:self.currentPaneView];
     self.asrAppKeyField.hidden = !isDoubao;
     self.asrAccessKeyField.hidden = YES; // Always start hidden (secure mode)
     self.asrAccessKeySecureField.hidden = !isDoubao;
     self.asrAccessKeyToggle.hidden = !isDoubao;
 
     // Show/hide Qwen fields
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag == 1003) { // Qwen API Key label
-            view.hidden = !isQwen;
-        }
-    }
+    [self setHidden:!isQwen
+ forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1003]
+             inView:self.currentPaneView];
     self.asrQwenApiKeyField.hidden = YES; // Always start hidden (secure mode)
     self.asrQwenApiKeySecureField.hidden = !isQwen;
     self.asrQwenApiKeyToggle.hidden = !isQwen;
 
     // Show/hide Apple Speech locale popup and asset status
     self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag == 1005) { // Locale label
-            view.hidden = !isAppleSpeech;
-        }
-    }
+    [self setHidden:!isAppleSpeech
+ forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1005]
+             inView:self.currentPaneView];
 
     // Show/hide local model popup, status, and download button
     self.localModelPopup.hidden = !isModelBasedLocal;
@@ -1055,11 +2719,9 @@ static NSString *defaultCancelKeyForTrigger(NSString *triggerKey) {
         self.modelProgressSizeLabel.hidden = YES;
         [self updateModelStatusLabel];
     }
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag == 1004) { // Model label
-            view.hidden = !isModelBasedLocal;
-        }
-    }
+    [self setHidden:!isModelBasedLocal
+ forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1004]
+             inView:self.currentPaneView];
     if (isModelBasedLocal) {
         [self populateLocalModelPopup:selectedProvider mode:@"asr"];
         [self updateModelStatusLabel];
@@ -1564,37 +3226,36 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
         self.llmTestResultLabel.stringValue = @"";
         [self updateLlmFieldsEnabled];
+    } else if ([identifier isEqualToString:kToolbarOverlay]) {
+        NSString *fontFamilyRaw = configGet(@"overlay.font_family");
+        NSString *fontSizeRaw = configGet(@"overlay.font_size");
+        NSString *bottomMarginRaw = configGet(@"overlay.bottom_margin");
+        NSString *limitVisibleLinesRaw = configGet(@"overlay.limit_visible_lines");
+        NSString *maxVisibleLinesRaw = configGet(@"overlay.max_visible_lines");
+        NSString *fontFamily = fontFamilyRaw.length > 0 ? normalizedOverlayFontFamilyValue(fontFamilyRaw) : kOverlayFontFamilyDefault;
+        NSInteger fontSize = fontSizeRaw.length > 0 ? clampedOverlayFontSizeValue(fontSizeRaw.integerValue) : kOverlayFontSizeDefault;
+        NSInteger bottomMargin = bottomMarginRaw.length > 0 ? clampedOverlayBottomMarginValue(bottomMarginRaw.integerValue) : kOverlayBottomMarginDefault;
+        BOOL limitVisibleLines = overlayLimitVisibleLinesEnabledValue(limitVisibleLinesRaw);
+        NSInteger maxVisibleLines = maxVisibleLinesRaw.length > 0 ? clampedOverlayMaxVisibleLinesValue(maxVisibleLinesRaw.integerValue) : kOverlayMaxVisibleLinesDefault;
+
+        [self selectOverlayFontFamilyValue:fontFamily];
+        self.overlayFontSizeSlider.integerValue = fontSize;
+        self.overlayBottomMarginSlider.integerValue = bottomMargin;
+        self.overlayLimitVisibleLinesSwitch.state = limitVisibleLines ? NSControlStateValueOn : NSControlStateValueOff;
+        [self selectOverlayMaxVisibleLinesValue:maxVisibleLines];
+        [self syncOverlayPreviewFromControls];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
         NSString *triggerKeyRaw = configGet(@"hotkey.trigger_key");
-        NSString *cancelKeyRaw = configGet(@"hotkey.cancel_key");
-
         NSString *triggerKey = normalizedHotkeyValue(triggerKeyRaw);
-        NSString *cancelKey = normalizedHotkeyValue(cancelKeyRaw);
 
-        // Reset cancel key to default if it's empty or matches trigger key
-        if (cancelKey.length == 0 || [cancelKey isEqualToString:triggerKey]) {
-            cancelKey = defaultCancelKeyForTrigger(triggerKey);
-        }
+        [self selectHotkeyValue:triggerKey inPopup:self.hotkeyPopup];
 
-        if (isNumericKeycode(triggerKey)) {
-            ensureCustomKeycodeInPopup(self.hotkeyPopup, triggerKey);
+        // Load trigger mode
+        NSString *triggerMode = configGet(@"hotkey.trigger_mode");
+        if ([triggerMode isEqualToString:@"toggle"]) {
+            [self.triggerModePopup selectItemAtIndex:1];
         } else {
-            for (NSInteger i = 0; i < self.hotkeyPopup.numberOfItems; i++) {
-                if ([[self.hotkeyPopup itemAtIndex:i].representedObject isEqualToString:triggerKey]) {
-                    [self.hotkeyPopup selectItemAtIndex:i];
-                    break;
-                }
-            }
-        }
-        if (isNumericKeycode(cancelKey)) {
-            ensureCustomKeycodeInPopup(self.cancelHotkeyPopup, cancelKey);
-        } else {
-            for (NSInteger i = 0; i < self.cancelHotkeyPopup.numberOfItems; i++) {
-                if ([[self.cancelHotkeyPopup itemAtIndex:i].representedObject isEqualToString:cancelKey]) {
-                    [self.cancelHotkeyPopup selectItemAtIndex:i];
-                    break;
-                }
-            }
+            [self.triggerModePopup selectItemAtIndex:0];
         }
 
         NSString *startSound = configGet(@"feedback.start_sound");
@@ -1611,10 +3272,30 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         NSString *promptPath = [dir stringByAppendingPathComponent:kSystemPromptFile];
         NSString *promptContent = [NSString stringWithContentsOfFile:promptPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
         [self.systemPromptTextView setString:promptContent];
+    } else if ([identifier isEqualToString:kToolbarTemplates]) {
+        NSString *templatesEnabled = configGet(@"llm.prompt_templates_enabled");
+        self.templatesEnabledSwitch.state = [templatesEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+
+        NSArray *templates = [self.rustBridge promptTemplates];
+        self.templatesData = [NSMutableArray array];
+        for (NSDictionary *t in templates) {
+            NSMutableDictionary *templateData = [t mutableCopy] ?: [NSMutableDictionary dictionary];
+            if (![templateData[@"enabled"] isKindOfClass:[NSNumber class]]) {
+                templateData[@"enabled"] = @YES;
+            }
+            NSString *resolvedPrompt = [self resolvedPromptTextForTemplate:templateData];
+            templateData[kTemplateEditablePromptKey] = resolvedPrompt ?: @"";
+            templateData[kTemplateOriginalPromptKey] = resolvedPrompt ?: @"";
+            [self.templatesData addObject:templateData];
+        }
+        [self reindexTemplateShortcuts];
+        [self reloadTemplateTableSelectingRow:(self.templatesData.count > 0 ? 0 : -1)];
     }
 }
 
 - (void)saveConfig:(id)sender {
+    [self endHotkeyRecording];
+
     // Warn if a local provider is selected but assets/models are not installed
     if (self.asrProviderPopup) {
         NSString *provider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
@@ -1719,15 +3400,24 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
     // Update hotkey
     if (self.hotkeyPopup) {
-        NSString *selectedTriggerHotkey = self.hotkeyPopup.selectedItem.representedObject ?: @"fn";
-        NSString *selectedCancelHotkey = self.cancelHotkeyPopup.selectedItem.representedObject ?: defaultCancelKeyForTrigger(selectedTriggerHotkey);
-        if ([selectedTriggerHotkey isEqualToString:selectedCancelHotkey]) {
-            [self showAlert:@"Trigger and Cancel keys must be different"
-                       info:@"Choose two different keys for starting and cancelling voice input."];
-            return;
-        }
+        NSString *selectedTriggerHotkey = normalizedHotkeyValue(self.hotkeyPopup.selectedItem.representedObject ?: @"fn");
         saveOk &= configSet(@"hotkey.trigger_key", selectedTriggerHotkey);
-        saveOk &= configSet(@"hotkey.cancel_key", selectedCancelHotkey);
+
+        // Save trigger mode
+        NSString *triggerModeValue = [self.triggerModePopup selectedItem].representedObject ?: @"hold";
+        saveOk &= configSet(@"hotkey.trigger_mode", triggerModeValue);
+    }
+    if (self.overlayFontSizeSlider) {
+        NSString *fontFamily = [self selectedOverlayFontFamilyValue];
+        NSInteger fontSize = clampedOverlayFontSizeValue(lround(self.overlayFontSizeSlider.doubleValue));
+        NSInteger bottomMargin = clampedOverlayBottomMarginValue(lround(self.overlayBottomMarginSlider.doubleValue));
+        BOOL limitVisibleLines = self.overlayLimitVisibleLinesSwitch.state == NSControlStateValueOn;
+        NSInteger maxVisibleLines = [self selectedOverlayMaxVisibleLinesValue];
+        saveOk &= configSet(@"overlay.font_family", fontFamily);
+        saveOk &= configSet(@"overlay.font_size", [NSString stringWithFormat:@"%ld", (long)fontSize]);
+        saveOk &= configSet(@"overlay.bottom_margin", [NSString stringWithFormat:@"%ld", (long)bottomMargin]);
+        saveOk &= configSet(@"overlay.limit_visible_lines", limitVisibleLines ? @"true" : @"false");
+        saveOk &= configSet(@"overlay.max_visible_lines", [NSString stringWithFormat:@"%ld", (long)maxVisibleLines]);
     }
     if (self.startSoundCheckbox) {
         NSString *startSound = (self.startSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
@@ -1737,10 +3427,31 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"feedback.stop_sound", stopSound);
         saveOk &= configSet(@"feedback.error_sound", errorSound);
     }
+    if (self.templatesEnabledSwitch) {
+        NSString *templatesEnabled = (self.templatesEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"llm.prompt_templates_enabled", templatesEnabled);
+    }
 
     if (!saveOk) {
         [self showAlert:@"Some settings failed to save"
                    info:@"Check that ~/.koe/config.yaml is writable and try again."];
+        return;
+    }
+
+    // Save prompt templates
+    if (self.templatesData) {
+        [self saveCurrentTemplateEdits];
+        NSString *templateError = nil;
+        if (![self validateTemplatesDataWithMessage:&templateError]) {
+            [self showAlert:@"Invalid prompt templates"
+                       info:templateError ?: @"Check your templates and try again."];
+            return;
+        }
+        if (![self.rustBridge setPromptTemplates:[self serializedTemplatesData]]) {
+            [self showAlert:@"Failed to save prompt templates"
+                       info:@"Check your prompt templates and ~/.koe/config.yaml, then try again."];
+            return;
+        }
     }
 
     // Write dictionary.txt
@@ -1777,6 +3488,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 }
 
 - (void)cancelSetup:(id)sender {
+    [self endHotkeyRecording];
+    [self hideRuntimeOverlayPreview];
     [self.window close];
 }
 
@@ -1793,11 +3506,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     BOOL isMlx = [provider isEqualToString:@"mlx"];
 
     // Toggle OpenAI fields (tag 2001-2006)
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag >= 2001 && view.tag <= 2006) {
-            view.hidden = !isOpenAI;
-        }
-    }
+    [self setHidden:!isOpenAI
+ forViewsWithTagInRange:NSMakeRange(2001, 6)
+             inView:self.currentPaneView];
     // Eye toggle doesn't use tag for show/hide (tag is used for 0/1 state)
     self.llmApiKeyToggle.hidden = !isOpenAI;
     // Preserve API key visibility state when showing OpenAI fields
@@ -1815,11 +3526,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     self.llmTestButton.enabled = enabled;
 
     // Toggle MLX fields (tag 2010-2012)
-    for (NSView *view in self.currentPaneView.subviews) {
-        if (view.tag >= 2010 && view.tag <= 2012) {
-            view.hidden = !isMlx;
-        }
-    }
+    [self setHidden:!isMlx
+ forViewsWithTagInRange:NSMakeRange(2010, 3)
+             inView:self.currentPaneView];
     if (isMlx) {
         self.llmLocalModelPopup.enabled = enabled;
         self.llmModelDownloadButton.enabled = enabled;
