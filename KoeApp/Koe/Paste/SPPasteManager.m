@@ -29,7 +29,13 @@ static CGEventSourceRef createPrivateEventSource(void) {
 }
 
 - (void)simulatePasteWithCompletion:(void (^)(void))completion {
-    self.cancelled = NO;
+    // NOTE: `cancelled` is sticky. Once -cancel is called (at quit) it stays
+    // YES for the lifetime of this manager, so any subsequent simulate* calls
+    // become no-ops. This is intentional: during quit, in-flight Rust
+    // callbacks can still land on the main queue after `quitting=YES` is set
+    // on the app delegate, and we must never fire a synthetic paste after
+    // cancel.
+    if (self.cancelled) return;
     // Small delay after clipboard write to ensure it's ready
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
@@ -67,8 +73,14 @@ static CGEventSourceRef createPrivateEventSource(void) {
     CGEventSetFlags(cmdUp, kCGEventFlagMaskCommand);
 
     // Post events
-    CGEventPost(kCGHIDEventTap, cmdDown);
-    CGEventPost(kCGHIDEventTap, cmdUp);
+    // Post at the session level — NOT kCGHIDEventTap. HID-level posting
+    // re-merges the physical keyboard's current modifier state, which means
+    // a private-source event with CMD set can still arrive at a target app
+    // as CMD+CONTROL (or with CMD dropped entirely) if the user is holding
+    // a modifier when the paste fires. Session-level posting honors the
+    // private source's clean flag state.
+    CGEventPost(kCGSessionEventTap, cmdDown);
+    CGEventPost(kCGSessionEventTap, cmdUp);
 
     CFRelease(cmdDown);
     CFRelease(cmdUp);
@@ -78,7 +90,7 @@ static CGEventSourceRef createPrivateEventSource(void) {
 }
 
 - (void)simulateUndoThenPasteWithCompletion:(void (^)(void))completion {
-    self.cancelled = NO;
+    if (self.cancelled) return;
     // First simulate Cmd+Z to undo previous paste
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
@@ -118,8 +130,14 @@ static CGEventSourceRef createPrivateEventSource(void) {
     CGEventSetFlags(cmdDown, kCGEventFlagMaskCommand);
     CGEventSetFlags(cmdUp, kCGEventFlagMaskCommand);
 
-    CGEventPost(kCGHIDEventTap, cmdDown);
-    CGEventPost(kCGHIDEventTap, cmdUp);
+    // Post at the session level — NOT kCGHIDEventTap. HID-level posting
+    // re-merges the physical keyboard's current modifier state, which means
+    // a private-source event with CMD set can still arrive at a target app
+    // as CMD+CONTROL (or with CMD dropped entirely) if the user is holding
+    // a modifier when the paste fires. Session-level posting honors the
+    // private source's clean flag state.
+    CGEventPost(kCGSessionEventTap, cmdDown);
+    CGEventPost(kCGSessionEventTap, cmdUp);
 
     CFRelease(cmdDown);
     CFRelease(cmdUp);
