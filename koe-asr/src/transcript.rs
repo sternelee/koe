@@ -31,6 +31,30 @@ impl TranscriptAggregator {
         }
     }
 
+    /// Live preview that combines committed final text with the in-progress
+    /// interim. After a pause, providers like DoubaoIME emit `Interim` events
+    /// containing only the new segment, so showing `interim_text` alone would
+    /// hide previously-finalized sentences. Merge them with the same
+    /// overlap-trimming logic used for final segments.
+    pub fn live_preview(&self) -> String {
+        if self.final_text.is_empty() {
+            return self.interim_text.clone();
+        }
+        if self.interim_text.is_empty() {
+            return self.final_text.clone();
+        }
+        if self.interim_text.starts_with(&self.final_text) {
+            return self.interim_text.clone();
+        }
+        if self.final_text.starts_with(&self.interim_text) {
+            return self.final_text.clone();
+        }
+        let overlap = longest_overlap(&self.final_text, &self.interim_text);
+        let mut out = self.final_text.clone();
+        out.push_str(&self.interim_text[overlap..]);
+        out
+    }
+
     /// Update with a definite result from two-pass recognition.
     pub fn update_definite(&mut self, text: &str) {
         if !text.is_empty() {
@@ -54,21 +78,21 @@ impl TranscriptAggregator {
         }
         if self.final_text.is_empty() {
             self.final_text = text.to_string();
-            return;
-        }
-        if text.starts_with(&self.final_text) {
+        } else if text.starts_with(&self.final_text) {
             // New final is a refreshed full transcript of the same utterance.
             self.final_text = text.to_string();
-            return;
-        }
-        if self.final_text.starts_with(text) {
+        } else if self.final_text.starts_with(text) {
             // Stale replay of earlier content — ignore.
             return;
+        } else {
+            // New segment: strip the longest overlap between the existing tail
+            // and the incoming head so we don't duplicate boundary characters.
+            let overlap = longest_overlap(&self.final_text, text);
+            self.final_text.push_str(&text[overlap..]);
         }
-        // New segment: strip the longest overlap between the existing tail and
-        // the incoming head so we don't duplicate the boundary characters.
-        let overlap = longest_overlap(&self.final_text, text);
-        self.final_text.push_str(&text[overlap..]);
+        // The segment this interim was tracking is now finalized; clear it so
+        // the next segment's live preview starts clean.
+        self.interim_text.clear();
     }
 
     /// Get the best available text.

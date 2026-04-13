@@ -940,16 +940,16 @@ async fn run_session(
                     Ok(AsrEvent::Interim(text)) => {
                         if !text.is_empty() {
                             aggregator.update_interim(&text);
-                            invoke_interim_text(session_token,&text);
+                            invoke_interim_text(session_token, &aggregator.live_preview());
                         }
                     }
                     Ok(AsrEvent::Definite(text)) => {
                         aggregator.update_definite(&text);
-                        invoke_interim_text(session_token, aggregator.best_text());
+                        invoke_interim_text(session_token, &aggregator.live_preview());
                     }
                     Ok(AsrEvent::Final(text)) => {
                         aggregator.update_final(&text);
-                        invoke_interim_text(session_token, aggregator.best_text());
+                        invoke_interim_text(session_token, &aggregator.live_preview());
                     }
                     Ok(AsrEvent::Closed) => {
                         asr_done = true;
@@ -1208,18 +1208,18 @@ async fn wait_for_final(
         match asr.next_event().await {
             Ok(AsrEvent::Final(text)) => {
                 aggregator.update_final(&text);
-                invoke_interim_text(session_token, aggregator.best_text());
+                invoke_interim_text(session_token, &aggregator.live_preview());
                 return None;
             }
             Ok(AsrEvent::Interim(text)) => {
                 if !text.is_empty() {
                     aggregator.update_interim(&text);
-                    invoke_interim_text(session_token, &text);
+                    invoke_interim_text(session_token, &aggregator.live_preview());
                 }
             }
             Ok(AsrEvent::Definite(text)) => {
                 aggregator.update_definite(&text);
-                invoke_interim_text(session_token, aggregator.best_text());
+                invoke_interim_text(session_token, &aggregator.live_preview());
             }
             Ok(AsrEvent::Closed) => return None,
             Ok(AsrEvent::Error(msg)) => {

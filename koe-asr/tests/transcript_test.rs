@@ -43,3 +43,28 @@ fn final_text_strips_boundary_overlap_between_segments() {
 
     assert_eq!(agg.best_text(), "今天天气不错我们去公园");
 }
+
+#[test]
+fn live_preview_keeps_previous_final_visible_during_new_segment_interim() {
+    let mut agg = TranscriptAggregator::new();
+
+    agg.update_final("第一句话");
+    // After a pause DoubaoIME's interim only carries the new segment.
+    agg.update_interim("第二");
+    assert_eq!(agg.live_preview(), "第一句话第二");
+
+    agg.update_interim("第二句话");
+    assert_eq!(agg.live_preview(), "第一句话第二句话");
+
+    agg.update_final("第二句话");
+    assert_eq!(agg.live_preview(), "第一句话第二句话");
+}
+
+#[test]
+fn live_preview_does_not_duplicate_full_transcript_interim() {
+    let mut agg = TranscriptAggregator::new();
+
+    agg.update_interim("hello");
+    agg.update_interim("hello world");
+    assert_eq!(agg.live_preview(), "hello world");
+}
