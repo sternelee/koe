@@ -612,6 +612,9 @@ static BOOL configFlagEnabled(const char *keyPath) {
     // Cancel any pending session-end block so it cannot trigger a paste
     // during the run-loop draining inside [NSApp terminate:].
     [self cancelPendingSessionEnd];
+    // Cancel any scheduled CGEventPost paste/undo blocks so they cannot leak
+    // synthetic key events into whichever app gains focus after Koe quits.
+    [self.pasteManager cancel];
     [self.audioCaptureManager stopCapture];
     [self.rustBridge cancelSession];
     [self.hotkeyMonitor stop];
