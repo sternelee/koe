@@ -20,6 +20,8 @@ pub struct Config {
     pub overlay: OverlaySection,
     #[serde(default = "default_prompt_templates")]
     pub prompt_templates: Vec<PromptTemplate>,
+    #[serde(default)]
+    pub translation: crate::translation::config::TranslationConfig,
 }
 
 /// A named prompt template selectable from the overlay UI.
@@ -1615,6 +1617,34 @@ overlay:
   bottom_margin: 10
   limit_visible_lines: true
   max_visible_lines: 3
+
+# Real-time translation engine (ASR → MT → TTS → virtual mic)
+# Requires the KoeVirtualMic HAL driver to be installed.
+translation:
+  enabled: false              # set to true to enable translation mode menu item
+  target_language: "en"       # language to translate into (e.g. en, zh, ja, ko)
+  source_language: "auto"     # ASR source language (auto, zh, en, ja, ko)
+  vad_energy_threshold: 0.01  # 0.0–1.0; lower = more sensitive
+  min_speech_ms: 500          # minimum speech duration to trigger ASR
+  silence_ms: 800             # silence gap to end a speech segment
+  max_speech_ms: 30000        # hard cap on segment duration
+  mt:
+    enabled: true
+    provider: "open_ai_compatible" # open_ai_compatible | apple (apple needs macOS 15+)
+    base_url: "https://api.openai.com/v1"
+    api_key: ""               # or use ${OPENAI_API_KEY}
+    model: "gpt-4o-mini"
+    system_prompt: "You are a professional translator. Translate the user's text into the target language. Preserve meaning, tone, and formatting. Output ONLY the translated text, with no extra commentary."
+    timeout_ms: 10000
+  tts:
+    enabled: true
+    provider: "elevenlabs"    # elevenlabs | minimax
+    api_key: ""               # or use ${ELEVENLABS_API_KEY}
+    voice_id: ""              # ElevenLabs voice ID
+    model: "eleven_multilingual_v2"
+    base_url: "https://api.elevenlabs.io"
+    speed: 1.0
+    timeout_ms: 30000
 
 prompt_templates:
   - name: "翻译英文"

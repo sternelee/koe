@@ -28,6 +28,7 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, strong) NSMenuItem *statsCountItem;
 @property (nonatomic, strong) NSMenuItem *statsTimeItem;
 @property (nonatomic, strong) NSMenuItem *statsSpeedItem;
+@property (nonatomic, strong) NSMenuItem *translationModeItem;
 @property (nonatomic, strong) NSTimer *animationTimer;
 @property (nonatomic, assign) NSInteger animationFrame;
 @property (nonatomic, copy) NSString *currentState;
@@ -346,6 +347,15 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     NSMenu *micSubmenu = [[NSMenu alloc] initWithTitle:KoeLocalizedString(@"statusBar.menu.microphone")];
     microphoneItem.submenu = micSubmenu;
     [menu addItem:microphoneItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    self.translationModeItem = [[NSMenuItem alloc] initWithTitle:@"Translation Mode"
+                                                          action:@selector(toggleTranslationMode:)
+                                                   keyEquivalent:@""];
+    self.translationModeItem.target = self;
+    self.translationModeItem.state = NSControlStateValueOff;
+    [menu addItem:self.translationModeItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -823,6 +833,14 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
 }
 
 #pragma mark - Actions
+
+- (void)toggleTranslationMode:(NSMenuItem *)sender {
+    BOOL enabled = (sender.state == NSControlStateValueOff);
+    sender.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    if ([self.delegate respondsToSelector:@selector(statusBarDidToggleTranslationMode:)]) {
+        [self.delegate statusBarDidToggleTranslationMode:enabled];
+    }
+}
 
 - (void)openSetupWizard:(id)sender {
     if ([self.delegate respondsToSelector:@selector(statusBarDidSelectSetupWizard)]) {

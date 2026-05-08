@@ -89,6 +89,56 @@
 "settings.language.restartMessage" = "The interface language has been changed. Some elements may require restarting Koe to update.";
 "settings.language.restartButton" = "OK";
 
+/* ─── Setup Wizard ─── */
+"setupWizard.translation.step.device" = "Device";
+"setupWizard.translation.step.general" = "General";
+"setupWizard.translation.step.mt" = "Machine Translation";
+"setupWizard.translation.step.tts" = "Text-to-Speech";
+"setupWizard.translation.description" = "Configure the real-time translation engine (ASR → MT → TTS → virtual mic).";
+"setupWizard.translation.section.virtualMic" = "Virtual Microphone";
+"setupWizard.translation.section.realMic" = "Real Microphone";
+"setupWizard.translation.section.general" = "General";
+"setupWizard.translation.section.mt" = "Machine Translation";
+"setupWizard.translation.section.tts" = "Text-to-Speech";
+"setupWizard.translation.label.inputDevice" = "Input Device";
+"setupWizard.translation.label.enabled" = "Enabled";
+"setupWizard.translation.label.targetLanguage" = "Target Language";
+"setupWizard.translation.label.sourceLanguage" = "Source Language";
+"setupWizard.translation.label.provider" = "Provider";
+"setupWizard.translation.label.baseUrl" = "Base URL";
+"setupWizard.translation.label.apiKey" = "API Key";
+"setupWizard.translation.label.model" = "Model";
+"setupWizard.translation.label.systemPrompt" = "System Prompt";
+"setupWizard.translation.label.voiceId" = "Voice ID";
+"setupWizard.translation.input.sharedHint" = "Shared global setting with main voice input.";
+"setupWizard.translation.input.unavailableFormat" = "Selected device unavailable: %@";
+"setupWizard.translation.general.sourceTip" = "Tip: set explicit source language for better Apple Translation compatibility.";
+"setupWizard.translation.mt.provider.openai" = "OpenAI-compatible";
+"setupWizard.translation.mt.provider.apple" = "Apple Translation (system API)";
+"setupWizard.translation.mt.appleHint" = "Apple Translation uses system APIs. No Base URL, API key, or model configuration is required.";
+"setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
+"setupWizard.translation.tts.provider.minimax" = "MiniMax";
+"setupWizard.translation.virtualMic.hint" = "Routes translated speech into a system microphone for Zoom/Teams. Requires admin password.";
+"setupWizard.translation.virtualMic.status.ready" = "Driver Ready";
+"setupWizard.translation.virtualMic.status.missing" = "Driver Missing";
+"setupWizard.translation.virtualMic.action.install" = "Install Driver";
+"setupWizard.translation.virtualMic.action.installing" = "Installing…";
+"setupWizard.translation.virtualMic.action.uninstall" = "Uninstall";
+"setupWizard.translation.virtualMic.action.uninstalling" = "Uninstalling…";
+"setupWizard.translation.virtualMic.uninstall.title" = "Remove Virtual Microphone driver?";
+"setupWizard.translation.virtualMic.uninstall.message" = "This will delete /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver and reload Core Audio. You can reinstall it at any time.";
+"setupWizard.translation.virtualMic.error.unknown" = "Unknown error";
+"setupWizard.translation.virtualMic.error.bundleMissing" = "KoeVirtualMic.driver was not bundled with this build. Run `make build` and try again.";
+"setupWizard.common.show" = "Show";
+"setupWizard.common.hide" = "Hide";
+"setupWizard.common.cancel" = "Cancel";
+"setupWizard.translation.placeholder.mtApiKey" = "sk-...";
+"setupWizard.translation.placeholder.apiKey" = "API key...";
+"setupWizard.translation.placeholder.mtSystemPrompt" = "You are a professional translator...";
+"setupWizard.translation.placeholder.voiceId" = "Voice identifier";
+"setupWizard.translation.placeholder.voiceIdMinimax" = "e.g. male-qn-qingse";
+"setupWizard.translation.placeholder.voiceIdElevenlabs" = "e.g. 21m00Tcm4TlvDq8ikWAM";
+
 /* ─── Edit Menu ─── */
 "menu.edit" = "Edit";
 "menu.edit.undo" = "Undo";

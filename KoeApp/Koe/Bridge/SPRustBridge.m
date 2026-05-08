@@ -368,4 +368,23 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
     return sp_core_rewrite_with_template((int32_t)index, text.UTF8String) == 0;
 }
 
+// ─── Translation Engine ────────────────────────────────────────────
+
+- (BOOL)startTranslation {
+    int32_t result = sp_core_translation_start();
+    if (result != 0) {
+        NSLog(@"[Koe] sp_core_translation_start failed: %d", result);
+        return NO;
+    }
+    return YES;
+}
+
+- (void)stopTranslation {
+    sp_core_translation_stop();
+}
+
+- (void)pushTranslationAudioFrame:(const void *)buffer length:(uint32_t)length {
+    sp_core_translation_push_audio((const uint8_t *)buffer, length);
+}
+
 @end

@@ -10,6 +10,8 @@ packages:
     path: ../Packages/KoeMLX
   KoeAppleSpeech:
     path: ../Packages/KoeAppleSpeech
+  KoeAppleTranslation:
+    path: ../Packages/KoeAppleTranslation
 
 settings:
   base:
@@ -72,6 +74,10 @@ targets:
         product: KoeMLX
       - package: KoeAppleSpeech
         product: KoeAppleSpeech
+      - package: KoeAppleTranslation
+        product: KoeAppleTranslation
+      - target: KoeVirtualMic
+        embed: true
     preBuildScripts:
       - name: Build Rust Library
         script: |
@@ -92,6 +98,8 @@ targets:
     dependencies:
       - package: KoeAppleSpeech
         product: KoeAppleSpeech
+      - package: KoeAppleTranslation
+        product: KoeAppleTranslation
     preBuildScripts:
       - name: Build Rust Library
         script: |
@@ -109,6 +117,8 @@ targets:
     dependencies:
       - package: KoeAppleSpeech
         product: KoeAppleSpeech
+      - package: KoeAppleTranslation
+        product: KoeAppleTranslation
     preBuildScripts:
       - name: Build Rust Library
         script: |
@@ -120,3 +130,26 @@ targets:
           mkdir -p "${SRCROOT}/../target/release"
           ln -sf "${SRCROOT}/../target/${RUST_TARGET}/release/libkoe_core.a" "${SRCROOT}/../target/release/libkoe_core.a"
         basedOnDependencyAnalysis: false
+
+  KoeVirtualMic:
+    type: bundle
+    platform: macOS
+    sources:
+      - path: VirtualMicPlugin/Sources
+    settings:
+      base:
+        PRODUCT_NAME: KoeVirtualMic
+        PRODUCT_BUNDLE_IDENTIFIER: nz.owo.koe.virtual-mic-driver
+        WRAPPER_EXTENSION: driver
+        INFOPLIST_FILE: VirtualMicPlugin/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        GCC_PREFIX_HEADER: ""
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/VirtualMicPlugin/Sources"
+        OTHER_LDFLAGS:
+          - "-framework CoreAudio"
+          - "-framework CoreFoundation"
+          - "-lc++"
+    frameworks:
+      - CoreAudio
+      - CoreFoundation
