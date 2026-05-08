@@ -4,10 +4,12 @@ pub mod dictionary;
 pub mod errors;
 pub mod ffi;
 pub mod llm;
+pub mod asr_factory;
 pub mod model_manager;
 pub mod prompt;
 pub mod session;
 pub mod telemetry;
+pub mod translation;
 
 use crate::config::Config;
 use crate::ffi::{
@@ -16,6 +18,7 @@ use crate::ffi::{
     invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext,
     SPSessionMode,
 };
+use crate::translation::engine::{AsrFactory, TranslationEngine};
 #[cfg(feature = "mlx")]
 use crate::llm::mlx::MlxLlmProvider;
 use crate::llm::openai_compatible::{
@@ -24,16 +27,7 @@ use crate::llm::openai_compatible::{
 };
 use crate::llm::{CorrectionRequest, LlmProvider};
 use crate::session::{Session, SessionState};
-#[cfg(feature = "apple-speech")]
-use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
-use koe_asr::{
-    AsrConfig, AsrEvent, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, QwenAsrProvider,
-    TranscriptAggregator,
-};
-#[cfg(feature = "mlx")]
-use koe_asr::{MlxConfig, MlxProvider};
-#[cfg(feature = "sherpa-onnx")]
-use koe_asr::{SherpaOnnxConfig, SherpaOnnxProvider};
+use koe_asr::{AsrConfig, AsrEvent, AsrProvider, TranscriptAggregator};
 use reqwest::Client;
 
 use std::collections::HashSet;
@@ -73,6 +67,12 @@ struct Core {
     /// Session token from the most recent sp_core_session_begin call.
     /// Used by sp_core_rewrite_with_template to route callbacks.
     current_session_token: u64,
+    /// Translation engine stop flag.
+    translation_stop: Option<Arc<AtomicBool>>,
+    /// Translation engine audio sender.
+    translation_audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// Translation engine task handle (used for graceful shutdown).
+    translation_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
@@ -153,6 +153,9 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         llm_http_client,
         llm_warmup_state: Arc::new(Mutex::new(LlmWarmupState::default())),
         current_session_token: 0,
+        translation_stop: None,
+        translation_audio_tx: None,
+        translation_handle: None,
     };
 
     let mut global = CORE.lock().unwrap();
@@ -167,6 +170,12 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
 pub extern "C" fn sp_core_destroy() {
     log::info!("sp_core_destroy called");
     let mut global = CORE.lock().unwrap();
+    if let Some(ref mut core) = *global {
+        if let Some(ref stop) = core.translation_stop {
+            stop.store(true, Ordering::SeqCst);
+        }
+        core.translation_audio_tx = None;
+    }
     *global = None;
 }
 
@@ -342,143 +351,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // - The only difference: new() now runs in a sync context instead of an
     //   async context, but new() only initializes struct fields with no async
     //   operations, so this has no effect.
-    let (asr_config, asr): (AsrConfig, Box<dyn AsrProvider>) = match asr_provider_name.as_str() {
-        "doubaoime" => {
-            let ime = &cfg.asr.doubaoime;
-            let credential_path = if std::path::Path::new(&ime.credential_path).is_absolute() {
-                ime.credential_path.clone()
-            } else {
-                config::config_dir()
-                    .join(&ime.credential_path)
-                    .to_string_lossy()
-                    .to_string()
-            };
-            let mut custom_headers = std::collections::HashMap::new();
-            custom_headers.insert("credential_path".to_string(), credential_path);
-            let config = AsrConfig {
-                url: String::new(),
-                app_key: String::new(),
-                access_key: String::new(),
-                api_key: String::new(),
-                resource_id: String::new(),
-                sample_rate_hz: 16000,
-                connect_timeout_ms: ime.connect_timeout_ms,
-                final_wait_timeout_ms: ime.final_wait_timeout_ms,
-                enable_ddc: false,
-                enable_itn: false,
-                enable_punc: true,
-                enable_nonstream: false,
-                hotwords: Vec::new(),
-                language: ime.language.clone(),
-                custom_headers,
-                end_window_size: None,
-                force_to_speech_time: None,
-                vad_segment_duration: None,
-                output_zh_variant: None,
-                enable_accelerate_text: false,
-                accelerate_score: None,
-                context_messages: Vec::new(),
-            };
-            (config, Box::new(DoubaoImeProvider::new()))
-        }
-        "qwen" => {
-            let qwen = &cfg.asr.qwen;
-            let config = AsrConfig {
-                url: qwen.url.clone(),
-                app_key: qwen.model.clone(),
-                access_key: qwen.api_key.clone(),
-                api_key: String::new(),
-                resource_id: String::new(),
-                sample_rate_hz: 16000,
-                connect_timeout_ms: qwen.connect_timeout_ms,
-                final_wait_timeout_ms: qwen.final_wait_timeout_ms,
-                enable_ddc: false,
-                enable_itn: false,
-                enable_punc: false,
-                enable_nonstream: false,
-                hotwords: Vec::new(),
-                language: Some(qwen.language.clone()),
-                custom_headers: qwen.headers.clone(),
-                end_window_size: None,
-                force_to_speech_time: None,
-                vad_segment_duration: None,
-                output_zh_variant: None,
-                enable_accelerate_text: false,
-                accelerate_score: None,
-                context_messages: Vec::new(),
-            };
-            (config, Box::new(QwenAsrProvider::new()))
-        }
-        #[cfg(feature = "mlx")]
-        "mlx" => {
-            let mlx = &cfg.asr.mlx;
-            let model_path = config::resolve_model_dir(&mlx.model)
-                .to_string_lossy()
-                .to_string();
-            let mlx_config = MlxConfig {
-                model_path,
-                language: mlx.language.clone(),
-                delay_preset: mlx.delay_preset.clone(),
-            };
-            (AsrConfig::default(), Box::new(MlxProvider::new(mlx_config)))
-        }
-        #[cfg(feature = "sherpa-onnx")]
-        "sherpa-onnx" => {
-            let s = &cfg.asr.sherpa_onnx;
-            let model_dir = config::resolve_model_dir(&s.model);
-            let sherpa_config = SherpaOnnxConfig {
-                model_dir,
-                num_threads: s.num_threads,
-                hotwords: core.dictionary.clone(),
-                hotwords_score: s.hotwords_score,
-                endpoint_silence: s.endpoint_silence,
-            };
-            (
-                AsrConfig::default(),
-                Box::new(SherpaOnnxProvider::new(sherpa_config)),
-            )
-        }
-        #[cfg(feature = "apple-speech")]
-        "apple-speech" => {
-            let as_cfg = &cfg.asr.apple_speech;
-            let apple_config = AppleSpeechConfig {
-                locale: as_cfg.locale.clone(),
-                contextual_strings: core.dictionary.clone(),
-            };
-            (
-                AsrConfig::default(),
-                Box::new(AppleSpeechProvider::new(apple_config)),
-            )
-        }
-        _ => {
-            let doubao = &cfg.asr.doubao;
-            let config = AsrConfig {
-                url: doubao.url.clone(),
-                app_key: doubao.app_key.clone(),
-                access_key: doubao.access_key.clone(),
-                api_key: doubao.api_key.clone(),
-                resource_id: doubao.resource_id.clone(),
-                sample_rate_hz: 16000,
-                connect_timeout_ms: doubao.connect_timeout_ms,
-                final_wait_timeout_ms: doubao.final_wait_timeout_ms,
-                enable_ddc: doubao.enable_ddc,
-                enable_itn: doubao.enable_itn,
-                enable_punc: doubao.enable_punc,
-                enable_nonstream: doubao.enable_nonstream,
-                hotwords: core.dictionary.clone(),
-                language: doubao.language.clone(),
-                custom_headers: doubao.headers.clone(),
-                end_window_size: doubao.end_window_size,
-                force_to_speech_time: doubao.force_to_speech_time,
-                vad_segment_duration: doubao.vad_segment_duration,
-                output_zh_variant: doubao.output_zh_variant.clone(),
-                enable_accelerate_text: doubao.enable_accelerate_text,
-                accelerate_score: doubao.accelerate_score,
-                context_messages: Vec::new(),
-            };
-            (config, Box::new(DoubaoWsProvider::new()))
-        }
-    };
+    let (asr_config, asr) = asr_factory::build_asr_provider(cfg, &core.dictionary);
     let llm_config = cfg.llm.clone();
     let llm_http_client = core.llm_http_client.clone();
     let llm_warmup_state = core.llm_warmup_state.clone();
@@ -2097,6 +1970,116 @@ fn invoke_model_status(cb: &ModelCallbackCtx, status: i32, message: &str) {
     if let Ok(cstr) = CString::new(message) {
         (cb.status_cb)(cb.ctx, status, cstr.as_ptr());
     }
+}
+
+// ─── Translation Engine FFI ─────────────────────────────────────────
+
+/// Start the real-time translation engine.
+///
+/// Continuously consumes audio via `sp_core_translation_push_audio`,
+/// segments speech with VAD, and runs ASR → MT → TTS for each utterance,
+/// writing synthesized audio to the shared mmap output buffer.
+#[no_mangle]
+pub extern "C" fn sp_core_translation_start() -> i32 {
+    log::info!("sp_core_translation_start called");
+    let mut global = CORE.lock().unwrap();
+    let core = match global.as_mut() {
+        Some(c) => c,
+        None => {
+            log::error!("core not initialized");
+            return -1;
+        }
+    };
+
+    // Stop any existing translation and wait for it to finish.
+    if let Some(ref stop) = core.translation_stop {
+        stop.store(true, Ordering::SeqCst);
+    }
+    core.translation_audio_tx = None;
+
+    if let Some(old_handle) = core.translation_handle.take() {
+        if let Err(e) = core.runtime.block_on(timeout(Duration::from_secs(10), old_handle)) {
+            log::warn!("[translation] previous engine stop timed out or failed: {e}");
+        }
+    }
+
+    let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1024);
+    let stop = Arc::new(AtomicBool::new(false));
+    core.translation_stop = Some(stop.clone());
+    core.translation_audio_tx = Some(audio_tx);
+
+    let cfg = core.config.clone();
+    let dictionary = core.dictionary.clone();
+    let http_client = core.llm_http_client.clone();
+    let translation_config = cfg.translation.clone();
+
+    let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
+    let engine = TranslationEngine::new(translation_config, http_client, factory);
+
+    let handle = core.runtime.spawn(async move {
+        if let Err(e) = engine.run(audio_rx, stop).await {
+            log::error!("[translation] engine error: {e}");
+        }
+        log::info!("[translation] engine stopped");
+    });
+    core.translation_handle = Some(handle);
+
+    0
+}
+
+/// Stop the real-time translation engine.
+#[no_mangle]
+pub extern "C" fn sp_core_translation_stop() -> i32 {
+    log::info!("sp_core_translation_stop called");
+    let mut global = CORE.lock().unwrap();
+    let core = match global.as_mut() {
+        Some(c) => c,
+        None => return -1,
+    };
+
+    if let Some(ref stop) = core.translation_stop {
+        stop.store(true, Ordering::SeqCst);
+    }
+    core.translation_audio_tx = None;
+
+    if let Some(handle) = core.translation_handle.take() {
+        if let Err(e) = core.runtime.block_on(timeout(Duration::from_secs(10), handle)) {
+            log::warn!("[translation] engine stop timed out or failed: {e}");
+        }
+    }
+
+    core.translation_stop = None;
+    0
+}
+
+/// Push a chunk of PCM 16-bit little-endian mono audio into the translation
+/// pipeline.  `samples` must contain an even number of bytes.
+///
+/// # Safety
+/// `samples_ptr` must be a valid pointer to `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn sp_core_translation_push_audio(
+    samples_ptr: *const u8,
+    len: usize,
+) -> i32 {
+    if samples_ptr.is_null() || len == 0 {
+        return 0;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(samples_ptr, len) };
+    let vec = bytes.to_vec();
+
+    let mut global = CORE.lock().unwrap();
+    let core = match global.as_mut() {
+        Some(c) => c,
+        None => return -1,
+    };
+
+    if let Some(ref tx) = core.translation_audio_tx {
+        if tx.try_send(vec).is_err() {
+            log::warn!("translation audio channel full, dropping frame");
+        }
+    }
+    0
 }
 
 #[cfg(test)]

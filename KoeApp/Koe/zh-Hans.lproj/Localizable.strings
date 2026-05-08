@@ -89,6 +89,56 @@
 "settings.language.restartMessage" = "界面语言已更改。部分元素可能需要重启 Koe 才能更新。";
 "settings.language.restartButton" = "好";
 
+/* ─── 设置向导 ─── */
+"setupWizard.translation.step.device" = "设备";
+"setupWizard.translation.step.general" = "通用";
+"setupWizard.translation.step.mt" = "机器翻译";
+"setupWizard.translation.step.tts" = "语音合成";
+"setupWizard.translation.description" = "配置实时翻译引擎（ASR → MT → TTS → 虚拟麦克风）。";
+"setupWizard.translation.section.virtualMic" = "虚拟麦克风";
+"setupWizard.translation.section.realMic" = "真实麦克风";
+"setupWizard.translation.section.general" = "通用";
+"setupWizard.translation.section.mt" = "机器翻译";
+"setupWizard.translation.section.tts" = "语音合成";
+"setupWizard.translation.label.inputDevice" = "输入设备";
+"setupWizard.translation.label.enabled" = "启用";
+"setupWizard.translation.label.targetLanguage" = "目标语言";
+"setupWizard.translation.label.sourceLanguage" = "源语言";
+"setupWizard.translation.label.provider" = "提供商";
+"setupWizard.translation.label.baseUrl" = "Base URL";
+"setupWizard.translation.label.apiKey" = "API Key";
+"setupWizard.translation.label.model" = "模型";
+"setupWizard.translation.label.systemPrompt" = "系统提示词";
+"setupWizard.translation.label.voiceId" = "Voice ID";
+"setupWizard.translation.input.sharedHint" = "与主语音输入共享同一全局设置。";
+"setupWizard.translation.input.unavailableFormat" = "已选设备不可用：%@";
+"setupWizard.translation.general.sourceTip" = "提示：为更好兼容 Apple Translation，建议设置明确的源语言。";
+"setupWizard.translation.mt.provider.openai" = "OpenAI 兼容接口";
+"setupWizard.translation.mt.provider.apple" = "Apple Translation（系统 API）";
+"setupWizard.translation.mt.appleHint" = "Apple Translation 使用系统 API，无需配置 Base URL、API Key 或模型。";
+"setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
+"setupWizard.translation.tts.provider.minimax" = "MiniMax";
+"setupWizard.translation.virtualMic.hint" = "将翻译后的语音路由到系统麦克风，可用于 Zoom/Teams。需要管理员密码。";
+"setupWizard.translation.virtualMic.status.ready" = "驱动已就绪";
+"setupWizard.translation.virtualMic.status.missing" = "驱动未安装";
+"setupWizard.translation.virtualMic.action.install" = "安装驱动";
+"setupWizard.translation.virtualMic.action.installing" = "正在安装…";
+"setupWizard.translation.virtualMic.action.uninstall" = "卸载";
+"setupWizard.translation.virtualMic.action.uninstalling" = "正在卸载…";
+"setupWizard.translation.virtualMic.uninstall.title" = "要移除虚拟麦克风驱动吗？";
+"setupWizard.translation.virtualMic.uninstall.message" = "这将删除 /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver 并重载 Core Audio。之后可随时重新安装。";
+"setupWizard.translation.virtualMic.error.unknown" = "未知错误";
+"setupWizard.translation.virtualMic.error.bundleMissing" = "当前构建未打包 KoeVirtualMic.driver。请执行 `make build` 后重试。";
+"setupWizard.common.show" = "显示";
+"setupWizard.common.hide" = "隐藏";
+"setupWizard.common.cancel" = "取消";
+"setupWizard.translation.placeholder.mtApiKey" = "sk-...";
+"setupWizard.translation.placeholder.apiKey" = "API 密钥...";
+"setupWizard.translation.placeholder.mtSystemPrompt" = "你是专业翻译，请仅输出翻译结果...";
+"setupWizard.translation.placeholder.voiceId" = "Voice ID";
+"setupWizard.translation.placeholder.voiceIdMinimax" = "例如：male-qn-qingse";
+"setupWizard.translation.placeholder.voiceIdElevenlabs" = "例如：21m00Tcm4TlvDq8ikWAM";
+
 /* ─── 编辑菜单 ─── */
 "menu.edit" = "编辑";
 "menu.edit.undo" = "撤销";

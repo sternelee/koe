@@ -12,6 +12,7 @@
 - (void)statusBarMenuDidOpen;
 - (void)statusBarMenuDidClose;
 - (void)statusBarDidSelectAudioDeviceWithUID:(nullable NSString *)uid;
+- (void)statusBarDidToggleTranslationMode:(BOOL)enabled;
 @end
 
 NS_ASSUME_NONNULL_BEGIN

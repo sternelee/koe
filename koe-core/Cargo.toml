@@ -33,6 +33,8 @@ serde_yaml.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
+hex = "0.4"
+memmap2 = "0.9"
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

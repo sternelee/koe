@@ -95,4 +95,15 @@ typedef NS_ENUM(NSInteger, SPModelVerifyMode) {
 /// Remove downloaded model files (keeps manifest). Returns files removed.
 - (NSInteger)removeModelFiles:(NSString *)modelPath;
 
+// ─── Translation Engine ────────────────────────────────────────────
+
+/// Start the real-time translation engine (ASR → MT → TTS → virtual mic).
+- (BOOL)startTranslation;
+
+/// Stop the translation engine.
+- (void)stopTranslation;
+
+/// Push audio to the translation pipeline (same format as normal sessions).
+- (void)pushTranslationAudioFrame:(const void *)buffer length:(uint32_t)length;
+
 @end

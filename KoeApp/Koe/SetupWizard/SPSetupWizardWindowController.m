@@ -2,6 +2,8 @@
 #import "SPOverlayPanel.h"
 #import "SPRustBridge.h"
 #import "SPLocalization.h"
+#import "SPAudioDeviceManager.h"
+#import "SPVirtualMicInstaller.h"
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h>
 #import <Speech/Speech.h>
@@ -16,6 +18,7 @@ extern void koe_apple_speech_install_asset(
 );
 extern int32_t koe_apple_speech_release_asset(const char *locale);
 extern uint8_t *koe_apple_speech_supported_locales(uint32_t *outLen);
+extern int32_t koe_apple_translation_is_available(void);
 
 static NSString *const kConfigDir = @".koe";
 static NSString *const kDictionaryFile = @"dictionary.txt";
@@ -25,6 +28,9 @@ static NSString *const kTemplateOriginalPromptKey = @"__original_prompt";
 static NSString *const kDefaultLlmChatCompletionsPath = @"/chat/completions";
 static NSString *const kOverlayFontFamilyDefault = @"system";
 static NSString *const kOverlayFontFamilySystemLabel = @"System Default";
+static NSString *const kTranslationLastStepKey = @"SPTranslationWizardLastStep";
+static const NSInteger kTranslationMtOpenAIViewTagBase = 6200;
+static const NSInteger kTranslationMtOpenAIViewTagCount = 9;
 static const NSInteger kOverlayFontSizeDefault = 13;
 static const NSInteger kOverlayFontSizeMin = 12;
 static const NSInteger kOverlayFontSizeMax = 28;
@@ -44,6 +50,7 @@ static NSToolbarItemIdentifier const kToolbarHotkey = @"hotkey";
 static NSToolbarItemIdentifier const kToolbarDictionary = @"dictionary";
 static NSToolbarItemIdentifier const kToolbarSystemPrompt = @"system_prompt";
 static NSToolbarItemIdentifier const kToolbarTemplates = @"templates";
+static NSToolbarItemIdentifier const kToolbarTranslation = @"translation";
 static NSToolbarItemIdentifier const kToolbarAbout = @"about";
 
 // ─── Config helpers (backed by sp_config_get / sp_config_set) ───────
@@ -594,6 +601,43 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, assign) BOOL suppressTemplateSync;
 @property (nonatomic, assign) BOOL templateEditorDirty;
 
+// Translation
+@property (nonatomic, strong) NSSegmentedControl *translationStepSegmentedControl;
+@property (nonatomic, strong) NSView *translationDeviceSectionView;
+@property (nonatomic, strong) NSView *translationGeneralSectionView;
+@property (nonatomic, strong) NSView *translationMtSectionView;
+@property (nonatomic, strong) NSView *translationTtsSectionView;
+@property (nonatomic, strong) NSSwitch *translationEnabledSwitch;
+@property (nonatomic, strong) NSPopUpButton *translationInputDevicePopup;
+@property (nonatomic, strong) NSTextField *translationInputDeviceHintLabel;
+@property (nonatomic, strong) NSTextField *translationTargetLangField;
+@property (nonatomic, strong) NSTextField *translationSourceLangField;
+@property (nonatomic, strong) NSSwitch *translationMtEnabledSwitch;
+@property (nonatomic, strong) NSPopUpButton *translationMtProviderPopup;
+@property (nonatomic, strong) NSTextField *translationMtBaseUrlField;
+@property (nonatomic, strong) NSSecureTextField *translationMtApiKeySecureField;
+@property (nonatomic, strong) NSTextField *translationMtApiKeyField;
+@property (nonatomic, strong) NSButton *translationMtApiKeyToggle;
+@property (nonatomic, strong) NSTextField *translationMtModelField;
+@property (nonatomic, strong) NSTextField *translationMtSystemPromptField;
+@property (nonatomic, strong) NSTextField *translationMtAppleHintLabel;
+@property (nonatomic, strong) NSSwitch *translationTtsEnabledSwitch;
+@property (nonatomic, strong) NSPopUpButton *translationTtsProviderPopup;
+@property (nonatomic, strong) NSSecureTextField *translationTtsApiKeySecureField;
+@property (nonatomic, strong) NSTextField *translationTtsApiKeyField;
+@property (nonatomic, strong) NSButton *translationTtsApiKeyToggle;
+@property (nonatomic, strong) NSTextField *translationTtsVoiceIdField;
+@property (nonatomic, strong) NSTextField *translationTtsModelField;
+@property (nonatomic, strong) NSTextField *translationTtsBaseUrlField;
+
+// ── Virtual Microphone (Translation pane) ──
+@property (nonatomic, strong) NSView *virtualMicStatusDot;
+@property (nonatomic, strong) NSTextField *virtualMicStatusLabel;
+@property (nonatomic, strong) NSButton *virtualMicActionButton;
+@property (nonatomic, strong) NSProgressIndicator *virtualMicProgressIndicator;
+@property (nonatomic, strong) NSTextField *virtualMicErrorLabel;
+@property (nonatomic, assign) BOOL virtualMicOperationInProgress;
+
 @end
 
 @implementation SPSetupWizardWindowController {
@@ -644,15 +688,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarTranslation, kToolbarAbout];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarTranslation, kToolbarAbout];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarSelectableItemIdentifiers:(NSToolbar *)toolbar {
-    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarAbout];
+    return @[kToolbarASR, kToolbarLLM, kToolbarOverlay, kToolbarHotkey, kToolbarDictionary, kToolbarSystemPrompt, kToolbarTemplates, kToolbarTranslation, kToolbarAbout];
 }
 
 - (NSToolbarItem *)toolbar:(NSToolbar *)toolbar itemForItemIdentifier:(NSToolbarItemIdentifier)itemIdentifier willBeInsertedIntoToolbar:(BOOL)flag {
@@ -681,6 +725,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     } else if ([itemIdentifier isEqualToString:kToolbarTemplates]) {
         item.label = @"Templates";
         item.image = [NSImage imageWithSystemSymbolName:@"sparkles" accessibilityDescription:@"Templates"];
+    } else if ([itemIdentifier isEqualToString:kToolbarTranslation]) {
+        item.label = @"Translation";
+        item.image = [NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Translation"];
     } else if ([itemIdentifier isEqualToString:kToolbarAbout]) {
         item.label = @"About";
         item.image = [NSImage imageWithSystemSymbolName:@"info.circle" accessibilityDescription:@"About"];
@@ -727,6 +774,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         paneView = [self buildSystemPromptPane];
     } else if ([identifier isEqualToString:kToolbarTemplates]) {
         paneView = [self buildTemplatesPane];
+    } else if ([identifier isEqualToString:kToolbarTranslation]) {
+        paneView = [self buildTranslationPane];
     } else if ([identifier isEqualToString:kToolbarAbout]) {
         paneView = [self buildAboutPane];
     }
@@ -2465,6 +2514,572 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self reloadTemplateTableSelectingRow:row + 1];
 }
 
+- (NSView *)buildTranslationPane {
+    CGFloat paneWidth = 600;
+    CGFloat rowH = 32;
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
+    CGFloat labelW = 130.0;
+    CGFloat fieldX = labelW + 16.0;
+    CGFloat fieldW = contentW - fieldX - 8.0;
+
+    CGFloat contentHeight = 820;
+    NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
+    [self applySettingsPaneBackgroundToView:pane];
+
+    CGFloat y = contentHeight - 30.0;
+    NSTextField *desc = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.translation.description")
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+    y = NSMinY(desc.frame) - 16.0;
+
+    self.translationStepSegmentedControl = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(contentX, y - 28, contentW, 28)];
+    self.translationStepSegmentedControl.segmentCount = 4;
+    [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.device") forSegment:0];
+    [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.general") forSegment:1];
+    [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.mt") forSegment:2];
+    [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.tts") forSegment:3];
+    NSInteger lastStep = [[NSUserDefaults standardUserDefaults] integerForKey:kTranslationLastStepKey];
+    if (lastStep < 0 || lastStep > 3) {
+        lastStep = 1; // default to General
+    }
+    self.translationStepSegmentedControl.selectedSegment = lastStep;
+    self.translationStepSegmentedControl.target = self;
+    self.translationStepSegmentedControl.action = @selector(translationStepChanged:);
+    [pane addSubview:self.translationStepSegmentedControl];
+
+    CGFloat sectionBottom = 64.0;
+    CGFloat sectionTop = NSMinY(self.translationStepSegmentedControl.frame) - 12.0;
+    CGFloat sectionHeight = sectionTop - sectionBottom;
+    NSRect sectionFrame = NSMakeRect(contentX, sectionBottom, contentW, sectionHeight);
+
+    self.translationDeviceSectionView = [[NSView alloc] initWithFrame:sectionFrame];
+    self.translationGeneralSectionView = [[NSView alloc] initWithFrame:sectionFrame];
+    self.translationMtSectionView = [[NSView alloc] initWithFrame:sectionFrame];
+    self.translationTtsSectionView = [[NSView alloc] initWithFrame:sectionFrame];
+    [pane addSubview:self.translationDeviceSectionView];
+    [pane addSubview:self.translationGeneralSectionView];
+    [pane addSubview:self.translationMtSectionView];
+    [pane addSubview:self.translationTtsSectionView];
+
+    // Device section (Virtual Mic + Real Mic)
+    {
+        NSView *section = self.translationDeviceSectionView;
+        CGFloat sy = sectionHeight - 24.0;
+
+        NSTextField *vmTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.virtualMic") frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:vmTitle];
+        sy -= 30.0;
+
+        CGFloat dotSize = 10.0;
+        CGFloat dotY = sy + (22.0 - dotSize) / 2.0;
+        self.virtualMicStatusDot = [[NSView alloc] initWithFrame:NSMakeRect(0, dotY, dotSize, dotSize)];
+        self.virtualMicStatusDot.wantsLayer = YES;
+        self.virtualMicStatusDot.layer.cornerRadius = dotSize / 2.0;
+        self.virtualMicStatusDot.layer.backgroundColor = [NSColor systemRedColor].CGColor;
+        [section addSubview:self.virtualMicStatusDot];
+
+        self.virtualMicStatusLabel = [NSTextField labelWithString:KoeLocalizedString(@"setupWizard.translation.virtualMic.status.missing")];
+        self.virtualMicStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        self.virtualMicStatusLabel.textColor = [NSColor labelColor];
+        self.virtualMicStatusLabel.frame = NSMakeRect(dotSize + 8, sy, 220, 22);
+        [section addSubview:self.virtualMicStatusLabel];
+
+        self.virtualMicProgressIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(dotSize + 236, sy + 1, 18, 18)];
+        self.virtualMicProgressIndicator.style = NSProgressIndicatorStyleSpinning;
+        self.virtualMicProgressIndicator.controlSize = NSControlSizeSmall;
+        self.virtualMicProgressIndicator.displayedWhenStopped = NO;
+        [section addSubview:self.virtualMicProgressIndicator];
+        sy -= rowH;
+
+        self.virtualMicActionButton = [NSButton buttonWithTitle:KoeLocalizedString(@"setupWizard.translation.virtualMic.action.install") target:self action:@selector(installVirtualMicDriver:)];
+        self.virtualMicActionButton.bezelStyle = NSBezelStyleRounded;
+        self.virtualMicActionButton.controlSize = NSControlSizeRegular;
+        self.virtualMicActionButton.frame = NSMakeRect(0, sy - 2, 140, 28);
+        if (@available(macOS 11.0, *)) {
+            self.virtualMicActionButton.bezelColor = [NSColor controlAccentColor];
+        }
+        [section addSubview:self.virtualMicActionButton];
+
+        NSTextField *vmHint = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.virtualMic.hint")];
+        CGFloat vmHintW = contentW - 150;
+        CGFloat vmHintH = [self fittingHeightForWrappingLabel:vmHint width:vmHintW];
+        vmHint.frame = NSMakeRect(150, sy - 2 + (28 - vmHintH) / 2.0, vmHintW, vmHintH);
+        [section addSubview:vmHint];
+        sy -= rowH + 4.0;
+
+        self.virtualMicErrorLabel = [NSTextField wrappingLabelWithString:@""];
+        self.virtualMicErrorLabel.font = [NSFont systemFontOfSize:11];
+        self.virtualMicErrorLabel.textColor = [NSColor systemRedColor];
+        self.virtualMicErrorLabel.frame = NSMakeRect(0, sy - 18, contentW, 18);
+        self.virtualMicErrorLabel.hidden = YES;
+        [section addSubview:self.virtualMicErrorLabel];
+        sy -= 26.0;
+
+        NSTextField *realMicTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.realMic") frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:realMicTitle];
+        sy -= 32.0;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.inputDevice") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationInputDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW, 26) pullsDown:NO];
+        self.translationInputDevicePopup.target = self;
+        self.translationInputDevicePopup.action = @selector(translationInputDeviceChanged:);
+        [section addSubview:self.translationInputDevicePopup];
+        sy -= rowH;
+
+        self.translationInputDeviceHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.input.sharedHint")];
+        CGFloat micHintHeight = [self fittingHeightForWrappingLabel:self.translationInputDeviceHintLabel width:fieldW];
+        self.translationInputDeviceHintLabel.frame = NSMakeRect(fieldX, sy + 8, fieldW, micHintHeight);
+        [section addSubview:self.translationInputDeviceHintLabel];
+    }
+
+    // General section
+    {
+        NSView *section = self.translationGeneralSectionView;
+        CGFloat sy = sectionHeight - 24.0;
+
+        NSTextField *generalTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.general") frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:generalTitle];
+        sy -= 32.0;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.enabled") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationEnabledSwitch = [self settingsSwitchWithAction:@selector(translationEnabledToggled:)];
+        self.translationEnabledSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationEnabledSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.targetLanguage") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTargetLangField = [self formTextField:NSMakeRect(fieldX, sy - 2, 140, 24) placeholder:@"en"];
+        [section addSubview:self.translationTargetLangField];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.sourceLanguage") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationSourceLangField = [self formTextField:NSMakeRect(fieldX, sy - 2, 140, 24) placeholder:@"auto"];
+        [section addSubview:self.translationSourceLangField];
+
+        NSTextField *note = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.general.sourceTip")];
+        CGFloat noteH = [self fittingHeightForWrappingLabel:note width:fieldW];
+        note.frame = NSMakeRect(fieldX, sy - 26, fieldW, noteH);
+        [section addSubview:note];
+    }
+
+    // MT section
+    {
+        NSView *section = self.translationMtSectionView;
+        CGFloat sy = sectionHeight - 24.0;
+
+        NSTextField *mtTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.mt") frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:mtTitle];
+        sy -= 32.0;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.enabled") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationMtEnabledSwitch = [self settingsSwitchWithAction:nil];
+        self.translationMtEnabledSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationMtEnabledSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.provider") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationMtProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, 260, 26) pullsDown:NO];
+        [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.openai")];
+        [self.translationMtProviderPopup lastItem].representedObject = @"open_ai_compatible";
+        [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.apple")];
+        [self.translationMtProviderPopup lastItem].representedObject = @"apple";
+        self.translationMtProviderPopup.target = self;
+        self.translationMtProviderPopup.action = @selector(translationMtProviderChanged:);
+        [section addSubview:self.translationMtProviderPopup];
+        sy -= rowH;
+
+        self.translationMtAppleHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.mt.appleHint")];
+        CGFloat mtAppleHintHeight = [self fittingHeightForWrappingLabel:self.translationMtAppleHintLabel width:fieldW];
+        self.translationMtAppleHintLabel.frame = NSMakeRect(fieldX, sy + (rowH - mtAppleHintHeight) / 2.0, fieldW, mtAppleHintHeight);
+        self.translationMtAppleHintLabel.hidden = YES;
+        [section addSubview:self.translationMtAppleHintLabel];
+
+        NSTextField *mtBaseUrlLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)];
+        mtBaseUrlLabel.tag = kTranslationMtOpenAIViewTagBase + 0;
+        [section addSubview:mtBaseUrlLabel];
+        self.translationMtBaseUrlField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"https://api.openai.com/v1"];
+        self.translationMtBaseUrlField.tag = kTranslationMtOpenAIViewTagBase + 1;
+        [section addSubview:self.translationMtBaseUrlField];
+        sy -= rowH;
+
+        NSTextField *mtApiKeyLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.apiKey") frame:NSMakeRect(0, sy, labelW, 22)];
+        mtApiKeyLabel.tag = kTranslationMtOpenAIViewTagBase + 2;
+        [section addSubview:mtApiKeyLabel];
+        self.translationMtApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24)];
+        self.translationMtApiKeySecureField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.mtApiKey");
+        self.translationMtApiKeySecureField.font = [NSFont systemFontOfSize:13];
+        self.translationMtApiKeySecureField.tag = kTranslationMtOpenAIViewTagBase + 3;
+        [section addSubview:self.translationMtApiKeySecureField];
+        self.translationMtApiKeyField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.mtApiKey")];
+        self.translationMtApiKeyField.hidden = YES;
+        self.translationMtApiKeyField.tag = kTranslationMtOpenAIViewTagBase + 4;
+        [section addSubview:self.translationMtApiKeyField];
+        self.translationMtApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + fieldW - 32, sy - 2, 28, 24) action:@selector(toggleTranslationMtApiKeyVisibility:)];
+        [section addSubview:self.translationMtApiKeyToggle];
+        sy -= rowH;
+
+        NSTextField *mtModelLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)];
+        mtModelLabel.tag = kTranslationMtOpenAIViewTagBase + 5;
+        [section addSubview:mtModelLabel];
+        self.translationMtModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"gpt-4o-mini"];
+        self.translationMtModelField.tag = kTranslationMtOpenAIViewTagBase + 6;
+        [section addSubview:self.translationMtModelField];
+        sy -= rowH;
+
+        NSTextField *mtSystemPromptLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.systemPrompt") frame:NSMakeRect(0, sy, labelW, 22)];
+        mtSystemPromptLabel.tag = kTranslationMtOpenAIViewTagBase + 7;
+        [section addSubview:mtSystemPromptLabel];
+        self.translationMtSystemPromptField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.mtSystemPrompt")];
+        self.translationMtSystemPromptField.tag = kTranslationMtOpenAIViewTagBase + 8;
+        [section addSubview:self.translationMtSystemPromptField];
+    }
+
+    // TTS section
+    {
+        NSView *section = self.translationTtsSectionView;
+        CGFloat sy = sectionHeight - 24.0;
+
+        NSTextField *ttsTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.tts") frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:ttsTitle];
+        sy -= 32.0;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.enabled") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsEnabledSwitch = [self settingsSwitchWithAction:nil];
+        self.translationTtsEnabledSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationTtsEnabledSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.provider") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, 200, 26) pullsDown:NO];
+        [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.elevenlabs")];
+        [self.translationTtsProviderPopup lastItem].representedObject = @"elevenlabs";
+        [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.minimax")];
+        [self.translationTtsProviderPopup lastItem].representedObject = @"minimax";
+        self.translationTtsProviderPopup.target = self;
+        self.translationTtsProviderPopup.action = @selector(translationTtsProviderChanged:);
+        [section addSubview:self.translationTtsProviderPopup];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.apiKey") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24)];
+        self.translationTtsApiKeySecureField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.apiKey");
+        self.translationTtsApiKeySecureField.font = [NSFont systemFontOfSize:13];
+        [section addSubview:self.translationTtsApiKeySecureField];
+        self.translationTtsApiKeyField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.apiKey")];
+        self.translationTtsApiKeyField.hidden = YES;
+        [section addSubview:self.translationTtsApiKeyField];
+        self.translationTtsApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + fieldW - 32, sy - 2, 28, 24) action:@selector(toggleTranslationTtsApiKeyVisibility:)];
+        [section addSubview:self.translationTtsApiKeyToggle];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.voiceId") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsVoiceIdField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.voiceId")];
+        [section addSubview:self.translationTtsVoiceIdField];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"eleven_multilingual_v2"];
+        [section addSubview:self.translationTtsModelField];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationTtsBaseUrlField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"https://api.elevenlabs.io"];
+        [section addSubview:self.translationTtsBaseUrlField];
+    }
+
+    [self translationStepChanged:nil];
+    [self addButtonsToPane:pane atY:16 width:paneWidth];
+    return pane;
+}
+
+- (void)translationStepChanged:(id)sender {
+    NSInteger selected = self.translationStepSegmentedControl.selectedSegment;
+    if (selected < 0 || selected > 3) {
+        selected = 1;
+        self.translationStepSegmentedControl.selectedSegment = selected;
+    }
+    [[NSUserDefaults standardUserDefaults] setInteger:selected forKey:kTranslationLastStepKey];
+    self.translationDeviceSectionView.hidden = (selected != 0);
+    self.translationGeneralSectionView.hidden = (selected != 1);
+    self.translationMtSectionView.hidden = (selected != 2);
+    self.translationTtsSectionView.hidden = (selected != 3);
+}
+
+- (BOOL)isAppleTranslationAvailable {
+    return koe_apple_translation_is_available() == 1;
+}
+
+- (void)reloadTranslationInputDevices {
+    [self.translationInputDevicePopup removeAllItems];
+
+    [self.translationInputDevicePopup addItemWithTitle:KoeLocalizedString(@"statusBar.menu.systemDefault")];
+    [self.translationInputDevicePopup lastItem].representedObject = @"";
+
+    NSArray<SPAudioInputDevice *> *devices = [self.audioDeviceManager availableInputDevices];
+    for (SPAudioInputDevice *device in devices) {
+        [self.translationInputDevicePopup addItemWithTitle:device.name];
+        [self.translationInputDevicePopup lastItem].representedObject = device.uid;
+    }
+
+    NSString *selectedUID = self.audioDeviceManager.selectedDeviceUID;
+    BOOL selected = NO;
+    if (selectedUID.length > 0) {
+        for (NSInteger i = 0; i < self.translationInputDevicePopup.numberOfItems; i++) {
+            NSString *uid = [self.translationInputDevicePopup itemAtIndex:i].representedObject;
+            if ([uid isEqualToString:selectedUID]) {
+                [self.translationInputDevicePopup selectItemAtIndex:i];
+                selected = YES;
+                break;
+            }
+        }
+    }
+    if (!selected) {
+        [self.translationInputDevicePopup selectItemAtIndex:0];
+    }
+
+    if (selectedUID.length > 0 && !selected) {
+        NSString *name = self.audioDeviceManager.selectedDeviceName ?: selectedUID;
+        self.translationInputDeviceHintLabel.stringValue = [NSString stringWithFormat:KoeLocalizedString(@"setupWizard.translation.input.unavailableFormat"), name];
+        self.translationInputDeviceHintLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.sharedHint");
+        self.translationInputDeviceHintLabel.textColor = [NSColor secondaryLabelColor];
+    }
+}
+
+- (void)translationInputDeviceChanged:(id)sender {
+    NSString *uid = self.translationInputDevicePopup.selectedItem.representedObject;
+    if (uid.length == 0) {
+        uid = nil;
+    }
+
+    NSString *name = nil;
+    if (uid != nil) {
+        for (SPAudioInputDevice *device in [self.audioDeviceManager availableInputDevices]) {
+            if ([device.uid isEqualToString:uid]) {
+                name = device.name;
+                break;
+            }
+        }
+    }
+
+    [self.audioDeviceManager selectDevice:uid name:name];
+    [self reloadTranslationInputDevices];
+}
+
+- (void)updateTranslationEnabledAvailability {
+    BOOL driverReady = [SPVirtualMicInstaller isInstalled];
+
+    if (!driverReady) {
+        self.translationEnabledSwitch.state = NSControlStateValueOff;
+    }
+    self.translationEnabledSwitch.enabled = driverReady;
+
+    BOOL enabled = driverReady && (self.translationEnabledSwitch.state == NSControlStateValueOn);
+    self.translationTargetLangField.enabled = enabled;
+    self.translationSourceLangField.enabled = enabled;
+    self.translationMtEnabledSwitch.enabled = enabled;
+    self.translationMtProviderPopup.enabled = enabled;
+    [self updateTranslationMtFieldsEnabled];
+    self.translationTtsEnabledSwitch.enabled = enabled;
+    self.translationTtsProviderPopup.enabled = enabled;
+    self.translationTtsApiKeySecureField.enabled = enabled;
+    self.translationTtsApiKeyField.enabled = enabled;
+    self.translationTtsApiKeyToggle.enabled = enabled;
+    self.translationTtsVoiceIdField.enabled = enabled;
+    self.translationTtsModelField.enabled = enabled;
+    self.translationTtsBaseUrlField.enabled = enabled;
+}
+
+- (void)translationEnabledToggled:(id)sender {
+    [self updateTranslationEnabledAvailability];
+}
+
+- (void)translationMtProviderChanged:(id)sender {
+    [self updateTranslationMtFieldsEnabled];
+}
+
+- (void)updateTranslationMtFieldsEnabled {
+    BOOL enabled = self.translationEnabledSwitch.enabled && (self.translationEnabledSwitch.state == NSControlStateValueOn);
+    NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
+    BOOL usesOpenAIFields = [provider isEqualToString:@"open_ai_compatible"];
+
+    self.translationMtBaseUrlField.enabled = enabled && usesOpenAIFields;
+    self.translationMtApiKeySecureField.enabled = enabled && usesOpenAIFields;
+    self.translationMtApiKeyField.enabled = enabled && usesOpenAIFields;
+    self.translationMtApiKeyToggle.enabled = enabled && usesOpenAIFields;
+    self.translationMtModelField.enabled = enabled && usesOpenAIFields;
+    self.translationMtSystemPromptField.enabled = enabled && usesOpenAIFields;
+
+    [self setHidden:!usesOpenAIFields
+ forViewsWithTagInRange:NSMakeRange(kTranslationMtOpenAIViewTagBase, kTranslationMtOpenAIViewTagCount)
+             inView:self.translationMtSectionView];
+
+    if (usesOpenAIFields) {
+        BOOL showPlain = (self.translationMtApiKeyToggle.tag == 1);
+        self.translationMtApiKeyField.hidden = !showPlain;
+        self.translationMtApiKeySecureField.hidden = showPlain;
+    } else {
+        self.translationMtApiKeyField.hidden = YES;
+        self.translationMtApiKeySecureField.hidden = YES;
+    }
+
+    self.translationMtApiKeyToggle.hidden = !usesOpenAIFields;
+    self.translationMtAppleHintLabel.hidden = usesOpenAIFields;
+}
+
+- (void)toggleTranslationMtApiKeyVisibility:(NSButton *)sender {
+    if (sender.tag == 0) {
+        self.translationMtApiKeyField.stringValue = self.translationMtApiKeySecureField.stringValue;
+        self.translationMtApiKeySecureField.hidden = YES;
+        self.translationMtApiKeyField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
+        sender.tag = 1;
+    } else {
+        self.translationMtApiKeySecureField.stringValue = self.translationMtApiKeyField.stringValue;
+        self.translationMtApiKeyField.hidden = YES;
+        self.translationMtApiKeySecureField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
+        sender.tag = 0;
+    }
+}
+
+- (void)toggleTranslationTtsApiKeyVisibility:(NSButton *)sender {
+    if (sender.tag == 0) {
+        self.translationTtsApiKeyField.stringValue = self.translationTtsApiKeySecureField.stringValue;
+        self.translationTtsApiKeySecureField.hidden = YES;
+        self.translationTtsApiKeyField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
+        sender.tag = 1;
+    } else {
+        self.translationTtsApiKeySecureField.stringValue = self.translationTtsApiKeyField.stringValue;
+        self.translationTtsApiKeyField.hidden = YES;
+        self.translationTtsApiKeySecureField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
+        sender.tag = 0;
+    }
+}
+
+- (void)translationTtsProviderChanged:(id)sender {
+    [self updateTranslationTtsPlaceholders];
+}
+
+- (void)updateTranslationTtsPlaceholders {
+    NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+    if ([provider isEqualToString:@"minimax"]) {
+        self.translationTtsModelField.placeholderString = @"speech-02-hd";
+        self.translationTtsBaseUrlField.placeholderString = @"https://api.minimax.chat";
+        self.translationTtsVoiceIdField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.voiceIdMinimax");
+    } else {
+        self.translationTtsModelField.placeholderString = @"eleven_multilingual_v2";
+        self.translationTtsBaseUrlField.placeholderString = @"https://api.elevenlabs.io";
+        self.translationTtsVoiceIdField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.voiceIdElevenlabs");
+    }
+}
+
+#pragma mark - Virtual Microphone
+
+- (void)refreshVirtualMicStatus {
+    if (self.virtualMicStatusDot == nil) {
+        return;
+    }
+    BOOL installed = [SPVirtualMicInstaller isInstalled];
+    NSColor *dotColor = installed ? [NSColor systemGreenColor] : [NSColor systemRedColor];
+    self.virtualMicStatusDot.layer.backgroundColor = dotColor.CGColor;
+    self.virtualMicStatusLabel.stringValue = installed
+        ? KoeLocalizedString(@"setupWizard.translation.virtualMic.status.ready")
+        : KoeLocalizedString(@"setupWizard.translation.virtualMic.status.missing");
+
+    if (self.virtualMicOperationInProgress) {
+        self.virtualMicActionButton.title = installed
+            ? KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstalling")
+            : KoeLocalizedString(@"setupWizard.translation.virtualMic.action.installing");
+        self.virtualMicActionButton.enabled = NO;
+        [self updateTranslationEnabledAvailability];
+        return;
+    }
+
+    if (installed) {
+        self.virtualMicActionButton.title = KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstall");
+        self.virtualMicActionButton.action = @selector(uninstallVirtualMicDriver:);
+        if (@available(macOS 11.0, *)) {
+            self.virtualMicActionButton.bezelColor = [NSColor systemRedColor];
+        }
+    } else {
+        self.virtualMicActionButton.title = KoeLocalizedString(@"setupWizard.translation.virtualMic.action.install");
+        self.virtualMicActionButton.action = @selector(installVirtualMicDriver:);
+        if (@available(macOS 11.0, *)) {
+            self.virtualMicActionButton.bezelColor = [NSColor controlAccentColor];
+        }
+    }
+    self.virtualMicActionButton.enabled = YES;
+    [self updateTranslationEnabledAvailability];
+}
+
+- (void)setVirtualMicError:(nullable NSString *)message {
+    if (message.length == 0) {
+        self.virtualMicErrorLabel.stringValue = @"";
+        self.virtualMicErrorLabel.hidden = YES;
+    } else {
+        self.virtualMicErrorLabel.stringValue = message;
+        self.virtualMicErrorLabel.hidden = NO;
+    }
+}
+
+- (void)beginVirtualMicOperation {
+    self.virtualMicOperationInProgress = YES;
+    [self setVirtualMicError:nil];
+    [self.virtualMicProgressIndicator startAnimation:nil];
+    [self refreshVirtualMicStatus];
+}
+
+- (void)endVirtualMicOperationWithError:(nullable NSError *)error {
+    self.virtualMicOperationInProgress = NO;
+    [self.virtualMicProgressIndicator stopAnimation:nil];
+    if (error != nil) {
+        [self setVirtualMicError:[NSString stringWithFormat:@"%@", error.localizedDescription ?: KoeLocalizedString(@"setupWizard.translation.virtualMic.error.unknown")]];
+    } else {
+        [self setVirtualMicError:nil];
+    }
+    [self refreshVirtualMicStatus];
+}
+
+- (void)installVirtualMicDriver:(id)sender {
+    if (self.virtualMicOperationInProgress) {
+        return;
+    }
+    if ([SPVirtualMicInstaller findBundlePath] == nil) {
+        [self setVirtualMicError:KoeLocalizedString(@"setupWizard.translation.virtualMic.error.bundleMissing")];
+        return;
+    }
+    [self beginVirtualMicOperation];
+    [SPVirtualMicInstaller installWithCompletion:^(NSError * _Nullable error) {
+        [self endVirtualMicOperationWithError:error];
+    }];
+}
+
+- (void)uninstallVirtualMicDriver:(id)sender {
+    if (self.virtualMicOperationInProgress) {
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = KoeLocalizedString(@"setupWizard.translation.virtualMic.uninstall.title");
+    alert.informativeText = KoeLocalizedString(@"setupWizard.translation.virtualMic.uninstall.message");
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstall")];
+    [alert addButtonWithTitle:KoeLocalizedString(@"setupWizard.common.cancel")];
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+    [self beginVirtualMicOperation];
+    [SPVirtualMicInstaller uninstallWithCompletion:^(NSError * _Nullable error) {
+        [self endVirtualMicOperationWithError:error];
+    }];
+}
+
 - (NSView *)buildAboutPane {
     CGFloat paneWidth = 600;
     CGFloat contentHeight = 308;
@@ -2938,7 +3553,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSButton *button = [[NSButton alloc] initWithFrame:frame];
     button.bezelStyle = NSBezelStyleInline;
     button.bordered = NO;
-    button.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+    button.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
     button.imageScaling = NSImageScaleProportionallyUpOrDown;
     button.target = self;
     button.action = action;
@@ -2952,14 +3567,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.asrAccessKeyField.stringValue = self.asrAccessKeySecureField.stringValue;
         self.asrAccessKeySecureField.hidden = YES;
         self.asrAccessKeyField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:@"Hide"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
         sender.tag = 1;
     } else {
         // Show secure
         self.asrAccessKeySecureField.stringValue = self.asrAccessKeyField.stringValue;
         self.asrAccessKeyField.hidden = YES;
         self.asrAccessKeySecureField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
         sender.tag = 0;
     }
 }
@@ -2970,14 +3585,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.asrQwenApiKeyField.stringValue = self.asrQwenApiKeySecureField.stringValue;
         self.asrQwenApiKeySecureField.hidden = YES;
         self.asrQwenApiKeyField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:@"Hide"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
         sender.tag = 1;
     } else {
         // Show secure
         self.asrQwenApiKeySecureField.stringValue = self.asrQwenApiKeyField.stringValue;
         self.asrQwenApiKeyField.hidden = YES;
         self.asrQwenApiKeySecureField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
         sender.tag = 0;
     }
 }
@@ -3404,13 +4019,13 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.llmApiKeyField.stringValue = self.llmApiKeySecureField.stringValue;
         self.llmApiKeySecureField.hidden = YES;
         self.llmApiKeyField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:@"Hide"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
         sender.tag = 1;
     } else {
         self.llmApiKeySecureField.stringValue = self.llmApiKeyField.stringValue;
         self.llmApiKeyField.hidden = YES;
         self.llmApiKeySecureField.hidden = NO;
-        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
         sender.tag = 0;
     }
 }
@@ -3569,7 +4184,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     self.llmApiKeyField.stringValue = apiKey;
     self.llmApiKeySecureField.hidden = NO;
     self.llmApiKeyField.hidden = YES;
-    self.llmApiKeyToggle.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Show"];
+    self.llmApiKeyToggle.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
     self.llmApiKeyToggle.tag = 0;
     self.llmModelField.stringValue = [profile[@"model"] isKindOfClass:[NSString class]] ? profile[@"model"] : @"";
     NSString *chatPath = [profile[@"chat_completions_path"] isKindOfClass:[NSString class]]
@@ -3842,6 +4457,63 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
         [self reindexTemplateShortcuts];
         [self reloadTemplateTableSelectingRow:(self.templatesData.count > 0 ? 0 : -1)];
+    } else if ([identifier isEqualToString:kToolbarTranslation]) {
+        [self reloadTranslationInputDevices];
+
+        NSString *enabled = configGet(@"translation.enabled");
+        self.translationEnabledSwitch.state = [enabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        self.translationTargetLangField.stringValue = configGet(@"translation.target_language");
+        self.translationSourceLangField.stringValue = configGet(@"translation.source_language");
+
+        NSString *mtEnabled = configGet(@"translation.mt.enabled");
+        self.translationMtEnabledSwitch.state = [mtEnabled isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
+
+        NSString *mtProvider = configGet(@"translation.mt.provider");
+        if (mtProvider.length == 0) {
+            mtProvider = @"open_ai_compatible";
+        }
+        if ([mtProvider isEqualToString:@"apple"] && ![self isAppleTranslationAvailable]) {
+            mtProvider = @"open_ai_compatible";
+        }
+        for (NSInteger i = 0; i < self.translationMtProviderPopup.numberOfItems; i++) {
+            if ([[self.translationMtProviderPopup itemAtIndex:i].representedObject isEqualToString:mtProvider]) {
+                [self.translationMtProviderPopup selectItemAtIndex:i];
+                break;
+            }
+        }
+        NSMenuItem *appleMtItem = [self.translationMtProviderPopup itemAtIndex:1];
+        if (appleMtItem) {
+            appleMtItem.enabled = [self isAppleTranslationAvailable];
+        }
+
+        self.translationMtBaseUrlField.stringValue = configGet(@"translation.mt.base_url");
+        NSString *mtApiKey = configGet(@"translation.mt.api_key");
+        self.translationMtApiKeySecureField.stringValue = mtApiKey;
+        self.translationMtApiKeyField.stringValue = mtApiKey;
+        self.translationMtModelField.stringValue = configGet(@"translation.mt.model");
+        self.translationMtSystemPromptField.stringValue = configGet(@"translation.mt.system_prompt");
+
+        NSString *ttsEnabled = configGet(@"translation.tts.enabled");
+        self.translationTtsEnabledSwitch.state = [ttsEnabled isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
+        NSString *ttsProvider = configGet(@"translation.tts.provider");
+        for (NSInteger i = 0; i < self.translationTtsProviderPopup.numberOfItems; i++) {
+            if ([[self.translationTtsProviderPopup itemAtIndex:i].representedObject isEqualToString:ttsProvider]) {
+                [self.translationTtsProviderPopup selectItemAtIndex:i];
+                break;
+            }
+        }
+        NSString *ttsApiKey = configGet(@"translation.tts.api_key");
+        self.translationTtsApiKeySecureField.stringValue = ttsApiKey;
+        self.translationTtsApiKeyField.stringValue = ttsApiKey;
+        self.translationTtsVoiceIdField.stringValue = configGet(@"translation.tts.voice_id");
+        self.translationTtsModelField.stringValue = configGet(@"translation.tts.model");
+        self.translationTtsBaseUrlField.stringValue = configGet(@"translation.tts.base_url");
+        [self updateTranslationTtsPlaceholders];
+
+        [self updateTranslationMtFieldsEnabled];
+        [self refreshVirtualMicStatus];
+        [self setVirtualMicError:nil];
+        [self updateTranslationEnabledAvailability];
     }
 }
 
@@ -4008,6 +4680,35 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     if (self.templatesEnabledSwitch) {
         NSString *templatesEnabled = (self.templatesEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.prompt_templates_enabled", templatesEnabled);
+    }
+    if (self.translationEnabledSwitch) {
+        NSString *translationEnabled = (self.translationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.enabled", translationEnabled);
+        saveOk &= configSet(@"translation.target_language", self.translationTargetLangField.stringValue);
+        saveOk &= configSet(@"translation.source_language", self.translationSourceLangField.stringValue);
+
+        NSString *mtEnabled = (self.translationMtEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.mt.enabled", mtEnabled);
+        NSString *mtProvider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
+        if ([mtProvider isEqualToString:@"apple"] && ![self isAppleTranslationAvailable]) {
+            mtProvider = @"open_ai_compatible";
+        }
+        saveOk &= configSet(@"translation.mt.provider", mtProvider);
+        saveOk &= configSet(@"translation.mt.base_url", self.translationMtBaseUrlField.stringValue);
+        NSString *mtApiKey = self.translationMtApiKeyToggle.tag == 1 ? self.translationMtApiKeyField.stringValue : self.translationMtApiKeySecureField.stringValue;
+        saveOk &= configSet(@"translation.mt.api_key", mtApiKey);
+        saveOk &= configSet(@"translation.mt.model", self.translationMtModelField.stringValue);
+        saveOk &= configSet(@"translation.mt.system_prompt", self.translationMtSystemPromptField.stringValue);
+
+        NSString *ttsEnabled = (self.translationTtsEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.tts.enabled", ttsEnabled);
+        NSString *ttsProvider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+        saveOk &= configSet(@"translation.tts.provider", ttsProvider);
+        NSString *ttsApiKey = self.translationTtsApiKeyToggle.tag == 1 ? self.translationTtsApiKeyField.stringValue : self.translationTtsApiKeySecureField.stringValue;
+        saveOk &= configSet(@"translation.tts.api_key", ttsApiKey);
+        saveOk &= configSet(@"translation.tts.voice_id", self.translationTtsVoiceIdField.stringValue);
+        saveOk &= configSet(@"translation.tts.model", self.translationTtsModelField.stringValue);
+        saveOk &= configSet(@"translation.tts.base_url", self.translationTtsBaseUrlField.stringValue);
     }
 
     if (!saveOk) {
