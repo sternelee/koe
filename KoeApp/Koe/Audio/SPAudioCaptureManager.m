@@ -182,7 +182,11 @@ static void queueInputCallback(void *userData,
             NSLog(@"[Koe] Flushing remaining %lu bytes of audio",
                   (unsigned long)self.accumBuffer.length);
             uint64_t ts = mach_absolute_time();
-            self.audioCallback(self.accumBuffer.bytes, (uint32_t)self.accumBuffer.length, ts);
+            @try {
+                self.audioCallback(self.accumBuffer.bytes, (uint32_t)self.accumBuffer.length, ts);
+            } @catch (NSException *exception) {
+                NSLog(@"[Koe] Exception during audio flush: %@", exception);
+            }
             [self.accumBuffer setLength:0];
         }
     }
