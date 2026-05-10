@@ -27,6 +27,14 @@
 @property (nonatomic, strong) id numberKeyMonitor;
 @end
 
+static BOOL sessionStateAllowsConfigReload(NSString *state) {
+    if (state.length == 0) return YES;
+    return [state isEqualToString:@"idle"] ||
+           [state isEqualToString:@"completed"] ||
+           [state isEqualToString:@"failed"] ||
+           [state isEqualToString:@"error"];
+}
+
 @implementation SPAppDelegate
 
 static BOOL configFlagEnabled(const char *keyPath) {
@@ -98,8 +106,43 @@ static BOOL configFlagEnabled(const char *keyPath) {
     }
 }
 
+- (void)reloadConfigAndApplyHotkey {
+    [self.rustBridge reloadConfig];
+
+    struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
+    NSLog(@"[Koe] Reloaded hotkey config: trigger=%d/%d flag=0x%llx kind=%d",
+          newConfig.trigger_key_code,
+          newConfig.trigger_alt_key_code,
+          (unsigned long long)newConfig.trigger_modifier_flag,
+          newConfig.trigger_match_kind);
+
+    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
+    [self.overlayPanel reloadAppearanceFromConfig];
+}
+
+- (void)reloadConfigAndApplyHotkeyIfSafe {
+    if (!sessionStateAllowsConfigReload(self.sessionState)) {
+        self.hasPendingConfigReload = YES;
+        NSLog(@"[Koe] Deferring config reload until session becomes idle (state=%@)", self.sessionState ?: @"unknown");
+        return;
+    }
+
+    self.hasPendingConfigReload = NO;
+    [self reloadConfigAndApplyHotkey];
+}
+
+- (void)applyDeferredConfigReloadIfNeeded {
+    if (!self.hasPendingConfigReload) return;
+    if (!sessionStateAllowsConfigReload(self.sessionState)) return;
+
+    NSLog(@"[Koe] Applying deferred config reload");
+    self.hasPendingConfigReload = NO;
+    [self reloadConfigAndApplyHotkey];
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSLog(@"[Koe] Application launching...");
+    self.sessionState = @"idle";
 
     // Add Edit menu so Cmd+C/V/X/A work in text fields (menu-bar-only app has none by default)
     [self installEditMenu];
@@ -264,21 +307,9 @@ static BOOL configFlagEnabled(const char *keyPath) {
     if (st.st_mtime == self.lastConfigModTime) return;
     self.lastConfigModTime = st.st_mtime;
 
-    NSLog(@"[Koe] Config file changed, reloading hotkey config...");
+    NSLog(@"[Koe] Config file changed, scheduling config reload...");
 
-    // Reload config in Rust core
-    [self.rustBridge reloadConfig];
-
-    // Read new hotkey config
-    struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
-
-    NSLog(@"[Koe] Reloaded hotkey config: trigger=%d/%d flag=0x%llx kind=%d",
-          newConfig.trigger_key_code,
-          newConfig.trigger_alt_key_code,
-          (unsigned long long)newConfig.trigger_modifier_flag,
-          newConfig.trigger_match_kind);
-    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
-    [self.overlayPanel reloadAppearanceFromConfig];
+    [self reloadConfigAndApplyHotkeyIfSafe];
 }
 
 #pragma mark - SPHotkeyMonitorDelegate
@@ -300,6 +331,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.audioCaptureManager stopCapture];
 
     self.recordingStartTime = [NSDate date];
+    self.sessionState = @"recording_hold";
     [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
@@ -341,6 +373,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.audioCaptureManager stopCapture];
 
     self.recordingStartTime = [NSDate date];
+    self.sessionState = @"recording_toggle";
     [self.cuePlayer reloadFeedbackConfig];
     [self.cuePlayer playStart];
     [self.statusBarManager updateState:@"recording"];
@@ -408,6 +441,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
 - (void)rustBridgeDidReceiveFinalText:(NSString *)text {
     if (self.quitting) return;
+    self.sessionState = @"idle";
     NSLog(@"[Koe] Final text received (%lu chars)", (unsigned long)text.length);
 
     // Record history
@@ -446,10 +480,13 @@ static BOOL configFlagEnabled(const char *keyPath) {
         [self.statusBarManager updateState:@"idle"];
         [self showPromptTemplateButtonsIfNeededOrDismiss];
     }
+
+    [self applyDeferredConfigReloadIfNeeded];
 }
 
 - (void)rustBridgeDidEncounterError:(NSString *)message {
     if (self.quitting) return;
+    self.sessionState = @"failed";
     os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_ERROR, "[Koe] Session error: %{public}@", message ?: @"unknown error");
     NSLog(@"[Koe] Session error: %@", message);
     self.showingError = YES;
@@ -458,6 +495,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.hotkeyMonitor resetToIdle];
     [self.statusBarManager updateState:@"error"];
     [self.overlayPanel updateState:@"error"];
+    [self.overlayPanel updateDisplayText:[self localizedErrorSummary:message]];
 
     // Send system notification with error details
     [self sendErrorNotification:message];
@@ -465,13 +503,32 @@ static BOOL configFlagEnabled(const char *keyPath) {
     // Brief error display, then back to idle.
     // Guard with session token so a new session isn't reset to idle.
     uint64_t token = self.rustBridge.currentSessionToken;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (token != self.rustBridge.currentSessionToken) return;
         self.showingError = NO;
         [self.statusBarManager updateState:@"idle"];
         [self.overlayPanel updateState:@"idle"];
+        [self applyDeferredConfigReloadIfNeeded];
     });
+}
+
+- (NSString *)localizedErrorSummary:(NSString *)message {
+    if (!message.length) return KoeLocalizedString(@"error.asr.unknown");
+    NSString *lower = message.lowercaseString;
+    if ([lower containsString:@"timed out"] || [lower containsString:@"timeout"]) {
+        return KoeLocalizedString(@"error.asr.timeout");
+    }
+    if ([lower containsString:@"starttask"] || [lower containsString:@"startsession"]) {
+        return KoeLocalizedString(@"error.asr.service");
+    }
+    if ([lower containsString:@"credential"] || [lower containsString:@"token"] || [lower containsString:@"auth"]) {
+        return KoeLocalizedString(@"error.asr.auth");
+    }
+    if ([lower containsString:@"microphone"] || [lower containsString:@"audio"]) {
+        return KoeLocalizedString(@"error.audio");
+    }
+    return KoeLocalizedString(@"error.asr.unknown");
 }
 
 - (void)sendWarningNotification:(NSString *)message {
@@ -545,14 +602,17 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
 - (void)rustBridgeDidChangeState:(NSString *)state {
     if (self.quitting || self.showingError) return;
+    self.sessionState = state;
     [self.statusBarManager updateState:state];
     [self.overlayPanel updateState:state];
+    [self applyDeferredConfigReloadIfNeeded];
 }
 
 #pragma mark - Audio Error Recovery
 
 - (void)handleAudioCaptureError:(NSString *)reason {
     NSLog(@"[Koe] Audio capture error: %@", reason);
+    self.sessionState = @"error";
     self.showingError = YES;
     [self.cuePlayer playError];
     [self.rustBridge cancelSession];
@@ -568,6 +628,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
         self.showingError = NO;
         [self.statusBarManager updateState:@"idle"];
         [self.overlayPanel updateState:@"idle"];
+        [self applyDeferredConfigReloadIfNeeded];
     });
 }
 
@@ -638,9 +699,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 #pragma mark - SPSetupWizardDelegate
 
 - (void)setupWizardDidSaveConfig {
-    NSLog(@"[Koe] Setup wizard saved config, reloading...");
-    [self.rustBridge reloadConfig];
-    [self.overlayPanel reloadAppearanceFromConfig];
+    NSLog(@"[Koe] Setup wizard saved config, scheduling reload...");
 
     if (![self shouldShowPromptTemplateButtons]) {
         [self stopNumberKeyMonitoring];
@@ -648,10 +707,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
         [self.overlayPanel hideTemplateButtons];
     }
 
-    // Re-apply hotkey config
-    struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
-    [self applyHotkeyConfig:newConfig restartMonitorIfNeeded:YES];
-    NSLog(@"[Koe] Hotkey monitor reloaded after setup wizard save");
+    [self reloadConfigAndApplyHotkeyIfSafe];
+    if (!self.hasPendingConfigReload) {
+        NSLog(@"[Koe] Config reloaded after setup wizard save");
+    }
 }
 
 #pragma mark - SPOverlayPanelDelegate
