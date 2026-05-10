@@ -167,7 +167,11 @@ static void queueInputCallback(void *userData,
 }
 
 - (void)stopCapture {
-    if (!self.isCapturing) return;
+    NSLog(@"[Koe] stopCapture called");
+    if (!self.isCapturing) {
+        NSLog(@"[Koe] stopCapture: not capturing, returning");
+        return;
+    }
 
     self.isCapturing = NO;
 

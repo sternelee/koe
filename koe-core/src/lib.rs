@@ -2119,24 +2119,36 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
 #[no_mangle]
 pub extern "C" fn sp_core_translation_stop() -> i32 {
     log::info!("sp_core_translation_stop called");
+    log::info!("[translation] acquiring CORE mutex");
     let mut global = CORE.lock().unwrap();
+    log::info!("[translation] CORE mutex acquired");
     let core = match global.as_mut() {
         Some(c) => c,
-        None => return -1,
+        None => {
+            log::warn!("[translation] core not initialized");
+            return -1;
+        }
     };
 
+    log::info!("[translation] setting stop flag");
     if let Some(ref stop) = core.translation_stop {
         stop.store(true, Ordering::SeqCst);
     }
+    log::info!("[translation] dropping audio tx");
     core.translation_audio_tx = None;
 
+    log::info!("[translation] awaiting engine handle");
     if let Some(handle) = core.translation_handle.take() {
+        log::info!("[translation] calling block_on");
         if let Err(e) = core.runtime.block_on(timeout(Duration::from_secs(10), handle)) {
             log::warn!("[translation] engine stop timed out or failed: {e}");
         }
+        log::info!("[translation] block_on completed");
     }
 
+    log::info!("[translation] cleaning up stop flag");
     core.translation_stop = None;
+    log::info!("[translation] stop complete");
     0
 }
 

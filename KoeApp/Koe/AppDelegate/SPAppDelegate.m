@@ -748,8 +748,12 @@ static BOOL configFlagEnabled(const char *keyPath) {
         [self.rustBridge startTranslation];
     } else {
         NSLog(@"[Koe] Translation mode disabled");
+        NSLog(@"[Koe] About to stop translation audio capture");
         [self.translationAudioCaptureManager stopCapture];
+        NSLog(@"[Koe] Translation audio capture stopped");
+        NSLog(@"[Koe] About to stop translation engine");
         [self.rustBridge stopTranslation];
+        NSLog(@"[Koe] Translation engine stopped");
     }
 }
 
