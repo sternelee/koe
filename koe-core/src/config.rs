@@ -233,6 +233,8 @@ pub struct LlmSection {
     pub enabled: bool,
     #[serde(default = "default_false")]
     pub prompt_templates_enabled: bool,
+    #[serde(default)]
+    pub output_translation: OutputTranslationConfig,
     /// Active LLM profile id.
     #[serde(default = "default_llm_active_profile")]
     pub active_profile: String,
@@ -259,6 +261,16 @@ pub struct LlmSection {
 pub struct LlmProfilesPayload {
     pub active_profile: String,
     pub profiles: BTreeMap<String, LlmProfileConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OutputTranslationConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_output_translation_target_language")]
+    pub target_language: String,
+    #[serde(default)]
+    pub profile: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -308,6 +320,19 @@ impl LlmSection {
             KoeError::Config(format!("LLM profile not found: {}", self.active_profile))
         })?;
         Ok(profile.to_runtime_config(&self.active_profile))
+    }
+
+    pub fn output_translation_profile_config(&self) -> Result<LlmProfileRuntimeConfig> {
+        let requested_id = self.output_translation.profile.trim();
+        let selected_id = if requested_id.is_empty() || !self.profiles.contains_key(requested_id) {
+            self.active_profile.as_str()
+        } else {
+            requested_id
+        };
+        let profile = self.profiles.get(selected_id).ok_or_else(|| {
+            KoeError::Config(format!("LLM profile not found: {}", selected_id))
+        })?;
+        Ok(profile.to_runtime_config(selected_id))
     }
 
     pub fn profiles_payload(&self) -> LlmProfilesPayload {
@@ -760,6 +785,9 @@ fn default_llm_chat_completions_path() -> String {
 fn default_llm_active_profile() -> String {
     "openai".into()
 }
+fn default_output_translation_target_language() -> String {
+    "English".into()
+}
 fn default_llm_profiles() -> BTreeMap<String, LlmProfileConfig> {
     let mut profiles = BTreeMap::new();
     profiles.insert(
@@ -925,6 +953,11 @@ impl Default for DoubaoAsrConfig {
     }
 }
 impl Default for LlmSection {
+    fn default() -> Self {
+        serde_yaml::from_str("{}").unwrap()
+    }
+}
+impl Default for OutputTranslationConfig {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
     }
@@ -1465,6 +1498,44 @@ pub fn save_llm_profiles_payload(payload: &LlmProfilesPayload) -> Result<()> {
         .map_err(|e| KoeError::Config(format!("serialize LLM profiles: {e}")))?;
     llm_map.insert(serde_yaml::Value::String("profiles".into()), profiles_value);
 
+    if let Some(active_profile) = payload.profiles.get(&payload.active_profile) {
+        llm_map.insert(
+            serde_yaml::Value::String("provider".into()),
+            serde_yaml::Value::String(active_profile.provider.clone()),
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("base_url".into()),
+            serde_yaml::Value::String(active_profile.base_url.clone()),
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("api_key".into()),
+            serde_yaml::Value::String(active_profile.api_key.clone()),
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("model".into()),
+            serde_yaml::Value::String(active_profile.model.clone()),
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("chat_completions_path".into()),
+            serde_yaml::Value::String(active_profile.chat_completions_path.clone()),
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("max_token_parameter".into()),
+            serde_yaml::to_value(&active_profile.max_token_parameter)
+                .map_err(|e| KoeError::Config(format!("serialize max token parameter: {e}")))?,
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("no_reasoning_control".into()),
+            serde_yaml::to_value(&active_profile.no_reasoning_control)
+                .map_err(|e| KoeError::Config(format!("serialize reasoning control: {e}")))?,
+        );
+        llm_map.insert(
+            serde_yaml::Value::String("mlx".into()),
+            serde_yaml::to_value(&active_profile.mlx)
+                .map_err(|e| KoeError::Config(format!("serialize mlx config: {e}")))?,
+        );
+    }
+
     let serialized =
         serde_yaml::to_string(&root).map_err(|e| KoeError::Config(format!("serialize: {e}")))?;
     atomic_write_file(&path, &serialized)?;
@@ -1564,6 +1635,10 @@ asr:
 llm:
   enabled: true        # set to false to skip LLM correction entirely
   prompt_templates_enabled: false  # show rewrite template buttons above the overlay after transcription
+  output_translation:
+    enabled: false
+    target_language: "English"    # e.g. English, Japanese, 简体中文
+    profile: ""                    # empty = reuse active_profile
   active_profile: "openai"
   temperature: 0
   top_p: 1
@@ -1923,5 +1998,27 @@ mod tests {
         let content = fs::read_to_string(koe_dir2.join("config.yaml")).unwrap();
         assert!(content.contains("enabled: true"));
         let _ = fs::remove_dir_all(&tmp2);
+    }
+
+    #[test]
+    fn config_accepts_legacy_minimax_tts_provider_value() {
+        let raw = r#"
+llm:
+  enabled: false
+  output_translation:
+    enabled: false
+translation:
+  tts:
+    provider: minimax
+"#;
+
+        let config: Config = serde_yaml::from_str(raw).unwrap();
+
+        assert!(!config.llm.enabled);
+        assert!(!config.llm.output_translation.enabled);
+        assert!(matches!(
+            config.translation.tts.provider,
+            crate::translation::config::TtsProvider::MiniMax
+        ));
     }
 }
