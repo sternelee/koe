@@ -252,7 +252,7 @@ async fn run_asr(
                         text = t;
                         break Ok(());
                     }
-                    Ok(AsrEvent::Closed) => break Ok(()),
+                    Ok(AsrEvent::Closed(_)) => break Ok(()),
                     Ok(AsrEvent::Error(msg)) => {
                         break Err(KoeError::LlmFailed(format!("ASR error: {msg}")));
                     }
