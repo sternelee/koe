@@ -43,3 +43,4 @@ koe-core/target/
 # Environment / secrets
 .env
 .env.*
+*.dmg
