@@ -1,4 +1,4 @@
-.PHONY: build build-lite build-rust build-xcode build-x86_64 generate clean run
+.PHONY: build build-lite build-rust build-xcode build-x86_64 generate clean run dmg dmg-lite dmg-x86
 
 ARCH := aarch64-apple-darwin
 XCODE_ARCH := arm64
@@ -32,3 +32,15 @@ clean:
 
 run:
 	open "$$(xcodebuild -project KoeApp/Koe.xcodeproj -scheme Koe -configuration Debug -showBuildSettings 2>/dev/null | grep ' BUILD_DIR' | head -1 | awk '{print $$3}')/Debug/Koe.app"
+
+# ---------------------------------------------------------------------------
+# DMG packaging
+# ---------------------------------------------------------------------------
+dmg: build
+	@./scripts/package-dmg.sh Koe
+
+dmg-lite: build-lite
+	@./scripts/package-dmg.sh Koe-lite
+
+dmg-x86: build-x86_64
+	@./scripts/package-dmg.sh Koe-x86
