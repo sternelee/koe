@@ -102,6 +102,7 @@ impl Default for MtConfig {
 #[serde(rename_all = "snake_case")]
 pub enum TtsProvider {
     ElevenLabs,
+    #[serde(alias = "minimax")]
     MiniMax,
 }
 

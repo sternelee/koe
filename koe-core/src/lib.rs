@@ -728,6 +728,18 @@ pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
     }
 }
 
+/// Returns whether final text delivery should use clipboard paste (1) or direct typing (0).
+#[no_mangle]
+pub extern "C" fn sp_core_should_paste_final_text() -> i32 {
+    let global = CORE.lock().unwrap();
+    if let Some(ref core) = *global {
+        let should_paste = core.config.llm.enabled && core.config.llm.output_translation.enabled;
+        if should_paste { 1 } else { 0 }
+    } else {
+        0
+    }
+}
+
 /// Query current hotkey configuration.
 /// Returns key codes and modifier flags for the configured trigger key.
 #[no_mangle]
@@ -977,8 +989,9 @@ async fn run_session(
     }
 
     let llm_enabled = llm_enabled_for_session(&llm_config);
+    let output_translation_enabled = llm_output_translation_enabled_for_session(&llm_config);
 
-    let final_text = if llm_enabled {
+    let corrected_text = if llm_enabled {
         {
             let mut s = session_arc.lock().unwrap();
             if let Some(ref mut session) = *s {
@@ -990,35 +1003,14 @@ async fn run_session(
         let active_profile = llm_config
             .active_profile_config()
             .expect("llm_enabled_for_session checked the active LLM profile");
+        let correction_provider = active_profile.provider.clone();
 
-        let llm: Box<dyn LlmProvider> = match active_profile.provider.as_str() {
-            #[cfg(feature = "mlx")]
-            "mlx" => {
-                let model_path = config::resolve_model_dir(&active_profile.mlx.model)
-                    .to_string_lossy()
-                    .to_string();
-                log::info!("[{session_id}] using MLX LLM provider: {model_path}");
-                Box::new(MlxLlmProvider::new(
-                    model_path,
-                    llm_config.temperature,
-                    llm_config.top_p,
-                    llm_config.max_output_tokens,
-                    llm_config.timeout_ms,
-                ))
-            }
-            _ => Box::new(OpenAiCompatibleProvider::new(
-                llm_http_client,
-                active_profile.base_url,
-                active_profile.chat_completions_path,
-                active_profile.api_key,
-                active_profile.model,
-                llm_config.temperature,
-                llm_config.top_p,
-                llm_config.max_output_tokens,
-                active_profile.max_token_parameter,
-                active_profile.no_reasoning_control,
-            )),
-        };
+        let llm = build_llm_provider(
+            &session_id,
+            &llm_config,
+            llm_http_client.clone(),
+            active_profile,
+        );
 
         // Filter dictionary candidates for prompt
         let candidates =
@@ -1031,7 +1023,7 @@ async fn run_session(
         log::debug!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
         // Skip interim history for local LLM — small models don't benefit from it
         // and it increases prompt length / inference time.
-        let history = if active_profile.provider == "mlx" {
+        let history = if correction_provider == "mlx" {
             &[][..]
         } else {
             &interim_history[..]
@@ -1073,6 +1065,40 @@ async fn run_session(
             log::info!("[{session_id}] LLM not configured, using raw ASR text");
         }
         asr_text
+    };
+
+    let final_text = if output_translation_enabled {
+        let translation_profile = llm_config
+            .output_translation_profile_config()
+            .expect("llm_output_translation_enabled_for_session checked the translation profile");
+        let target_language = llm_config.output_translation.target_language.trim().to_string();
+        let translation_llm = build_llm_provider(
+            &session_id,
+            &llm_config,
+            llm_http_client.clone(),
+            translation_profile,
+        );
+        let request = build_output_translation_request(&corrected_text, &target_language);
+
+        match translation_llm.correct(&request).await {
+            Ok(translated) => {
+                mark_llm_connection_touched(&llm_warmup_state);
+                log::info!(
+                    "[{session_id}] output translation complete: {} -> {} chars ({})",
+                    corrected_text.len(),
+                    translated.len(),
+                    target_language
+                );
+                translated
+            }
+            Err(e) => {
+                log::warn!("[{session_id}] output translation failed, falling back to corrected text: {e}");
+                invoke_session_warning(session_token, &format!("Output translation failed: {e}"));
+                corrected_text
+            }
+        }
+    } else {
+        corrected_text
     };
 
     // Check cancellation after LLM (which may have taken seconds) to avoid
@@ -1172,6 +1198,68 @@ fn llm_enabled_for_session(cfg: &config::LlmSection) -> bool {
     cfg.active_profile_config()
         .map(|profile| profile.is_ready())
         .unwrap_or(false)
+}
+
+fn llm_output_translation_enabled_for_session(cfg: &config::LlmSection) -> bool {
+    if !cfg.enabled {
+        return false;
+    }
+    if !cfg.output_translation.enabled {
+        return false;
+    }
+    if cfg.output_translation.target_language.trim().is_empty() {
+        return false;
+    }
+    cfg.output_translation_profile_config()
+        .map(|profile| profile.is_ready())
+        .unwrap_or(false)
+}
+
+fn build_llm_provider(
+    session_id: &str,
+    llm_config: &config::LlmSection,
+    llm_http_client: Client,
+    profile: config::LlmProfileRuntimeConfig,
+) -> Box<dyn LlmProvider> {
+    match profile.provider.as_str() {
+        #[cfg(feature = "mlx")]
+        "mlx" => {
+            let model_path = config::resolve_model_dir(&profile.mlx.model)
+                .to_string_lossy()
+                .to_string();
+            log::info!("[{session_id}] using MLX LLM provider: {model_path}");
+            Box::new(MlxLlmProvider::new(
+                model_path,
+                llm_config.temperature,
+                llm_config.top_p,
+                llm_config.max_output_tokens,
+                llm_config.timeout_ms,
+            ))
+        }
+        _ => Box::new(OpenAiCompatibleProvider::new(
+            llm_http_client,
+            profile.base_url,
+            profile.chat_completions_path,
+            profile.api_key,
+            profile.model,
+            llm_config.temperature,
+            llm_config.top_p,
+            llm_config.max_output_tokens,
+            profile.max_token_parameter,
+            profile.no_reasoning_control,
+        )),
+    }
+}
+
+fn build_output_translation_request(source_text: &str, target_language: &str) -> CorrectionRequest {
+    CorrectionRequest {
+        asr_text: source_text.to_string(),
+        dictionary_entries: vec![],
+        system_prompt: format!(
+            "You are a professional translator. Translate the user's text into {target_language}. Preserve meaning, tone, punctuation, paragraph breaks, formatting, and proper nouns where appropriate. Output ONLY the translated text with no explanation."
+        ),
+        user_prompt: source_text.to_string(),
+    }
 }
 
 fn start_llm_warmup_if_needed(
@@ -2218,6 +2306,15 @@ mod tests {
         let mut cfg = Config::default().llm;
         cfg.enabled = false;
         assert!(!llm_enabled_for_session(&cfg));
+    }
+
+    #[test]
+    fn output_translation_disabled_when_global_llm_disabled() {
+        let mut cfg = Config::default().llm;
+        cfg.enabled = false;
+        cfg.output_translation.enabled = true;
+
+        assert!(!llm_output_translation_enabled_for_session(&cfg));
     }
 
     #[test]

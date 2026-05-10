@@ -467,16 +467,23 @@ static BOOL configFlagEnabled(const char *keyPath) {
     uint64_t token = self.rustBridge.currentSessionToken;
 
     BOOL accessOK = [self.permissionManager isAccessibilityGranted];
-    NSLog(@"[Koe] Accessibility granted: %@", accessOK ? @"YES" : @"NO");
+    BOOL shouldPaste = (sp_core_should_paste_final_text() == 1);
+    NSLog(@"[Koe] Accessibility granted: %@, delivery=%@", accessOK ? @"YES" : @"NO", shouldPaste ? @"paste" : @"type");
 
     if (accessOK) {
-        [self.pasteManager simulatePasteWithCompletion:^{
-            NSLog(@"[Koe] Paste completion callback fired");
+        void (^completion)(void) = ^{
+            NSLog(@"[Koe] Final text delivery completion callback fired");
             [self.clipboardManager scheduleRestoreAfterDelay:1500];
             if (token != self.rustBridge.currentSessionToken) return;
             [self.statusBarManager updateState:@"idle"];
             [self showPromptTemplateButtonsIfNeededOrDismiss];
-        }];
+        };
+
+        if (shouldPaste) {
+            [self.pasteManager simulatePasteWithCompletion:completion];
+        } else {
+            [self.pasteManager simulateTypingText:text completion:completion];
+        }
     } else {
         NSLog(@"[Koe] Accessibility not granted — text copied to clipboard only");
         [self.statusBarManager updateState:@"idle"];

@@ -89,6 +89,56 @@ static CGEventSourceRef createPrivateEventSource(void) {
     NSLog(@"[Koe] Cmd+V simulated");
 }
 
+- (void)simulateTypingText:(NSString *)text completion:(void (^)(void))completion {
+    if (self.cancelled) return;
+    NSString *textToType = text ?: @"";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        if (self.cancelled) return;
+        [self performTypingText:textToType];
+        if (completion) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                if (self.cancelled) return;
+                completion();
+            });
+        }
+    });
+}
+
+- (void)performTypingText:(NSString *)text {
+    if (self.cancelled || text.length == 0) return;
+
+    CGEventSourceRef source = createPrivateEventSource();
+    if (!source) {
+        NSLog(@"[Koe] Failed to create event source for typing");
+        return;
+    }
+
+    [text enumerateSubstringsInRange:NSMakeRange(0, text.length)
+                             options:NSStringEnumerationByComposedCharacterSequences
+                          usingBlock:^(NSString * _Nullable substring, NSRange substringRange, NSRange enclosingRange, BOOL * _Nonnull stop) {
+        if (self.cancelled || substring.length == 0) return;
+
+        UniChar chars[8] = {0};
+        NSUInteger length = [substring length];
+        if (length > 8) length = 8;
+        [substring getCharacters:chars range:NSMakeRange(0, length)];
+
+        CGEventRef keyDown = CGEventCreateKeyboardEvent(source, (CGKeyCode)0, true);
+        CGEventRef keyUp = CGEventCreateKeyboardEvent(source, (CGKeyCode)0, false);
+        CGEventKeyboardSetUnicodeString(keyDown, (UniCharCount)length, chars);
+        CGEventKeyboardSetUnicodeString(keyUp, (UniCharCount)length, chars);
+        CGEventPost(kCGSessionEventTap, keyDown);
+        CGEventPost(kCGSessionEventTap, keyUp);
+        CFRelease(keyDown);
+        CFRelease(keyUp);
+    }];
+
+    CFRelease(source);
+    NSLog(@"[Koe] Typed %lu characters via Unicode events", (unsigned long)text.length);
+}
+
 - (void)simulateUndoThenPasteWithCompletion:(void (^)(void))completion {
     if (self.cancelled) return;
     // First simulate Cmd+Z to undo previous paste

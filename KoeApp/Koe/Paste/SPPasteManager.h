@@ -6,6 +6,10 @@
 /// The completion block is called after a short delay to allow the paste to take effect.
 - (void)simulatePasteWithCompletion:(void (^)(void))completion;
 
+/// Type text into the current focused input using Unicode keyboard events.
+/// The completion block is called after a short delay to allow the target app to process input.
+- (void)simulateTypingText:(NSString *)text completion:(void (^)(void))completion;
+
 /// Simulate Cmd+Z undo, then Cmd+V paste. Used to replace previously pasted text.
 /// The completion block is called after the paste takes effect.
 - (void)simulateUndoThenPasteWithCompletion:(void (^)(void))completion;
