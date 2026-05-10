@@ -1042,7 +1042,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat paneWidth = 600;
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
-    CGFloat contentHeight = 700;
+    CGFloat contentHeight = 900;
 
     // Sidebar (profile list) geometry
     CGFloat sidebarX = 24.0;
