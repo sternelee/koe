@@ -1338,6 +1338,28 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   // Save / Cancel buttons
   [self addButtonsToPane:pane atY:16 width:paneWidth];
 
+  // Anchor everything to top of the pane except the Save/Cancel row (y=16),
+  // which stays pinned to the bottom. This lets `resizeAsrPaneToCurrentProvider`
+  // shrink/grow the pane height per provider without orphaning controls.
+  for (NSView *sub in pane.subviews) {
+    if (NSMinY(sub.frame) < 50) {
+      sub.autoresizingMask = NSViewMaxYMargin;
+    } else {
+      sub.autoresizingMask = NSViewMinYMargin;
+    }
+  }
+  pane.autoresizesSubviews = YES;
+
+  // Resize pane to fit the *saved* provider's footprint so the window opens
+  // at the right height (avoids a visible resize animation on first load).
+  NSString *savedProvider = configGet(@"asr.provider");
+  if (savedProvider.length == 0) savedProvider = @"doubaoime";
+  CGFloat initialHeight =
+      [self targetAsrPaneHeightForProvider:savedProvider advancedExpanded:NO];
+  NSRect paneFrame = pane.frame;
+  paneFrame.size.height = initialHeight;
+  pane.frame = paneFrame;
+
   return pane;
 }
 
@@ -3790,6 +3812,55 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)asrAdvancedToggled:(NSButton *)sender {
   BOOL expanded = (sender.state == NSControlStateValueOn);
   self.asrAdvancedContainer.hidden = !expanded;
+  [self resizeAsrPaneToCurrentProvider];
+}
+
+// ASR settings pane uses different vertical footprints depending on which
+// provider is selected. The pane is built at the maximum footprint (Doubao +
+// advanced expanded) and then sized down via autoresizing here — Save/Cancel
+// stick to the bottom edge, everything else sticks to the top.
+- (CGFloat)targetAsrPaneHeightForProvider:(NSString *)provider
+                         advancedExpanded:(BOOL)expanded {
+  if ([provider isEqualToString:@"doubaoime"]) {
+    return 220.0;
+  }
+  if ([provider isEqualToString:@"qwen"]) {
+    return 340.0;
+  }
+  if ([provider isEqualToString:@"apple-speech"]) {
+    return 280.0;
+  }
+  if ([provider isEqualToString:@"doubao"]) {
+    return expanded ? 500.0 : 410.0;
+  }
+  // mlx, sherpa-onnx — model row + status + progress
+  return 340.0;
+}
+
+- (void)resizeAsrPaneToCurrentProvider {
+  if (!self.currentPaneView) return;
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarASR]) return;
+
+  NSString *provider =
+      self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
+  BOOL advExpanded =
+      ([provider isEqualToString:@"doubao"] &&
+       self.asrAdvancedDisclosure.state == NSControlStateValueOn);
+  CGFloat targetHeight =
+      [self targetAsrPaneHeightForProvider:provider
+                          advancedExpanded:advExpanded];
+
+  NSRect windowFrame = self.window.frame;
+  CGFloat titleBarHeight =
+      windowFrame.size.height - self.window.contentView.frame.size.height;
+  CGFloat newHeight = targetHeight + titleBarHeight;
+  if (fabs(windowFrame.size.height - newHeight) < 1.0) return;
+
+  NSRect newFrame = NSMakeRect(
+      windowFrame.origin.x,
+      windowFrame.origin.y + windowFrame.size.height - newHeight,
+      windowFrame.size.width, newHeight);
+  [self.window setFrame:newFrame display:YES animate:YES];
 }
 
 - (void)asrProviderChanged:(NSPopUpButton *)sender {
@@ -3830,17 +3901,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.asrApiKeyToggle.hidden = YES;
   }
 
-  // Show/hide language popup (Doubao + DoubaoIME) and advanced (Doubao only)
-  BOOL showLanguage = isDoubao || isDoubaoIme;
+  // Show/hide language popup (Doubao only — DoubaoIME's IME endpoint ignores
+  // the field server-side) and advanced (Doubao only)
+  BOOL showLanguage = isDoubao;
   [self setHidden:!showLanguage
       forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1008]
                     inView:self.currentPaneView];
   self.asrLanguagePopup.hidden = !showLanguage;
-  // Reload language value for the newly selected provider
+  // Reload language value when Doubao is selected
   if (showLanguage) {
-    NSString *langKey =
-        isDoubaoIme ? @"asr.doubaoime.language" : @"asr.doubao.language";
-    NSString *lang = configGet(langKey);
+    NSString *lang = configGet(@"asr.doubao.language");
     BOOL found = NO;
     for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
       if ([[self.asrLanguagePopup itemAtIndex:i].representedObject
@@ -3915,6 +3985,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   // Clear test result when switching provider
   self.asrTestResultLabel.stringValue = @"";
   self.asrTestButton.enabled = YES;
+
+  // Each provider has a different vertical footprint — resize the pane so
+  // there isn't a giant empty area below the visible controls.
+  [self resizeAsrPaneToCurrentProvider];
 }
 
 - (void)localModelChanged:(id)sender {
@@ -4726,10 +4800,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     } else {
       [self.asrAuthModeControl setSelectedSegment:0];
     }
-    // Load language (from whichever provider is selected)
-    NSString *doubaoLang = [provider isEqualToString:@"doubaoime"]
-                               ? configGet(@"asr.doubaoime.language")
-                               : configGet(@"asr.doubao.language");
+    // Load language (Doubao only; DoubaoIME's server ignores this field)
+    NSString *doubaoLang = configGet(@"asr.doubao.language");
     if (doubaoLang.length > 0) {
       BOOL found = NO;
       for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
@@ -5058,15 +5130,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
                                 : self.asrAccessKeySecureField.stringValue;
       saveOk &= configSet(@"asr.doubao.access_key", accessKey);
     }
-    // Save language only for providers that expose the language control
-    if ([selectedProvider isEqualToString:@"doubaoime"] ||
-        [selectedProvider isEqualToString:@"doubao"]) {
+    // Save language only when Doubao is selected (DoubaoIME server ignores it)
+    if ([selectedProvider isEqualToString:@"doubao"]) {
       NSString *langValue =
           self.asrLanguagePopup.selectedItem.representedObject ?: @"";
-      NSString *langKey = [selectedProvider isEqualToString:@"doubaoime"]
-                              ? @"asr.doubaoime.language"
-                              : @"asr.doubao.language";
-      saveOk &= configSet(langKey, langValue);
+      saveOk &= configSet(@"asr.doubao.language", langValue);
     }
     // Save Doubao advanced settings only when Doubao is selected
     if ([selectedProvider isEqualToString:@"doubao"]) {

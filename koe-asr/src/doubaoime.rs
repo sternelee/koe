@@ -600,7 +600,11 @@ impl OpusEncoder {
 // ─── Session Config ────────────────────────────────────────────────
 
 fn build_session_config(device_id: &str, config: &crate::AsrConfig) -> String {
-    let mut session = serde_json::json!({
+    // DoubaoIME's IME endpoint does not honor a `language` field — the official
+    // Doubao Android IME doesn't send one, and probing shows the server accepts
+    // any value (including garbage) without effect. So we only emit the fields
+    // the server actually uses.
+    let session = serde_json::json!({
         "audio_info": {
             "channel": 1,
             "format": "speech_opus",
@@ -617,11 +621,6 @@ fn build_session_config(device_id: &str, config: &crate::AsrConfig) -> String {
             "input_mode": "tool"
         }
     });
-    if let Some(ref lang) = config.language {
-        if !lang.is_empty() {
-            session["language"] = serde_json::Value::String(lang.clone());
-        }
-    }
     serde_json::to_string(&session).unwrap_or_default()
 }
 

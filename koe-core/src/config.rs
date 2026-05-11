@@ -115,9 +115,6 @@ pub struct DoubaoImeAsrConfig {
     pub connect_timeout_ms: u64,
     #[serde(default = "default_final_wait_timeout")]
     pub final_wait_timeout_ms: u64,
-    /// Language code (e.g. "zh-CN"). Empty/None = auto
-    #[serde(default)]
-    pub language: Option<String>,
 }
 
 impl Default for DoubaoImeAsrConfig {
@@ -126,7 +123,6 @@ impl Default for DoubaoImeAsrConfig {
             credential_path: default_doubaoime_credential_path(),
             connect_timeout_ms: default_connect_timeout(),
             final_wait_timeout_ms: default_final_wait_timeout(),
-            language: None,
         }
     }
 }

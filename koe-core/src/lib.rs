@@ -369,7 +369,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
                 enable_punc: true,
                 enable_nonstream: false,
                 hotwords: Vec::new(),
-                language: ime.language.clone(),
+                language: None,
                 custom_headers,
                 end_window_size: None,
                 force_to_speech_time: None,
