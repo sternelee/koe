@@ -31,6 +31,8 @@ static NSString *const kOverlayFontFamilySystemLabel = @"System Default";
 static NSString *const kTranslationLastStepKey = @"SPTranslationWizardLastStep";
 static const NSInteger kTranslationMtOpenAIViewTagBase = 6200;
 static const NSInteger kTranslationMtOpenAIViewTagCount = 9;
+static const NSInteger kTranslationTtsCloudOnlyTag = 6300;
+static const NSInteger kTranslationTtsKokoroOnlyTag = 6301;
 static NSString *const kLlmProfileAreaShiftIdentifier = @"llm-profile-area-shift";
 static const CGFloat kLlmOutputTranslationCollapsedDelta = 122.0;
 static const NSInteger kOverlayFontSizeDefault = 13;
@@ -637,6 +639,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *translationTtsVoiceIdField;
 @property (nonatomic, strong) NSTextField *translationTtsModelField;
 @property (nonatomic, strong) NSTextField *translationTtsBaseUrlField;
+@property (nonatomic, strong) NSTextField *translationTtsSpeakerIdField;
 
 // ── Virtual Microphone (Translation pane) ──
 @property (nonatomic, strong) NSView *virtualMicStatusDot;
@@ -2812,26 +2815,44 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self.translationTtsProviderPopup lastItem].representedObject = @"elevenlabs";
         [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.minimax")];
         [self.translationTtsProviderPopup lastItem].representedObject = @"mini_max";
+        [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.kokoroOnnx")];
+        [self.translationTtsProviderPopup lastItem].representedObject = @"kokoro_onnx";
         self.translationTtsProviderPopup.target = self;
         self.translationTtsProviderPopup.action = @selector(translationTtsProviderChanged:);
         [section addSubview:self.translationTtsProviderPopup];
         sy -= rowH;
 
-        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.apiKey") frame:NSMakeRect(0, sy, labelW, 22)]];
+        NSTextField *ttsApiKeyLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.apiKey") frame:NSMakeRect(0, sy, labelW, 22)];
+        ttsApiKeyLabel.tag = kTranslationTtsCloudOnlyTag;
+        [section addSubview:ttsApiKeyLabel];
         self.translationTtsApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24)];
         self.translationTtsApiKeySecureField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.apiKey");
         self.translationTtsApiKeySecureField.font = [NSFont systemFontOfSize:13];
+        self.translationTtsApiKeySecureField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsApiKeySecureField];
         self.translationTtsApiKeyField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.apiKey")];
         self.translationTtsApiKeyField.hidden = YES;
+        self.translationTtsApiKeyField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsApiKeyField];
         self.translationTtsApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + fieldW - 32, sy - 2, 28, 24) action:@selector(toggleTranslationTtsApiKeyVisibility:)];
+        self.translationTtsApiKeyToggle.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsApiKeyToggle];
         sy -= rowH;
 
-        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.voiceId") frame:NSMakeRect(0, sy, labelW, 22)]];
+        NSTextField *ttsVoiceIdLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.voiceId") frame:NSMakeRect(0, sy, labelW, 22)];
+        ttsVoiceIdLabel.tag = kTranslationTtsCloudOnlyTag;
+        [section addSubview:ttsVoiceIdLabel];
         self.translationTtsVoiceIdField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.voiceId")];
+        self.translationTtsVoiceIdField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsVoiceIdField];
+        sy -= rowH;
+
+        NSTextField *ttsSpeakerIdLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.speakerId") frame:NSMakeRect(0, sy, labelW, 22)];
+        ttsSpeakerIdLabel.tag = kTranslationTtsKokoroOnlyTag;
+        [section addSubview:ttsSpeakerIdLabel];
+        self.translationTtsSpeakerIdField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"0"];
+        self.translationTtsSpeakerIdField.tag = kTranslationTtsKokoroOnlyTag;
+        [section addSubview:self.translationTtsSpeakerIdField];
         sy -= rowH;
 
         [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)]];
@@ -2839,8 +2860,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [section addSubview:self.translationTtsModelField];
         sy -= rowH;
 
-        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)]];
+        NSTextField *ttsBaseUrlLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)];
+        ttsBaseUrlLabel.tag = kTranslationTtsCloudOnlyTag;
+        [section addSubview:ttsBaseUrlLabel];
         self.translationTtsBaseUrlField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"https://api.elevenlabs.io"];
+        self.translationTtsBaseUrlField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsBaseUrlField];
     }
 
@@ -3019,11 +3043,27 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
 - (void)translationTtsProviderChanged:(id)sender {
     [self updateTranslationTtsPlaceholders];
+    [self updateTranslationTtsFieldsVisibility];
+}
+
+- (void)updateTranslationTtsFieldsVisibility {
+    NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+    BOOL isKokoro = [provider isEqualToString:@"kokoro_onnx"];
+    NSView *section = self.translationTtsSectionView;
+    for (NSView *v in section.subviews) {
+        if (v.tag == kTranslationTtsCloudOnlyTag) {
+            v.hidden = isKokoro;
+        } else if (v.tag == kTranslationTtsKokoroOnlyTag) {
+            v.hidden = !isKokoro;
+        }
+    }
 }
 
 - (void)updateTranslationTtsPlaceholders {
     NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
-    if ([provider isEqualToString:@"mini_max"] || [provider isEqualToString:@"minimax"]) {
+    if ([provider isEqualToString:@"kokoro_onnx"]) {
+        self.translationTtsModelField.placeholderString = @"kokoro/kokoro-en";
+    } else if ([provider isEqualToString:@"mini_max"] || [provider isEqualToString:@"minimax"]) {
         self.translationTtsModelField.placeholderString = @"speech-02-hd";
         self.translationTtsBaseUrlField.placeholderString = @"https://api.minimax.chat";
         self.translationTtsVoiceIdField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.voiceIdMinimax");
@@ -4610,7 +4650,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.translationTtsVoiceIdField.stringValue = configGet(@"translation.tts.voice_id");
         self.translationTtsModelField.stringValue = configGet(@"translation.tts.model");
         self.translationTtsBaseUrlField.stringValue = configGet(@"translation.tts.base_url");
+        self.translationTtsSpeakerIdField.stringValue = configGet(@"translation.tts.speaker_id");
         [self updateTranslationTtsPlaceholders];
+        [self updateTranslationTtsFieldsVisibility];
 
         [self updateTranslationMtFieldsEnabled];
         [self refreshVirtualMicStatus];
@@ -4816,6 +4858,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"translation.tts.voice_id", self.translationTtsVoiceIdField.stringValue);
         saveOk &= configSet(@"translation.tts.model", self.translationTtsModelField.stringValue);
         saveOk &= configSet(@"translation.tts.base_url", self.translationTtsBaseUrlField.stringValue);
+        saveOk &= configSet(@"translation.tts.speaker_id", self.translationTtsSpeakerIdField.stringValue);
     }
 
     if (!saveOk) {

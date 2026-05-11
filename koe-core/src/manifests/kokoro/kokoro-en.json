@@ -1,0 +1,25 @@
+{
+    "provider": "sherpa-onnx",
+    "description": "Kokoro English TTS (ONNX, 24kHz, 50 speakers)",
+    "repo": "csukuangfj/sherpa-onnx-kokoro-1.0",
+    "files": [
+        {
+            "name": "model.onnx",
+            "size": 310380672,
+            "sha256": "",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/model.onnx"
+        },
+        {
+            "name": "voices.bin",
+            "size": 18638400,
+            "sha256": "",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/voices.bin"
+        },
+        {
+            "name": "tokens.txt",
+            "size": 3847,
+            "sha256": "",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/tokens.txt"
+        }
+    ]
+}

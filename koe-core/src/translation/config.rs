@@ -98,12 +98,14 @@ impl Default for MtConfig {
 }
 
 /// Text-to-speech provider configuration.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TtsProvider {
     ElevenLabs,
     #[serde(alias = "minimax")]
     MiniMax,
+    /// Kokoro ONNX local TTS via sherpa-onnx (CPU, no API key).
+    KokoroOnnx,
 }
 
 impl Default for TtsProvider {
@@ -118,16 +120,19 @@ impl Default for TtsProvider {
 pub struct TtsConfig {
     pub enabled: bool,
     pub provider: TtsProvider,
-    /// API key.
+    /// API key (cloud providers only).
     pub api_key: String,
-    /// Voice ID.
+    /// Voice ID (cloud providers only).
     pub voice_id: String,
-    /// Model ID (provider-specific).
+    /// Model directory or ID (provider-specific).
+    /// For Kokoro ONNX: relative path under ~/.koe/models/ or absolute path.
     pub model: String,
     /// TTS endpoint base URL (for MiniMax or self-hosted).
     pub base_url: String,
     /// Playback speed multiplier.
     pub speed: f32,
+    /// Speaker ID for multi-speaker models (e.g. Kokoro ONNX, 0–49).
+    pub speaker_id: i32,
     /// Request timeout in milliseconds.
     pub timeout_ms: u64,
 }
@@ -142,6 +147,7 @@ impl Default for TtsConfig {
             model: "eleven_multilingual_v2".to_string(),
             base_url: "https://api.elevenlabs.io".to_string(),
             speed: 1.0,
+            speaker_id: 0,
             timeout_ms: 30_000,
         }
     }

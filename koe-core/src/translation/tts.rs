@@ -4,15 +4,44 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-/// Text-to-speech client that supports multiple cloud providers.
+/// Text-to-speech client that supports multiple cloud and local providers.
 pub struct TtsClient {
     client: Client,
     config: TtsConfig,
+    #[cfg(feature = "sherpa-onnx")]
+    kokoro: Option<KokoroOnnxBackend>,
 }
 
 impl TtsClient {
     pub fn new(client: Client, config: TtsConfig) -> Self {
-        Self { client, config }
+        #[cfg(feature = "sherpa-onnx")]
+        let kokoro = if config.provider == TtsProvider::KokoroOnnx {
+            if config.model.is_empty() {
+                log::warn!("[tts] Kokoro ONNX provider selected but model path is empty");
+                None
+            } else {
+                let model_dir = crate::config::resolve_model_dir(&config.model);
+                match KokoroOnnxBackend::new(&model_dir, config.speaker_id, config.speed) {
+                    Ok(backend) => {
+                        log::info!("[tts] Kokoro ONNX backend loaded from {}", model_dir.display());
+                        Some(backend)
+                    }
+                    Err(e) => {
+                        log::warn!("[tts] Failed to load Kokoro ONNX backend: {e}");
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        Self {
+            client,
+            config,
+            #[cfg(feature = "sherpa-onnx")]
+            kokoro,
+        }
     }
 
     /// Synthesize `text` into f32 PCM audio.
@@ -26,6 +55,7 @@ impl TtsClient {
         match self.config.provider {
             TtsProvider::ElevenLabs => self.elevenlabs_synthesize(text).await,
             TtsProvider::MiniMax => self.minimax_synthesize(text).await,
+            TtsProvider::KokoroOnnx => self.kokoro_synthesize(text).await,
         }
     }
 
@@ -139,6 +169,29 @@ impl TtsClient {
 
         Ok((samples, sample_rate))
     }
+
+    async fn kokoro_synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
+        #[cfg(feature = "sherpa-onnx")]
+        {
+            if let Some(ref kokoro) = self.kokoro {
+                let text = text.to_string();
+                let kokoro = kokoro.clone();
+                tokio::task::spawn_blocking(move || kokoro.synthesize(&text))
+                    .await
+                    .map_err(|e| KoeError::LlmFailed(format!("TTS task failed: {e}")))?
+            } else {
+                Err(KoeError::Config(
+                    "Kokoro ONNX backend not initialized. Check model path.".to_string(),
+                ))
+            }
+        }
+        #[cfg(not(feature = "sherpa-onnx"))]
+        {
+            Err(KoeError::Config(
+                "Kokoro ONNX TTS requires the sherpa-onnx feature".to_string(),
+            ))
+        }
+    }
 }
 
 fn pcm_i16le_to_f32(bytes: &[u8]) -> Vec<f32> {
@@ -152,6 +205,138 @@ fn pcm_i16le_to_f32(bytes: &[u8]) -> Vec<f32> {
 
 impl TtsConfig {
     pub fn sample_rate(&self) -> u32 {
-        24_000
+        match self.provider {
+            #[cfg(feature = "sherpa-onnx")]
+            TtsProvider::KokoroOnnx => 24_000, // Kokoro outputs 24kHz
+            _ => 24_000,
+        }
+    }
+}
+
+// =============================================================================
+// Kokoro ONNX backend (sherpa-onnx)
+// =============================================================================
+
+#[cfg(feature = "sherpa-onnx")]
+#[derive(Clone)]
+pub struct KokoroOnnxBackend {
+    inner: std::sync::Arc<KokoroOnnxBackendInner>,
+}
+
+#[cfg(feature = "sherpa-onnx")]
+struct KokoroOnnxBackendInner {
+    tts: sherpa_onnx::OfflineTts,
+    speaker_id: i32,
+    speed: f32,
+}
+
+#[cfg(feature = "sherpa-onnx")]
+// The sherpa-onnx wrapper itself is Send+Sync; we propagate that.
+unsafe impl Send for KokoroOnnxBackendInner {}
+#[cfg(feature = "sherpa-onnx")]
+unsafe impl Sync for KokoroOnnxBackendInner {}
+
+#[cfg(feature = "sherpa-onnx")]
+impl KokoroOnnxBackend {
+    pub fn new(model_dir: &std::path::Path, speaker_id: i32, speed: f32) -> Result<Self> {
+        let config = build_kokoro_config(model_dir)?;
+        let tts = sherpa_onnx::OfflineTts::create(&config)
+            .ok_or_else(|| KoeError::Config(format!("OfflineTts::create failed for Kokoro")))?;
+
+        log::info!(
+            "[tts] Kokoro loaded: sample_rate={} num_speakers={}",
+            tts.sample_rate(),
+            tts.num_speakers(),
+        );
+
+        Ok(Self {
+            inner: std::sync::Arc::new(KokoroOnnxBackendInner {
+                tts,
+                speaker_id,
+                speed,
+            }),
+        })
+    }
+
+    pub fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
+        let gen_cfg = sherpa_onnx::GenerationConfig {
+            sid: self.inner.speaker_id,
+            speed: self.inner.speed,
+            ..Default::default()
+        };
+
+        let audio = self
+            .inner
+            .tts
+            .generate_with_config(text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)
+            .ok_or_else(|| KoeError::LlmFailed("TTS generate returned None".to_string()))?;
+
+        let samples = audio.samples().to_vec();
+        let sample_rate = audio.sample_rate() as u32;
+        Ok((samples, sample_rate))
+    }
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsConfig> {
+    let model = best_onnx(dir, "model").ok_or_else(|| {
+        KoeError::Config(format!(
+            "kokoro model.onnx not found in {}",
+            dir.display()
+        ))
+    })?;
+    let voices = require_file(dir, "voices.bin")?;
+    let tokens = require_file(dir, "tokens.txt")?;
+
+    // Optional data_dir (for Chinese text normalisation)
+    let data_dir = {
+        let d = dir.join("espeak-ng-data");
+        if d.exists() {
+            Some(d.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    };
+
+    Ok(sherpa_onnx::OfflineTtsConfig {
+        model: sherpa_onnx::OfflineTtsModelConfig {
+            kokoro: sherpa_onnx::OfflineTtsKokoroModelConfig {
+                model: Some(model),
+                voices: Some(voices),
+                tokens: Some(tokens),
+                data_dir,
+                ..Default::default()
+            },
+            num_threads: 2,
+            ..Default::default()
+        },
+        max_num_sentences: 1,
+        ..Default::default()
+    })
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn best_onnx(dir: &std::path::Path, base: &str) -> Option<String> {
+    let int8 = dir.join(format!("{base}.int8.onnx"));
+    if int8.exists() {
+        return Some(int8.to_string_lossy().into_owned());
+    }
+    let fp32 = dir.join(format!("{base}.onnx"));
+    if fp32.exists() {
+        return Some(fp32.to_string_lossy().into_owned());
+    }
+    None
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn require_file(dir: &std::path::Path, name: &str) -> Result<String> {
+    let p = dir.join(name);
+    if p.exists() {
+        Ok(p.to_string_lossy().into_owned())
+    } else {
+        Err(KoeError::Config(format!(
+            "TTS file not found: {}",
+            p.display()
+        )))
     }
 }

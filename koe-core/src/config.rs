@@ -1778,12 +1778,13 @@ translation:
     timeout_ms: 10000
   tts:
     enabled: true
-    provider: "elevenlabs"    # elevenlabs | minimax
-    api_key: ""               # or use ${ELEVENLABS_API_KEY}
-    voice_id: ""              # ElevenLabs voice ID
-    model: "eleven_multilingual_v2"
+    provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx
+    api_key: ""               # or use ${ELEVENLABS_API_KEY} (cloud providers only)
+    voice_id: ""              # ElevenLabs voice ID (cloud providers only)
+    model: "eleven_multilingual_v2"  # For kokoro_onnx: model directory under ~/.koe/models/ (e.g. "kokoro/kokoro-en")
     base_url: "https://api.elevenlabs.io"
     speed: 1.0
+    speaker_id: 0             # For kokoro_onnx: speaker ID (0–49)
     timeout_ms: 30000
 
 prompt_templates:
@@ -1818,6 +1819,7 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("sherpa-onnx/bilingual-zh-en"),
     manifest!("sherpa-onnx/multilingual-8lang"),
     manifest!("sherpa-onnx/zh-xlarge"),
+    manifest!("kokoro/kokoro-en"),
 ];
 
 #[cfg(test)]

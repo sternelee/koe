@@ -18,7 +18,7 @@ crate-type = ["staticlib", "lib"]
 default = ["mlx", "apple-speech", "sherpa-onnx"]
 mlx = ["koe-asr/mlx"]
 apple-speech = ["koe-asr/apple-speech"]
-sherpa-onnx = ["koe-asr/sherpa-onnx"]
+sherpa-onnx = ["koe-asr/sherpa-onnx", "dep:sherpa-onnx"]
 
 [dependencies]
 async-trait.workspace = true
@@ -31,6 +31,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
+sherpa-onnx = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 hex = "0.4"

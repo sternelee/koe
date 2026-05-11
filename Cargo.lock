@@ -962,6 +962,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "sherpa-onnx",
  "tokio",
  "tokio-util",
  "urlencoding",

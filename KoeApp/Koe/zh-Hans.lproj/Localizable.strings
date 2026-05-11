@@ -110,6 +110,7 @@
 "setupWizard.translation.label.model" = "模型";
 "setupWizard.translation.label.systemPrompt" = "系统提示词";
 "setupWizard.translation.label.voiceId" = "Voice ID";
+"setupWizard.translation.label.speakerId" = "说话人 ID";
 "setupWizard.translation.input.sharedHint" = "与主语音输入共享同一全局设置。";
 "setupWizard.translation.input.unavailableFormat" = "已选设备不可用：%@";
 "setupWizard.translation.general.sourceTip" = "提示：为更好兼容 Apple Translation，建议设置明确的源语言。";
@@ -118,6 +119,7 @@
 "setupWizard.translation.mt.appleHint" = "Apple Translation 使用系统 API，无需配置 Base URL、API Key 或模型。";
 "setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
 "setupWizard.translation.tts.provider.minimax" = "MiniMax";
+"setupWizard.translation.tts.provider.kokoroOnnx" = "Kokoro ONNX（本地）";
 "setupWizard.translation.virtualMic.hint" = "将翻译后的语音路由到系统麦克风，可用于 Zoom/Teams。需要管理员密码。";
 "setupWizard.translation.virtualMic.status.ready" = "驱动已就绪";
 "setupWizard.translation.virtualMic.status.missing" = "驱动未安装";
