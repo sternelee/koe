@@ -23,7 +23,10 @@ impl TtsClient {
                 let model_dir = crate::config::resolve_model_dir(&config.model);
                 match KokoroOnnxBackend::new(&model_dir, config.speaker_id, config.speed) {
                     Ok(backend) => {
-                        log::info!("[tts] Kokoro ONNX backend loaded from {}", model_dir.display());
+                        log::info!(
+                            "[tts] Kokoro ONNX backend loaded from {}",
+                            model_dir.display()
+                        );
                         Some(backend)
                     }
                     Err(e) => {
@@ -280,10 +283,7 @@ impl KokoroOnnxBackend {
 #[cfg(feature = "sherpa-onnx")]
 fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsConfig> {
     let model = best_onnx(dir, "model").ok_or_else(|| {
-        KoeError::Config(format!(
-            "kokoro model.onnx not found in {}",
-            dir.display()
-        ))
+        KoeError::Config(format!("kokoro model.onnx not found in {}", dir.display()))
     })?;
     let voices = require_file(dir, "voices.bin")?;
     let tokens = require_file(dir, "tokens.txt")?;

@@ -16,26 +16,41 @@ use tokio::time::{timeout, Duration};
 /// single-use (connect → send_audio → finish_input → close).
 pub type AsrFactory = Arc<dyn Fn() -> (AsrConfig, Box<dyn AsrProvider>) + Send + Sync>;
 
-/// Real-time translation engine: continuously consumes microphone audio,
-/// segments it with VAD, and for each utterance runs ASR → MT → TTS,
-/// writing the synthesized audio into the shared mmap output buffer so the
-/// HAL virtual-mic plug-in can read it.
+/// Real-time translation engine. Depending on runtime readiness it either:
+///
+/// - runs the full ASR → MT → TTS pipeline and writes synthesized audio to the
+///   shared mmap output buffer, or
+/// - falls back to microphone passthrough so the virtual mic still behaves like
+///   a regular input device when translation backends are not configured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranslationMode {
+    Translate,
+    Passthrough,
+}
+
 pub struct TranslationEngine {
     config: TranslationConfig,
     http_client: Client,
     asr_factory: AsrFactory,
+    mode: TranslationMode,
 }
 
 impl TranslationEngine {
-    pub fn new(config: TranslationConfig, http_client: Client, asr_factory: AsrFactory) -> Self {
+    pub fn new(
+        config: TranslationConfig,
+        http_client: Client,
+        asr_factory: AsrFactory,
+        mode: TranslationMode,
+    ) -> Self {
         Self {
             config,
             http_client,
             asr_factory,
+            mode,
         }
     }
 
-    /// Main loop.  Runs until `stop` is set to `true`.
+    /// Main loop. Runs until `stop` is set to `true`.
     ///
     /// `audio_rx` delivers PCM 16-bit little-endian mono bytes at 16 kHz
     /// (the same format the normal Koe audio pipeline uses).
@@ -44,6 +59,24 @@ impl TranslationEngine {
         mut audio_rx: mpsc::Receiver<Vec<u8>>,
         stop: Arc<AtomicBool>,
     ) -> Result<()> {
+        let output_buffer = Arc::new(SharedOutputBuffer::new(
+            self.config.output_buffer_frames,
+            self.config.output_channels,
+            self.config.output_sample_rate,
+        )?);
+
+        if self.mode == TranslationMode::Passthrough {
+            log::info!("[translation] backend incomplete; using passthrough virtual mic mode");
+            return run_passthrough_loop(
+                &mut audio_rx,
+                stop,
+                output_buffer,
+                self.config.output_sample_rate,
+                self.config.output_channels,
+            )
+            .await;
+        }
+
         let mut vad = EnergyVad::new(
             self.config.vad_energy_threshold,
             self.config.min_speech_ms,
@@ -52,14 +85,14 @@ impl TranslationEngine {
             16_000,
         );
 
-        let output_buffer = Arc::new(SharedOutputBuffer::new(
-            self.config.output_buffer_frames,
-            self.config.output_channels,
-            self.config.output_sample_rate,
-        )?);
-
-        let mt = Arc::new(MtClient::new(self.http_client.clone(), self.config.mt.clone()));
-        let tts = Arc::new(TtsClient::new(self.http_client.clone(), self.config.tts.clone()));
+        let mt = Arc::new(MtClient::new(
+            self.http_client.clone(),
+            self.config.mt.clone(),
+        ));
+        let tts = Arc::new(TtsClient::new(
+            self.http_client.clone(),
+            self.config.tts.clone(),
+        ));
 
         let asr_factory = self.asr_factory.clone();
         let source_language = self.config.source_language.clone();
@@ -69,10 +102,8 @@ impl TranslationEngine {
         let output_sample_rate = self.config.output_sample_rate;
         let output_channels = self.config.output_channels;
 
-        // Bounded queue preserves utterance order and prevents unbounded memory growth.
         let (segment_tx, mut segment_rx) = mpsc::channel::<SpeechSegment>(4);
 
-        // Spawn a single worker that processes segments serially.
         let processor_handle = tokio::spawn(async move {
             while let Some(segment) = segment_rx.recv().await {
                 run_segment_pipeline(
@@ -116,14 +147,8 @@ impl TranslationEngine {
             }
         }
 
-        // Final flush when stopping.
         if let Some(segment) = vad.flush() {
             if segment_tx.try_send(segment).is_err() {
-                // Queue full — process inline so the last utterance is not lost.
-                // At this point the Arc clones owned by the processor are still alive,
-                // but we cannot await the processor because it may be blocked on the
-                // same full queue.  We therefore skip this final segment; the
-                // processor will drain the queued ones.
                 log::warn!("[translation] final segment dropped because queue is full");
             }
         }
@@ -134,6 +159,78 @@ impl TranslationEngine {
 
         Ok(())
     }
+}
+
+async fn run_passthrough_loop(
+    audio_rx: &mut mpsc::Receiver<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+    output_buffer: Arc<SharedOutputBuffer>,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> Result<()> {
+    while !stop.load(Ordering::SeqCst) {
+        tokio::select! {
+            Some(bytes) = audio_rx.recv() => {
+                write_passthrough_chunk(&bytes, &output_buffer, output_sample_rate, output_channels)?;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+    }
+
+    while let Ok(bytes) = audio_rx.try_recv() {
+        write_passthrough_chunk(&bytes, &output_buffer, output_sample_rate, output_channels)?;
+    }
+
+    Ok(())
+}
+
+fn write_passthrough_chunk(
+    bytes: &[u8],
+    output_buffer: &SharedOutputBuffer,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> Result<()> {
+    let mono_samples: Vec<f32> = bytes
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
+        .collect();
+    if mono_samples.is_empty() {
+        return Ok(());
+    }
+
+    let resampled = if output_sample_rate != 16_000 {
+        resample_linear(&mono_samples, 16_000, output_sample_rate)
+    } else {
+        mono_samples
+    };
+
+    let data = upmix_mono(&resampled, output_channels);
+    let frame = AudioFrame {
+        timestamp_ns: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+        sample_rate: output_sample_rate,
+        channels: output_channels,
+        data,
+    };
+
+    output_buffer.write_frame(&frame)
+}
+
+fn upmix_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+
+    let channels = usize::from(channels);
+    let mut out = Vec::with_capacity(samples.len().saturating_mul(channels));
+    for sample in samples {
+        for _ in 0..channels {
+            out.push(*sample);
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -165,7 +262,10 @@ async fn run_segment_pipeline(
     if !mt_enabled {
         return;
     }
-    let translated = match mt.translate(&text, &source_language, &target_language).await {
+    let translated = match mt
+        .translate(&text, &source_language, &target_language)
+        .await
+    {
         Ok(t) => t,
         Err(e) => {
             log::warn!("[translation] MT failed: {e}");
@@ -213,10 +313,7 @@ async fn run_segment_pipeline(
     }
 }
 
-async fn run_asr(
-    segment: &SpeechSegment,
-    asr_factory: &AsrFactory,
-) -> Result<String> {
+async fn run_asr(segment: &SpeechSegment, asr_factory: &AsrFactory) -> Result<String> {
     let (asr_config, mut asr) = (asr_factory)();
 
     asr.connect(&asr_config)
@@ -224,7 +321,11 @@ async fn run_asr(
         .map_err(|e| KoeError::LlmFailed(format!("ASR connect failed: {e}")))?;
 
     // Stream audio in ~20 ms chunks (320 samples = 640 bytes at 16 kHz).
-    let bytes: Vec<u8> = segment.samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let bytes: Vec<u8> = segment
+        .samples
+        .iter()
+        .flat_map(|s| s.to_le_bytes())
+        .collect();
     let chunk_bytes = 640;
     for chunk in bytes.chunks(chunk_bytes) {
         if let Err(e) = asr.send_audio(chunk).await {

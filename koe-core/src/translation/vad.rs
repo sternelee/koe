@@ -131,7 +131,10 @@ impl EnergyVad {
         self.state = VadState::Idle;
 
         if duration_ms >= self.min_speech_ms {
-            Some(SpeechSegment { samples, duration_ms })
+            Some(SpeechSegment {
+                samples,
+                duration_ms,
+            })
         } else {
             None
         }
@@ -170,8 +173,7 @@ impl EnergyVad {
                     self.silent_frames = 0;
                 }
 
-                let duration_ms =
-                    (self.total_samples as u64 * 1000) / (self.sample_rate as u64);
+                let duration_ms = (self.total_samples as u64 * 1000) / (self.sample_rate as u64);
                 if duration_ms >= self.max_speech_ms {
                     return self.finalise_segment();
                 }
@@ -194,7 +196,10 @@ impl EnergyVad {
         self.state = VadState::Idle;
 
         if duration_ms >= self.min_speech_ms {
-            Some(SpeechSegment { samples, duration_ms })
+            Some(SpeechSegment {
+                samples,
+                duration_ms,
+            })
         } else {
             None
         }
@@ -206,10 +211,13 @@ fn rms_energy(frame: &[i16]) -> f32 {
     if frame.is_empty() {
         return 0.0;
     }
-    let sum_squares: f64 = frame.iter().map(|s| {
-        let f = f64::from(*s) / 32768.0;
-        f * f
-    }).sum();
+    let sum_squares: f64 = frame
+        .iter()
+        .map(|s| {
+            let f = f64::from(*s) / 32768.0;
+            f * f
+        })
+        .sum();
     ((sum_squares / frame.len() as f64).sqrt() as f32).clamp(0.0, 1.0)
 }
 

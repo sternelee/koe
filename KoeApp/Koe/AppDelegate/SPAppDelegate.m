@@ -12,6 +12,7 @@
 #import "SPHistoryManager.h"
 #import "SPSetupWizardWindowController.h"
 #import "SPUpdateManager.h"
+#import "SPVirtualMicInstaller.h"
 #import "SPLocalization.h"
 #import "koe_core.h"
 #import <os/log.h>
@@ -692,81 +693,79 @@ static BOOL configFlagEnabled(const char *keyPath) {
     NSLog(@"[Koe] Audio input device changed: %@", uid ?: @"System Default");
 }
 
-/// Install the KoeVirtualMic HAL driver into the user's HAL plug-ins directory
-/// so CoreAudio can discover it.  If the driver is already present and matches
-/// the bundled version it is left alone.
-- (BOOL)installVirtualMicDriver {
-    NSBundle *bundle = [NSBundle mainBundle];
-    NSURL *bundledDriver = [bundle URLForResource:@"KoeVirtualMic" withExtension:@"driver"];
-    if (!bundledDriver) {
-        NSLog(@"[Koe] KoeVirtualMic.driver not found in bundle");
-        return NO;
+/// Keep the status-bar toggle synchronized with the actual translation runtime
+/// state. The menu item flips optimistically before the delegate callback runs,
+/// so failures must explicitly roll it back.
+- (void)setTranslationModeEnabled:(BOOL)enabled {
+    self.translationEnabled = enabled;
+    [self.statusBarManager setTranslationModeEnabled:enabled];
+}
+
+- (void)startTranslationModeIfReady {
+    if (![self.rustBridge startTranslation]) {
+        NSLog(@"[Koe] Failed to start translation engine");
+        [self setTranslationModeEnabled:NO];
+        return;
     }
 
-    NSURL *halDir = [NSURL fileURLWithPath:[NSHomeDirectory()
-        stringByAppendingPathComponent:@"Library/Audio/Plug-Ins/HAL"]
-        isDirectory:YES];
-    NSURL *installedDriver = [halDir URLByAppendingPathComponent:@"KoeVirtualMic.driver"];
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm createDirectoryAtURL:halDir withIntermediateDirectories:YES attributes:nil error:nil];
-
-    // Compare modification dates to avoid unnecessary copies.
-    NSDate *bundledDate = nil;
-    NSDate *installedDate = nil;
-    [fm attributesOfItemAtPath:bundledDriver.path error:nil];
-    bundledDate = [fm attributesOfItemAtPath:bundledDriver.path error:nil][NSFileModificationDate];
-    installedDate = [fm attributesOfItemAtPath:installedDriver.path error:nil][NSFileModificationDate];
-
-    if (installedDate && bundledDate && [installedDate compare:bundledDate] != NSOrderedAscending) {
-        NSLog(@"[Koe] KoeVirtualMic.driver already up to date");
-        return YES;
+    if (![self startTranslationCapture]) {
+        NSLog(@"[Koe] Failed to start translation audio capture");
+        [self.translationAudioCaptureManager stopCapture];
+        [self.rustBridge stopTranslation];
+        [self setTranslationModeEnabled:NO];
     }
+}
 
-    // Remove old driver if present.
-    if ([fm fileExistsAtPath:installedDriver.path]) {
-        [fm removeItemAtURL:installedDriver error:nil];
-    }
-
-    NSError *copyError = nil;
-    BOOL ok = [fm copyItemAtURL:bundledDriver toURL:installedDriver error:&copyError];
-    if (!ok) {
-        NSLog(@"[Koe] Failed to install KoeVirtualMic.driver: %@", copyError.localizedDescription);
-        return NO;
-    }
-
-    NSLog(@"[Koe] KoeVirtualMic.driver installed to %@", installedDriver.path);
-    return YES;
+- (void)stopTranslationMode {
+    NSLog(@"[Koe] Translation mode disabled");
+    NSLog(@"[Koe] About to stop translation audio capture");
+    [self.translationAudioCaptureManager stopCapture];
+    NSLog(@"[Koe] Translation audio capture stopped");
+    NSLog(@"[Koe] About to stop translation engine");
+    [self.rustBridge stopTranslation];
+    NSLog(@"[Koe] Translation engine stopped");
+    [self setTranslationModeEnabled:NO];
 }
 
 - (void)statusBarDidToggleTranslationMode:(BOOL)enabled {
-    self.translationEnabled = enabled;
-    if (enabled) {
-        NSLog(@"[Koe] Translation mode enabled");
-        [self installVirtualMicDriver];
-        [self startTranslationCapture];
-        [self.rustBridge startTranslation];
-    } else {
-        NSLog(@"[Koe] Translation mode disabled");
-        NSLog(@"[Koe] About to stop translation audio capture");
-        [self.translationAudioCaptureManager stopCapture];
-        NSLog(@"[Koe] Translation audio capture stopped");
-        NSLog(@"[Koe] About to stop translation engine");
-        [self.rustBridge stopTranslation];
-        NSLog(@"[Koe] Translation engine stopped");
+    if (!enabled) {
+        [self stopTranslationMode];
+        return;
     }
+
+    NSLog(@"[Koe] Translation mode enabled");
+    [self setTranslationModeEnabled:YES];
+
+    if ([SPVirtualMicInstaller isInstalled]) {
+        [self startTranslationModeIfReady];
+        return;
+    }
+
+    if ([SPVirtualMicInstaller findBundlePath] == nil) {
+        NSLog(@"[Koe] KoeVirtualMic.driver not found in bundle");
+        [self setTranslationModeEnabled:NO];
+        return;
+    }
+
+    [SPVirtualMicInstaller installWithCompletion:^(NSError * _Nullable error) {
+        if (error != nil) {
+            NSLog(@"[Koe] Failed to install KoeVirtualMic.driver: %@", error.localizedDescription);
+            [self setTranslationModeEnabled:NO];
+            return;
+        }
+        if (!self.translationEnabled) {
+            return;
+        }
+        [self startTranslationModeIfReady];
+    }];
 }
 
-- (void)startTranslationCapture {
+- (BOOL)startTranslationCapture {
     [self.translationAudioCaptureManager setInputDeviceID:[self.audioDeviceManager resolvedDeviceID]];
-    BOOL started = [self.translationAudioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
+    return [self.translationAudioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
         [self.rustBridge pushTranslationAudioFrame:buffer length:length];
     }];
-    if (!started) {
-        NSLog(@"[Koe] Failed to start translation audio capture");
-    }
 }
-
 - (void)statusBarDidSelectSetupWizard {
     if (!self.setupWizard) {
         self.setupWizard = [[SPSetupWizardWindowController alloc] init];

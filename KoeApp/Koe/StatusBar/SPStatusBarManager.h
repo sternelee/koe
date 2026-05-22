@@ -28,6 +28,9 @@ NS_ASSUME_NONNULL_BEGIN
 ///        "finalizing_asr", "correcting", "preparing_paste", "pasting", "error", "completed"
 - (void)updateState:(NSString *)state;
 
+/// Force the translation mode menu item's checkmark to match app state.
+- (void)setTranslationModeEnabled:(BOOL)enabled;
+
 @end
 
 NS_ASSUME_NONNULL_END

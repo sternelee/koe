@@ -504,6 +504,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 // ASR fields
 @property (nonatomic, strong) NSPopUpButton *asrProviderPopup;
 @property (nonatomic, strong) NSTextField *asrAppKeyField;
+@property (nonatomic, strong) NSSegmentedControl *asrAuthModeControl;
+@property (nonatomic, strong) NSTextField *asrApiKeyField;
+@property (nonatomic, strong) NSSecureTextField *asrApiKeySecureField;
+@property (nonatomic, strong) NSButton *asrApiKeyToggle;
 @property (nonatomic, strong) NSTextField *asrAccessKeyField;
 @property (nonatomic, strong) NSSecureTextField *asrAccessKeySecureField;
 @property (nonatomic, strong) NSButton *asrAccessKeyToggle;
@@ -512,6 +516,12 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSButton *asrQwenApiKeyToggle;
 @property (nonatomic, strong) NSButton *asrTestButton;
 @property (nonatomic, strong) NSTextField *asrTestResultLabel;
+@property (nonatomic, strong) NSPopUpButton *asrLanguagePopup;
+@property (nonatomic, strong) NSButton *asrAdvancedDisclosure;
+@property (nonatomic, strong) NSView *asrAdvancedContainer;
+@property (nonatomic, strong) NSTextField *asrEndWindowField;
+@property (nonatomic, strong) NSPopUpButton *asrOutputVariantPopup;
+@property (nonatomic, strong) NSButton *asrAccelerateCheckbox;
 
 // Local ASR model selection
 @property (nonatomic, strong) NSPopUpButton *localModelPopup;
@@ -648,6 +658,29 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSProgressIndicator *virtualMicProgressIndicator;
 @property (nonatomic, strong) NSTextField *virtualMicErrorLabel;
 @property (nonatomic, assign) BOOL virtualMicOperationInProgress;
+
+- (void)loadCurrentValues;
+- (void)loadValuesForPane:(NSString *)identifier;
+- (void)populateAppleSpeechLocalePopup;
+- (void)appleSpeechLocaleChanged:(id)sender;
+- (void)updateAppleSpeechAssetStatus;
+- (void)localModelChanged:(id)sender;
+- (void)updateModelStatusLabel;
+- (void)asrProviderChanged:(id)sender;
+- (void)testAsrConnection:(id)sender;
+- (void)asrAdvancedToggled:(id)sender;
+- (CGFloat)targetAsrPaneHeightForProvider:(NSString *)provider advancedExpanded:(BOOL)expanded;
+- (void)resizeAsrPaneToCurrentProvider;
+- (NSString *)prettyNameForLlmProvider:(NSString *)provider;
+- (NSMutableDictionary *)activeLlmProfile;
+- (void)syncActiveLlmProfileFromFields;
+- (void)applyActiveLlmProfileToFields;
+- (void)updateLlmFieldsEnabled;
+- (void)populateLocalModelPopup:(NSString *)provider mode:(NSString *)mode;
+- (void)showAlert:(NSString *)title info:(NSString *)info;
+- (void)populateLlmLocalModelPopup;
+- (void)updateLlmModelStatusLabel;
+- (void)refreshLlmRemoteModels:(id)sender;
 
 @end
 
@@ -891,6 +924,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.asrTestButton.bezelStyle = NSBezelStyleRounded;
     self.asrTestButton.frame = NSMakeRect(fieldX + 208, y - 2, 70, 28);
     [pane addSubview:self.asrTestButton];
+    self.asrAuthModeControl = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(fieldX + 286, y - 2, 146, 26)];
+    self.asrAuthModeControl.segmentCount = 2;
+    [self.asrAuthModeControl setLabel:@"API Key" forSegment:0];
+    [self.asrAuthModeControl setLabel:@"Legacy" forSegment:1];
+    self.asrAuthModeControl.selectedSegment = 0;
+    self.asrAuthModeControl.hidden = YES;
+    self.asrAuthModeControl.target = self;
+    self.asrAuthModeControl.action = @selector(asrAuthModeChanged:);
+    [pane addSubview:self.asrAuthModeControl];
     y -= rowH;
 
     // App Key (Doubao only)
@@ -899,6 +941,28 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSTextField *appKeyLabel = [self formLabel:KoeLocalizedString(@"setupWizard.asr.label.appKey") frame:NSMakeRect(16, y, labelW, 22)];
     appKeyLabel.tag = 1001;
     [pane addSubview:appKeyLabel];
+
+    CGFloat eyeW = 28;
+    CGFloat secFieldW = fieldW - eyeW - 4;
+
+    self.asrApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, y, secFieldW, 22)];
+    self.asrApiKeySecureField.placeholderString = KoeLocalizedString(@"setupWizard.common.apiKey");
+    self.asrApiKeySecureField.font = [NSFont systemFontOfSize:13];
+    self.asrApiKeySecureField.hidden = YES;
+    [pane addSubview:self.asrApiKeySecureField];
+    self.asrApiKeyField = [self formTextField:NSMakeRect(fieldX, y, secFieldW, 22)
+                                      placeholder:KoeLocalizedString(@"setupWizard.common.apiKey")];
+    self.asrApiKeyField.hidden = YES;
+    [pane addSubview:self.asrApiKeyField];
+    self.asrApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, y - 1, eyeW, 24)
+                                              action:@selector(toggleAsrApiKeyVisibility:)];
+    self.asrApiKeyToggle.hidden = YES;
+    [pane addSubview:self.asrApiKeyToggle];
+    NSTextField *apiKeyLabel = [self formLabel:KoeLocalizedString(@"setupWizard.common.apiKey")
+                                         frame:NSMakeRect(16, y, labelW, 22)];
+    apiKeyLabel.tag = 1007;
+    apiKeyLabel.hidden = YES;
+    [pane addSubview:apiKeyLabel];
 
     // Apple Speech locale popup (same row as App Key / Model, tag 1005)
     NSTextField *localeLabel = [self formLabel:KoeLocalizedString(@"setupWizard.asr.label.language") frame:NSMakeRect(16, y, labelW, 22)];
@@ -987,8 +1051,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
     // Access Key (Doubao) — fixed at row 2 (same as Qwen API Key)
     CGFloat accessKeyY = formStartY - rowH - rowH;
-    CGFloat eyeW = 28;
-    CGFloat secFieldW = fieldW - eyeW - 4;
 
     self.asrAccessKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, accessKeyY, secFieldW, 22)];
     self.asrAccessKeySecureField.placeholderString = KoeLocalizedString(@"setupWizard.asr.placeholder.accessToken");
@@ -1022,21 +1084,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     qwenKeyLabel.tag = 1003;
     qwenKeyLabel.hidden = YES;
     [pane addSubview:qwenKeyLabel];
-
-    // Test result label — positioned directly below the Test button with
-    // enough width/height for multi-line error messages.
-    self.asrTestResultLabel = [NSTextField wrappingLabelWithString:@""];
-    CGFloat testResultY = NSMinY(self.asrTestButton.frame) - 44;
-    self.asrTestResultLabel.frame = NSMakeRect(fieldX,
-                                               testResultY,
-                                               paneWidth - fieldX - 24,
-                                               42);
-    self.asrTestResultLabel.font = [NSFont systemFontOfSize:12];
-    self.asrTestResultLabel.selectable = YES;
-    [pane addSubview:self.asrTestResultLabel];
-
-    // Save / Cancel buttons
-    [self addButtonsToPane:pane atY:16 width:paneWidth];
 
   // Test result label — positioned right after credential rows, before
   // language.
@@ -3930,98 +3977,91 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL isAppleSpeech = [selectedProvider isEqualToString:@"apple-speech"];
     BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isAppleSpeech;
 
-    // Show/hide Doubao fields
     [self setHidden:!isDoubao
- forViewsMatchingTags:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1001, 2)]
-             inView:self.currentPaneView];
-    self.asrAppKeyField.hidden = !isDoubao;
-    self.asrAccessKeyField.hidden = YES; // Always start hidden (secure mode)
-    self.asrAccessKeySecureField.hidden = !isDoubao;
-    self.asrAccessKeyToggle.hidden = !isDoubao;
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1001, 2)]
+                      inView:self.currentPaneView];
+    self.asrAuthModeControl.hidden = !isDoubao;
+    if (isDoubao) {
+        [self asrAuthModeChanged:self.asrAuthModeControl];
+    } else {
+        self.asrApiKeyField.hidden = YES;
+        self.asrApiKeySecureField.hidden = YES;
+        self.asrApiKeyToggle.hidden = YES;
+        self.asrAppKeyField.hidden = YES;
+        self.asrAccessKeyField.hidden = YES;
+        self.asrAccessKeySecureField.hidden = YES;
+        self.asrAccessKeyToggle.hidden = YES;
+    }
 
-    // Show/hide Qwen fields
     [self setHidden:!isQwen
- forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1003]
-             inView:self.currentPaneView];
-    self.asrQwenApiKeyField.hidden = YES; // Always start hidden (secure mode)
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1003]
+                      inView:self.currentPaneView];
+    self.asrQwenApiKeyField.hidden = YES;
     self.asrQwenApiKeySecureField.hidden = !isQwen;
     self.asrQwenApiKeyToggle.hidden = !isQwen;
 
-  // Show/hide language popup (Doubao only — DoubaoIME's IME endpoint ignores
-  // the field server-side) and advanced (Doubao only)
-  BOOL showLanguage = isDoubao;
-  [self setHidden:!showLanguage
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1008]
-                    inView:self.currentPaneView];
-  self.asrLanguagePopup.hidden = !showLanguage;
-  // Reload language value when Doubao is selected
-  if (showLanguage) {
-    NSString *lang = configGet(@"asr.doubao.language");
-    BOOL found = NO;
-    for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
-      if ([[self.asrLanguagePopup itemAtIndex:i].representedObject
-              isEqualToString:lang]) {
-        [self.asrLanguagePopup selectItemAtIndex:i];
-        found = YES;
-        break;
-      }
+    BOOL showLanguage = isDoubao;
+    [self setHidden:!showLanguage
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1008]
+                      inView:self.currentPaneView];
+    self.asrLanguagePopup.hidden = !showLanguage;
+    self.asrAdvancedDisclosure.hidden = !isDoubao;
+    BOOL advancedExpanded = isDoubao && (self.asrAdvancedDisclosure.state == NSControlStateValueOn);
+    self.asrAdvancedContainer.hidden = !advancedExpanded;
+    if (showLanguage) {
+        NSString *lang = configGet(@"asr.doubao.language");
+        BOOL found = NO;
+        for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
+            if ([[self.asrLanguagePopup itemAtIndex:i].representedObject isEqualToString:lang]) {
+                [self.asrLanguagePopup selectItemAtIndex:i];
+                found = YES;
+                break;
+            }
+        }
+        if (!found) {
+            [self.asrLanguagePopup selectItemAtIndex:0];
+        }
     }
 
-    // Hide test button for local providers (no remote connection to test)
+    self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
+    [self setHidden:!isAppleSpeech
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1005]
+                      inView:self.currentPaneView];
+
+    self.localModelPopup.hidden = !isModelBasedLocal;
+    [self setHidden:!isModelBasedLocal
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1004]
+                      inView:self.currentPaneView];
+    if (!isModelBasedLocal && !isAppleSpeech) {
+        self.modelStatusLabel.hidden = YES;
+        self.modelDownloadButton.hidden = YES;
+        self.modelDeleteButton.hidden = YES;
+        self.modelProgressBar.hidden = YES;
+        self.modelProgressSizeLabel.hidden = YES;
+    } else if (isAppleSpeech) {
+        self.modelStatusLabel.hidden = NO;
+        self.modelDownloadButton.hidden = NO;
+        self.modelDeleteButton.hidden = NO;
+        self.modelProgressBar.hidden = YES;
+        self.modelProgressSizeLabel.hidden = YES;
+        [self updateAppleSpeechAssetStatus];
+    } else {
+        [self populateLocalModelPopup:selectedProvider mode:@"asr"];
+        self.modelStatusLabel.hidden = NO;
+        self.modelDownloadButton.hidden = NO;
+        self.modelDeleteButton.hidden = NO;
+        self.modelProgressBar.hidden = YES;
+        self.modelProgressSizeLabel.hidden = YES;
+        [self updateModelStatusLabel];
+    }
+
     BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen;
     self.asrTestButton.hidden = isLocal;
     self.asrTestResultLabel.hidden = isLocal;
+    self.asrTestResultLabel.stringValue = @"";
+    self.asrTestButton.enabled = YES;
 
-  // Show/hide Apple Speech locale popup and asset status
-  self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
-  [self setHidden:!isAppleSpeech
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1005]
-                    inView:self.currentPaneView];
-
-  // Show/hide local model popup, status, and download button
-  self.localModelPopup.hidden = !isModelBasedLocal;
-  if (!isModelBasedLocal && !isAppleSpeech) {
-    self.modelStatusLabel.hidden = YES;
-    self.modelDownloadButton.hidden = YES;
-    self.modelDeleteButton.hidden = YES;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-  } else if (isAppleSpeech) {
-    // Reuse model status row for Apple Speech asset status
-    self.modelStatusLabel.hidden = NO;
-    self.modelDownloadButton.hidden = NO;
-    self.modelDeleteButton.hidden = NO;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-    [self updateAppleSpeechAssetStatus];
-  } else {
-    self.modelStatusLabel.hidden = NO;
-    self.modelDownloadButton.hidden = NO;
-    self.modelDeleteButton.hidden = NO;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-    [self updateModelStatusLabel];
-  }
-  [self setHidden:!isModelBasedLocal
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1004]
-                    inView:self.currentPaneView];
-  if (isModelBasedLocal) {
-    [self populateLocalModelPopup:selectedProvider mode:@"asr"];
-    [self updateModelStatusLabel];
-  }
-
-  // Hide test button for local providers (no remote connection to test)
-  BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen;
-  self.asrTestButton.hidden = isLocal;
-  self.asrTestResultLabel.hidden = isLocal;
-
-  // Clear test result when switching provider
-  self.asrTestResultLabel.stringValue = @"";
-  self.asrTestButton.enabled = YES;
-
-  // Each provider has a different vertical footprint — resize the pane so
-  // there isn't a giant empty area below the visible controls.
-  [self resizeAsrPaneToCurrentProvider];
+    [self resizeAsrPaneToCurrentProvider];
 }
 
 - (void)localModelChanged:(id)sender {
@@ -4706,142 +4746,104 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 - (void)loadValuesForPane:(NSString *)identifier {
     NSString *dir = configDirPath();
 
-  if ([identifier isEqualToString:kToolbarASR]) {
-    NSString *provider = configGet(@"asr.provider");
-    if (provider.length == 0)
-      provider = @"doubaoime";
-    for (NSInteger i = 0; i < self.asrProviderPopup.numberOfItems; i++) {
-      if ([[self.asrProviderPopup itemAtIndex:i].representedObject
-              isEqualToString:provider]) {
-        [self.asrProviderPopup selectItemAtIndex:i];
-        break;
-      }
-    }
-    // Load Doubao fields
-    self.asrAppKeyField.stringValue = configGet(@"asr.doubao.app_key");
-    NSString *accessKey = configGet(@"asr.doubao.access_key");
-    self.asrAccessKeySecureField.stringValue = accessKey;
-    self.asrAccessKeyField.stringValue = accessKey;
-    // Load Doubao API Key (new console auth)
-    NSString *apiKey = configGet(@"asr.doubao.api_key");
-    self.asrApiKeySecureField.stringValue = apiKey;
-    self.asrApiKeyField.stringValue = apiKey;
-    // Select auth mode: if api_key is set, use New Console mode
-    if (apiKey.length > 0) {
-      [self.asrAuthModeControl setSelectedSegment:0];
-    } else if (self.asrAppKeyField.stringValue.length > 0 ||
-               accessKey.length > 0) {
-      [self.asrAuthModeControl setSelectedSegment:1];
-    } else {
-      [self.asrAuthModeControl setSelectedSegment:0];
-    }
-    // Load language (Doubao only; DoubaoIME's server ignores this field)
-    NSString *doubaoLang = configGet(@"asr.doubao.language");
-    if (doubaoLang.length > 0) {
-      BOOL found = NO;
-      for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
-        if ([[self.asrLanguagePopup itemAtIndex:i].representedObject
-                isEqualToString:doubaoLang]) {
-          [self.asrLanguagePopup selectItemAtIndex:i];
-          found = YES;
-          break;
+    if ([identifier isEqualToString:kToolbarASR]) {
+        NSString *provider = configGet(@"asr.provider");
+        if (provider.length == 0) {
+            provider = @"doubaoime";
         }
-      }
-      if (!found)
-        [self.asrLanguagePopup selectItemAtIndex:0];
-    } else {
-      [self.asrLanguagePopup selectItemAtIndex:0];
-    }
-    // Load Doubao advanced settings
-    self.asrEndWindowField.stringValue =
-        configGet(@"asr.doubao.end_window_size");
-    NSString *outputVariant = configGet(@"asr.doubao.output_zh_variant");
-    if (outputVariant.length > 0) {
-      for (NSInteger i = 0; i < self.asrOutputVariantPopup.numberOfItems; i++) {
-        if ([[self.asrOutputVariantPopup itemAtIndex:i].representedObject
-                isEqualToString:outputVariant]) {
-          [self.asrOutputVariantPopup selectItemAtIndex:i];
-          break;
-        }
-      }
-    } else {
-      [self.asrOutputVariantPopup selectItemAtIndex:0];
-    }
-    NSString *accelerate = configGet(@"asr.doubao.enable_accelerate_text");
-    self.asrAccelerateCheckbox.state = [accelerate isEqualToString:@"true"]
-                                           ? NSControlStateValueOn
-                                           : NSControlStateValueOff;
-    // Load Qwen fields
-    NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
-    self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
-    self.asrQwenApiKeyField.stringValue = qwenApiKey;
-    // Reset visibility based on selected provider
-    [self asrProviderChanged:self.asrProviderPopup];
-    // Select saved Apple Speech locale (always, so switching to apple-speech
-    // shows the right default)
-    {
-      NSString *locale = configGet(@"asr.apple-speech.locale");
-      if (locale.length > 0) {
-        // Try exact match first, then fall back to language-equivalent match
-        NSInteger exactIdx = -1, equivIdx = -1;
-        NSLocale *configLocale = [NSLocale localeWithLocaleIdentifier:locale];
-        for (NSInteger i = 0; i < self.appleSpeechLocalePopup.numberOfItems;
-             i++) {
-          NSString *itemId =
-              [self.appleSpeechLocalePopup itemAtIndex:i].representedObject;
-          if ([itemId isEqualToString:locale]) {
-            exactIdx = i;
-            break;
-          }
-          if (equivIdx < 0) {
-            NSLocale *itemLocale = [NSLocale localeWithLocaleIdentifier:itemId];
-            if ([configLocale.languageCode
-                    isEqualToString:itemLocale.languageCode] &&
-                [configLocale.countryCode
-                    isEqualToString:itemLocale.countryCode]) {
-              equivIdx = i;
+        for (NSInteger i = 0; i < self.asrProviderPopup.numberOfItems; i++) {
+            if ([[self.asrProviderPopup itemAtIndex:i].representedObject isEqualToString:provider]) {
+                [self.asrProviderPopup selectItemAtIndex:i];
+                break;
             }
         }
-        // Load Doubao fields
+
         self.asrAppKeyField.stringValue = configGet(@"asr.doubao.app_key");
         NSString *accessKey = configGet(@"asr.doubao.access_key");
         self.asrAccessKeySecureField.stringValue = accessKey;
         self.asrAccessKeyField.stringValue = accessKey;
-        // Load Qwen fields
-        NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
-        self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
-        self.asrQwenApiKeyField.stringValue = qwenApiKey;
-        // Reset visibility based on selected provider
-        [self asrProviderChanged:self.asrProviderPopup];
-        // Select saved Apple Speech locale (always, so switching to apple-speech shows the right default)
-        {
-            NSString *locale = configGet(@"asr.apple-speech.locale");
-            if (locale.length > 0) {
-                // Try exact match first, then fall back to language-equivalent match
-                NSInteger exactIdx = -1, equivIdx = -1;
-                NSLocale *configLocale = [NSLocale localeWithLocaleIdentifier:locale];
-                for (NSInteger i = 0; i < self.appleSpeechLocalePopup.numberOfItems; i++) {
-                    NSString *itemId = [self.appleSpeechLocalePopup itemAtIndex:i].representedObject;
-                    if ([itemId isEqualToString:locale]) {
-                        exactIdx = i;
-                        break;
-                    }
-                    if (equivIdx < 0) {
-                        NSLocale *itemLocale = [NSLocale localeWithLocaleIdentifier:itemId];
-                        if ([configLocale.languageCode isEqualToString:itemLocale.languageCode]
-                            && [configLocale.countryCode isEqualToString:itemLocale.countryCode]) {
-                            equivIdx = i;
-                        }
-                    }
+
+        NSString *apiKey = configGet(@"asr.doubao.api_key");
+        self.asrApiKeySecureField.stringValue = apiKey;
+        self.asrApiKeyField.stringValue = apiKey;
+        if (apiKey.length > 0) {
+            [self.asrAuthModeControl setSelectedSegment:0];
+        } else if (self.asrAppKeyField.stringValue.length > 0 || accessKey.length > 0) {
+            [self.asrAuthModeControl setSelectedSegment:1];
+        } else {
+            [self.asrAuthModeControl setSelectedSegment:0];
+        }
+
+        NSString *doubaoLang = configGet(@"asr.doubao.language");
+        if (doubaoLang.length > 0) {
+            BOOL found = NO;
+            for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
+                if ([[self.asrLanguagePopup itemAtIndex:i].representedObject isEqualToString:doubaoLang]) {
+                    [self.asrLanguagePopup selectItemAtIndex:i];
+                    found = YES;
+                    break;
                 }
-                NSInteger matchIdx = (exactIdx >= 0) ? exactIdx : equivIdx;
-                if (matchIdx >= 0) {
-                    [self.appleSpeechLocalePopup selectItemAtIndex:matchIdx];
-                    [self updateAppleSpeechAssetStatus];
+            }
+            if (!found) {
+                [self.asrLanguagePopup selectItemAtIndex:0];
+            }
+        } else {
+            [self.asrLanguagePopup selectItemAtIndex:0];
+        }
+
+        self.asrEndWindowField.stringValue = configGet(@"asr.doubao.end_window_size");
+        NSString *outputVariant = configGet(@"asr.doubao.output_zh_variant");
+        BOOL matchedOutputVariant = NO;
+        if (outputVariant.length > 0) {
+            for (NSInteger i = 0; i < self.asrOutputVariantPopup.numberOfItems; i++) {
+                if ([[self.asrOutputVariantPopup itemAtIndex:i].representedObject isEqualToString:outputVariant]) {
+                    [self.asrOutputVariantPopup selectItemAtIndex:i];
+                    matchedOutputVariant = YES;
+                    break;
                 }
             }
         }
-        // Select current local model if applicable
+        if (!matchedOutputVariant) {
+            [self.asrOutputVariantPopup selectItemAtIndex:0];
+        }
+
+        NSString *accelerate = configGet(@"asr.doubao.enable_accelerate_text");
+        self.asrAccelerateCheckbox.state = [accelerate isEqualToString:@"true"]
+                                               ? NSControlStateValueOn
+                                               : NSControlStateValueOff;
+
+        NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
+        self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
+        self.asrQwenApiKeyField.stringValue = qwenApiKey;
+
+        [self asrProviderChanged:self.asrProviderPopup];
+
+        NSString *locale = configGet(@"asr.apple-speech.locale");
+        if (locale.length > 0) {
+            NSInteger exactIdx = -1;
+            NSInteger equivIdx = -1;
+            NSLocale *configLocale = [NSLocale localeWithLocaleIdentifier:locale];
+            for (NSInteger i = 0; i < self.appleSpeechLocalePopup.numberOfItems; i++) {
+                NSString *itemId = [self.appleSpeechLocalePopup itemAtIndex:i].representedObject;
+                if ([itemId isEqualToString:locale]) {
+                    exactIdx = i;
+                    break;
+                }
+                if (equivIdx < 0) {
+                    NSLocale *itemLocale = [NSLocale localeWithLocaleIdentifier:itemId];
+                    if ([configLocale.languageCode isEqualToString:itemLocale.languageCode] &&
+                        [configLocale.countryCode isEqualToString:itemLocale.countryCode]) {
+                        equivIdx = i;
+                    }
+                }
+            }
+            NSInteger matchIdx = (exactIdx >= 0) ? exactIdx : equivIdx;
+            if (matchIdx >= 0) {
+                [self.appleSpeechLocalePopup selectItemAtIndex:matchIdx];
+                [self updateAppleSpeechAssetStatus];
+            }
+        }
+
         NSString *currentModel = nil;
         if ([provider isEqualToString:@"mlx"]) {
             currentModel = configGet(@"asr.mlx.model");
@@ -4855,9 +4857,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
                     break;
                 }
             }
-            [self updateModelStatusLabel];
         }
-        // Clear test result when loading
+        [self updateModelStatusLabel];
+
         self.asrTestResultLabel.stringValue = @"";
         self.asrTestButton.enabled = YES;
     } else if ([identifier isEqualToString:kToolbarLLM]) {
@@ -5011,14 +5013,12 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 - (void)saveConfig:(id)sender {
     [self endHotkeyRecording];
 
-    // Warn if a local provider is selected but assets/models are not installed
     if (self.asrProviderPopup) {
         NSString *provider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
-        // Check Apple Speech asset status
         if ([provider isEqualToString:@"apple-speech"]) {
             NSString *locale = self.appleSpeechLocalePopup.selectedItem.representedObject;
             int32_t assetStatus = koe_apple_speech_asset_status(locale.UTF8String);
-            if (assetStatus != 3) { // not installed
+            if (assetStatus != 3) {
                 NSAlert *alert = [[NSAlert alloc] init];
                 alert.messageText = @"Speech Assets Not Installed";
                 alert.informativeText = @"The speech recognition model for the selected language has not been downloaded yet. Saving will start downloading automatically.";
@@ -5028,11 +5028,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
                 if ([alert runModal] != NSAlertFirstButtonReturn) {
                     return;
                 }
-                // Trigger background download immediately
                 [self downloadAppleSpeechAsset];
             }
         }
-        // Check model-based local provider model status
+
         BOOL isModelBasedLocal = ![provider isEqualToString:@"doubaoime"]
             && ![provider isEqualToString:@"doubao"]
             && ![provider isEqualToString:@"qwen"]
@@ -5041,7 +5040,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
             if (modelPath) {
                 NSInteger status = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
-                if (status != 2) { // not installed
+                if (status != 2) {
                     NSAlert *alert = [[NSAlert alloc] init];
                     alert.messageText = @"Model Not Installed";
                     alert.informativeText = @"The selected model has not been downloaded yet. ASR will not work until the model is installed.";
@@ -5057,8 +5056,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     }
 
     NSString *dir = configDirPath();
-
-    // Ensure directory exists
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES
                                                attributes:nil
@@ -5083,167 +5080,82 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
                                                                     error:nil] ?: @"";
     __block BOOL shouldRollbackConfig = NO;
     void (^rollbackConfigIfNeeded)(void) = ^{
-        if (!shouldRollbackConfig) return;
+        if (!shouldRollbackConfig) {
+            return;
+        }
 
-  // Ensure directory exists
-  [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                            withIntermediateDirectories:YES
-                                             attributes:nil
-                                                  error:nil];
-
-  NSArray<NSDictionary *> *serializedTemplates = nil;
-  if (self.templatesData) {
-    [self saveCurrentTemplateEdits];
-    NSString *templateError = nil;
-    if (![self validateTemplatesDataWithMessage:&templateError]) {
-      [self showAlert:@"Invalid prompt templates"
-                 info:templateError ?: @"Check your templates and try again."];
-      return;
-    }
-    serializedTemplates = [self serializedTemplatesData];
-  }
-
-  NSString *configPath = configFilePath();
-  BOOL configExisted =
-      [[NSFileManager defaultManager] fileExistsAtPath:configPath];
-  NSString *originalConfigSnapshot =
-      [NSString stringWithContentsOfFile:configPath
-                                encoding:NSUTF8StringEncoding
-                                   error:nil]
-          ?: @"";
-  __block BOOL shouldRollbackConfig = NO;
-  void (^rollbackConfigIfNeeded)(void) = ^{
-    if (!shouldRollbackConfig)
-      return;
-
-    NSError *rollbackError = nil;
-    if (!restoreConfigSnapshot(originalConfigSnapshot, configExisted,
-                               &rollbackError)) {
-      NSLog(@"[Koe] Failed to restore config snapshot: %@",
-            rollbackError.localizedDescription);
-    }
-    [self.rustBridge reloadConfig];
-  };
-
-  // Track whether any config write fails
-  shouldRollbackConfig = YES;
-  BOOL saveOk = YES;
-
-  // Update ASR fields (always save — fields may be nil if pane not visited,
-  // check first)
-  if (self.asrAppKeyField) {
-    NSString *selectedProvider =
-        self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
-    saveOk &= configSet(@"asr.provider", selectedProvider);
-    // Save Doubao fields based on auth mode
-    BOOL isNewConsoleMode = (self.asrAuthModeControl.selectedSegment == 0);
-    if (isNewConsoleMode) {
-      NSString *apiKey = self.asrApiKeyToggle.tag == 1
-                             ? self.asrApiKeyField.stringValue
-                             : self.asrApiKeySecureField.stringValue;
-      saveOk &= configSet(@"asr.doubao.api_key", apiKey);
-      saveOk &= configSet(@"asr.doubao.app_key", @"");
-      saveOk &= configSet(@"asr.doubao.access_key", @"");
-    } else {
-      saveOk &= configSet(@"asr.doubao.api_key", @"");
-      saveOk &=
-          configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
-      NSString *accessKey = self.asrAccessKeyToggle.tag == 1
-                                ? self.asrAccessKeyField.stringValue
-                                : self.asrAccessKeySecureField.stringValue;
-      saveOk &= configSet(@"asr.doubao.access_key", accessKey);
-    }
-    // Save language only when Doubao is selected (DoubaoIME server ignores it)
-    if ([selectedProvider isEqualToString:@"doubao"]) {
-      NSString *langValue =
-          self.asrLanguagePopup.selectedItem.representedObject ?: @"";
-      saveOk &= configSet(@"asr.doubao.language", langValue);
-    }
-    // Save Doubao advanced settings only when Doubao is selected
-    if ([selectedProvider isEqualToString:@"doubao"]) {
-      NSString *endWindowValue = self.asrEndWindowField.stringValue;
-      saveOk &= configSet(@"asr.doubao.end_window_size",
-                          endWindowValue.length > 0 ? endWindowValue : @"");
-      NSString *variantValue =
-          self.asrOutputVariantPopup.selectedItem.representedObject ?: @"";
-      saveOk &= configSet(@"asr.doubao.output_zh_variant", variantValue);
-      NSString *accelerateValue =
-          (self.asrAccelerateCheckbox.state == NSControlStateValueOn)
-              ? @"true"
-              : @"false";
-      saveOk &=
-          configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
-    }
-    // Save Qwen fields
-    NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
-                               ? self.asrQwenApiKeyField.stringValue
-                               : self.asrQwenApiKeySecureField.stringValue;
-    saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
-    // Save Apple Speech locale
-    if ([selectedProvider isEqualToString:@"apple-speech"]) {
-      NSString *locale =
-          self.appleSpeechLocalePopup.selectedItem.representedObject;
-      saveOk &= configSet(@"asr.apple-speech.locale", locale);
-    }
-    // Save local model selection
-    if ([selectedProvider isEqualToString:@"mlx"]) {
-      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-      if (modelPath)
-        saveOk &= configSet(@"asr.mlx.model", modelPath);
-    } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
-      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-      if (modelPath)
-        saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
-    }
-  }
-
-  // Update LLM fields
-  if (self.llmEnabledCheckbox) {
-    NSString *enabledStr =
-        (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true"
-                                                                 : @"false";
-    saveOk &= configSet(@"llm.enabled", enabledStr);
-
-    [self syncActiveLlmProfileFromFields];
-    NSDictionary *payload = @{
-      @"active_profile" : self.activeLlmProfileId ?: @"openai",
-      @"profiles" : self.llmProfiles ?: @{},
+        NSError *rollbackError = nil;
+        if (!restoreConfigSnapshot(originalConfigSnapshot, configExisted, &rollbackError)) {
+            NSLog(@"[Koe] Failed to restore config snapshot: %@", rollbackError.localizedDescription);
+        }
+        [self.rustBridge reloadConfig];
     };
 
-    // Track whether any config write fails
     shouldRollbackConfig = YES;
     BOOL saveOk = YES;
 
-    // Update ASR fields (always save — fields may be nil if pane not visited, check first)
     if (self.asrAppKeyField) {
         NSString *selectedProvider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
         saveOk &= configSet(@"asr.provider", selectedProvider);
-        // Save Doubao fields
-        saveOk &= configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
-        NSString *accessKey = self.asrAccessKeyToggle.tag == 1 ? self.asrAccessKeyField.stringValue : self.asrAccessKeySecureField.stringValue;
-        saveOk &= configSet(@"asr.doubao.access_key", accessKey);
-        // Save Qwen fields
-        NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
+
+        BOOL isNewConsoleMode = (self.asrAuthModeControl.selectedSegment == 0);
+        if (isNewConsoleMode) {
+            NSString *apiKey = self.asrApiKeyToggle.tag == 1
+                ? self.asrApiKeyField.stringValue
+                : self.asrApiKeySecureField.stringValue;
+            saveOk &= configSet(@"asr.doubao.api_key", apiKey);
+            saveOk &= configSet(@"asr.doubao.app_key", @"");
+            saveOk &= configSet(@"asr.doubao.access_key", @"");
+        } else {
+            saveOk &= configSet(@"asr.doubao.api_key", @"");
+            saveOk &= configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
+            NSString *accessKey = self.asrAccessKeyToggle.tag == 1
+                ? self.asrAccessKeyField.stringValue
+                : self.asrAccessKeySecureField.stringValue;
+            saveOk &= configSet(@"asr.doubao.access_key", accessKey);
+        }
+
+        if ([selectedProvider isEqualToString:@"doubao"]) {
+            NSString *langValue = self.asrLanguagePopup.selectedItem.representedObject ?: @"";
+            saveOk &= configSet(@"asr.doubao.language", langValue);
+
+            NSString *endWindowValue = self.asrEndWindowField.stringValue;
+            saveOk &= configSet(@"asr.doubao.end_window_size", endWindowValue.length > 0 ? endWindowValue : @"");
+
+            NSString *variantValue = self.asrOutputVariantPopup.selectedItem.representedObject ?: @"";
+            saveOk &= configSet(@"asr.doubao.output_zh_variant", variantValue);
+
+            NSString *accelerateValue = (self.asrAccelerateCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
+            saveOk &= configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+        }
+
+        NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
+            ? self.asrQwenApiKeyField.stringValue
+            : self.asrQwenApiKeySecureField.stringValue;
         saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
-        // Save Apple Speech locale
+
         if ([selectedProvider isEqualToString:@"apple-speech"]) {
             NSString *locale = self.appleSpeechLocalePopup.selectedItem.representedObject;
             saveOk &= configSet(@"asr.apple-speech.locale", locale);
         }
-        // Save local model selection
+
         if ([selectedProvider isEqualToString:@"mlx"]) {
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-            if (modelPath) saveOk &= configSet(@"asr.mlx.model", modelPath);
+            if (modelPath) {
+                saveOk &= configSet(@"asr.mlx.model", modelPath);
+            }
         } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-            if (modelPath) saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+            if (modelPath) {
+                saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+            }
         }
     }
 
-    // Update LLM fields
     if (self.llmEnabledCheckbox) {
         NSString *enabledStr = (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.enabled", enabledStr);
+
         NSString *outputTranslationEnabled = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.output_translation.enabled", outputTranslationEnabled);
         saveOk &= configSet(@"llm.output_translation.target_language", self.llmOutputTranslationTargetLanguageField.stringValue ?: @"");
@@ -5262,15 +5174,14 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
     }
 
-    // Update hotkey
     if (self.hotkeyPopup) {
         NSString *selectedTriggerHotkey = normalizedHotkeyValue(self.hotkeyPopup.selectedItem.representedObject ?: @"fn");
         saveOk &= configSet(@"hotkey.trigger_key", selectedTriggerHotkey);
 
-        // Save trigger mode
         NSString *triggerModeValue = [self.triggerModePopup selectedItem].representedObject ?: @"hold";
         saveOk &= configSet(@"hotkey.trigger_mode", triggerModeValue);
     }
+
     if (self.overlayFontSizeSlider) {
         NSString *fontFamily = [self selectedOverlayFontFamilyValue];
         NSInteger fontSize = clampedOverlayFontSizeValue(lround(self.overlayFontSizeSlider.doubleValue));
@@ -5283,6 +5194,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"overlay.limit_visible_lines", limitVisibleLines ? @"true" : @"false");
         saveOk &= configSet(@"overlay.max_visible_lines", [NSString stringWithFormat:@"%ld", (long)maxVisibleLines]);
     }
+
     if (self.startSoundCheckbox) {
         NSString *startSound = (self.startSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
         NSString *stopSound = (self.stopSoundCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
@@ -5291,10 +5203,12 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"feedback.stop_sound", stopSound);
         saveOk &= configSet(@"feedback.error_sound", errorSound);
     }
+
     if (self.templatesEnabledSwitch) {
         NSString *templatesEnabled = (self.templatesEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.prompt_templates_enabled", templatesEnabled);
     }
+
     if (self.translationEnabledSwitch) {
         NSString *translationEnabled = (self.translationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"translation.enabled", translationEnabled);
@@ -5333,7 +5247,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         return;
     }
 
-    // Save prompt templates
     if (serializedTemplates) {
         if (![self.rustBridge setPromptTemplates:serializedTemplates]) {
             rollbackConfigIfNeeded();
@@ -5343,7 +5256,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
     }
 
-    // Write dictionary.txt
     NSError *error = nil;
     if (self.dictionaryTextView) {
         NSString *dictPath = [dir stringByAppendingPathComponent:kDictionaryFile];
@@ -5356,7 +5268,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
     }
 
-    // Write system_prompt.txt
     if (self.systemPromptTextView) {
         NSString *promptPath = [dir stringByAppendingPathComponent:kSystemPromptFile];
         [self.systemPromptTextView.string writeToFile:promptPath atomically:YES encoding:NSUTF8StringEncoding error:&error];
@@ -5371,14 +5282,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     shouldRollbackConfig = NO;
     NSLog(@"[Koe] Settings saved");
 
-    // Notify delegate to reload
     if ([self.delegate respondsToSelector:@selector(setupWizardDidSaveConfig)]) {
         [self.delegate setupWizardDidSaveConfig];
     }
 
-    // Close the settings window on successful save so the user gets clear
-    // feedback that the action completed. (Previously the click looked like
-    // a no-op.)
     [self hideRuntimeOverlayPreview];
     [self.window close];
 }

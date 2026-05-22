@@ -27,20 +27,33 @@ impl MtClient {
     }
 
     /// Translate `text` into the target language.
-    pub async fn translate(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
+    pub async fn translate(
+        &self,
+        text: &str,
+        source_lang: &str,
+        target_lang: &str,
+    ) -> Result<String> {
         if text.trim().is_empty() {
             return Ok(String::new());
         }
 
         match self.config.provider {
-            MtProvider::OpenAiCompatible => self.translate_openai_compatible(text, target_lang).await,
+            MtProvider::OpenAiCompatible => {
+                self.translate_openai_compatible(text, target_lang).await
+            }
             MtProvider::Apple => self.translate_apple(text, source_lang, target_lang),
         }
     }
 
     async fn translate_openai_compatible(&self, text: &str, target_lang: &str) -> Result<String> {
-        let system_prompt = self.config.system_prompt.replace("{target_language}", target_lang);
-        let url = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
+        let system_prompt = self
+            .config
+            .system_prompt
+            .replace("{target_language}", target_lang);
+        let url = format!(
+            "{}/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        );
 
         let body = json!({
             "model": self.config.model,

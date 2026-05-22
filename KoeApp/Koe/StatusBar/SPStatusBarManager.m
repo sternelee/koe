@@ -357,6 +357,7 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     self.translationModeItem.state = NSControlStateValueOff;
     [menu addItem:self.translationModeItem];
 
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *setupWizard = [[NSMenuItem alloc] initWithTitle:KoeLocalizedString(@"statusBar.menu.setupWizard")
@@ -830,6 +831,10 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     [self.animationTimer invalidate];
     self.animationTimer = nil;
     self.animationFrame = 0;
+}
+
+- (void)setTranslationModeEnabled:(BOOL)enabled {
+    self.translationModeItem.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 #pragma mark - Actions

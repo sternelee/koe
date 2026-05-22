@@ -81,7 +81,11 @@ unsafe impl Send for SharedOutputBuffer {}
 unsafe impl Sync for SharedOutputBuffer {}
 
 impl SharedOutputBuffer {
-    pub fn new(capacity_frames: usize, channels: u16, sample_rate: u32) -> crate::errors::Result<Self> {
+    pub fn new(
+        capacity_frames: usize,
+        channels: u16,
+        sample_rate: u32,
+    ) -> crate::errors::Result<Self> {
         Self::new_with_path(
             capacity_frames,
             channels,
@@ -110,8 +114,8 @@ impl SharedOutputBuffer {
 
         let channel_count = usize::from(channels);
         let capacity_samples = capacity_frames.saturating_mul(channel_count);
-        let file_size = HEADER_SIZE
-            .saturating_add(capacity_samples.saturating_mul(std::mem::size_of::<f32>()));
+        let file_size =
+            HEADER_SIZE.saturating_add(capacity_samples.saturating_mul(std::mem::size_of::<f32>()));
 
         let file = open_shared_file(&file_path, file_size).map_err(|e| {
             crate::errors::KoeError::Config(format!("open shared buffer file: {e}"))
@@ -214,7 +218,11 @@ impl SharedOutputBuffer {
         Ok(())
     }
 
-    pub fn read_into(&self, out_samples: &mut [f32], channels: u16) -> crate::errors::Result<(usize, u64)> {
+    pub fn read_into(
+        &self,
+        out_samples: &mut [f32],
+        channels: u16,
+    ) -> crate::errors::Result<(usize, u64)> {
         let expected_channels = usize::from(self.channels);
         if usize::from(channels) != expected_channels {
             return Err(crate::errors::KoeError::Config(
@@ -346,7 +354,12 @@ fn atomic_u64_at(mmap: &MmapMut, offset: usize) -> &AtomicU64 {
 }
 
 fn read_u32(mmap: &MmapMut, offset: usize) -> u32 {
-    let bytes = [mmap[offset], mmap[offset + 1], mmap[offset + 2], mmap[offset + 3]];
+    let bytes = [
+        mmap[offset],
+        mmap[offset + 1],
+        mmap[offset + 2],
+        mmap[offset + 3],
+    ];
     u32::from_le_bytes(bytes)
 }
 
@@ -389,8 +402,7 @@ mod tests {
     #[test]
     fn writes_and_reads_interleaved_pcm() {
         let path = temp_buffer_path();
-        let buffer =
-            SharedOutputBuffer::new_with_path(4, 1, 48_000, path.clone()).expect("buffer");
+        let buffer = SharedOutputBuffer::new_with_path(4, 1, 48_000, path.clone()).expect("buffer");
         let frame = AudioFrame {
             timestamp_ns: 55,
             sample_rate: 48_000,
@@ -412,8 +424,7 @@ mod tests {
     #[test]
     fn wraps_on_overflow() {
         let path = temp_buffer_path();
-        let buffer =
-            SharedOutputBuffer::new_with_path(4, 1, 48_000, path.clone()).expect("buffer");
+        let buffer = SharedOutputBuffer::new_with_path(4, 1, 48_000, path.clone()).expect("buffer");
 
         // Fill buffer with 4 frames.
         for i in 0..4 {

@@ -353,9 +353,10 @@ impl LlmSection {
         } else {
             requested_id
         };
-        let profile = self.profiles.get(selected_id).ok_or_else(|| {
-            KoeError::Config(format!("LLM profile not found: {}", selected_id))
-        })?;
+        let profile = self
+            .profiles
+            .get(selected_id)
+            .ok_or_else(|| KoeError::Config(format!("LLM profile not found: {}", selected_id)))?;
         Ok(profile.to_runtime_config(selected_id))
     }
 
@@ -767,7 +768,9 @@ fn default_sherpa_onnx_hotwords_score() -> f32 {
 fn default_sherpa_onnx_endpoint_silence() -> f32 {
     1.2
 }
-fn deserialize_option_u32_lenient<'de, D>(deserializer: D) -> std::result::Result<Option<u32>, D::Error>
+fn deserialize_option_u32_lenient<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -786,7 +789,9 @@ where
     }
 }
 
-fn deserialize_option_string_lenient<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+fn deserialize_option_string_lenient<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

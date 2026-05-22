@@ -1,10 +1,10 @@
+pub mod asr_factory;
 pub mod audio_buffer;
 pub mod config;
 pub mod dictionary;
 pub mod errors;
 pub mod ffi;
 pub mod llm;
-pub mod asr_factory;
 pub mod model_manager;
 pub mod prompt;
 pub mod session;
@@ -18,7 +18,6 @@ use crate::ffi::{
     invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext,
     SPSessionMode,
 };
-use crate::translation::engine::{AsrFactory, TranslationEngine};
 #[cfg(feature = "mlx")]
 use crate::llm::mlx::MlxLlmProvider;
 use crate::llm::openai_compatible::{
@@ -27,6 +26,7 @@ use crate::llm::openai_compatible::{
 };
 use crate::llm::{CorrectionRequest, LlmProvider};
 use crate::session::{Session, SessionState};
+use crate::translation::engine::{AsrFactory, TranslationEngine, TranslationMode};
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, TranscriptAggregator};
 use reqwest::Client;
 
@@ -734,7 +734,11 @@ pub extern "C" fn sp_core_should_paste_final_text() -> i32 {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
         let should_paste = core.config.llm.enabled && core.config.llm.output_translation.enabled;
-        if should_paste { 1 } else { 0 }
+        if should_paste {
+            1
+        } else {
+            0
+        }
     } else {
         0
     }
@@ -1071,7 +1075,11 @@ async fn run_session(
         let translation_profile = llm_config
             .output_translation_profile_config()
             .expect("llm_output_translation_enabled_for_session checked the translation profile");
-        let target_language = llm_config.output_translation.target_language.trim().to_string();
+        let target_language = llm_config
+            .output_translation
+            .target_language
+            .trim()
+            .to_string();
         let translation_llm = build_llm_provider(
             &session_id,
             &llm_config,
@@ -1092,7 +1100,9 @@ async fn run_session(
                 translated
             }
             Err(e) => {
-                log::warn!("[{session_id}] output translation failed, falling back to corrected text: {e}");
+                log::warn!(
+                    "[{session_id}] output translation failed, falling back to corrected text: {e}"
+                );
                 invoke_session_warning(session_token, &format!("Output translation failed: {e}"));
                 corrected_text
             }
@@ -1213,6 +1223,79 @@ fn llm_output_translation_enabled_for_session(cfg: &config::LlmSection) -> bool 
     cfg.output_translation_profile_config()
         .map(|profile| profile.is_ready())
         .unwrap_or(false)
+}
+
+fn translation_runtime_mode(cfg: &config::Config) -> TranslationMode {
+    if translation_pipeline_ready(cfg) {
+        TranslationMode::Translate
+    } else {
+        TranslationMode::Passthrough
+    }
+}
+
+fn translation_pipeline_ready(cfg: &config::Config) -> bool {
+    translation_asr_ready(&cfg.asr)
+        && translation_mt_ready(&cfg.translation)
+        && translation_tts_ready(&cfg.translation)
+}
+
+fn translation_asr_ready(cfg: &config::AsrSection) -> bool {
+    match cfg.provider.as_str() {
+        "doubaoime" => true,
+        "qwen" => {
+            !cfg.qwen.url.trim().is_empty()
+                && !cfg.qwen.model.trim().is_empty()
+                && !cfg.qwen.api_key.trim().is_empty()
+        }
+        "mlx" => {
+            !cfg.mlx.model.trim().is_empty() && config::resolve_model_dir(&cfg.mlx.model).exists()
+        }
+        "sherpa-onnx" => {
+            !cfg.sherpa_onnx.model.trim().is_empty()
+                && config::resolve_model_dir(&cfg.sherpa_onnx.model).exists()
+        }
+        "apple-speech" => !cfg.apple_speech.locale.trim().is_empty(),
+        _ => {
+            let has_new_auth = !cfg.doubao.api_key.trim().is_empty();
+            let has_legacy_auth =
+                !cfg.doubao.app_key.trim().is_empty() && !cfg.doubao.access_key.trim().is_empty();
+            !cfg.doubao.url.trim().is_empty()
+                && !cfg.doubao.resource_id.trim().is_empty()
+                && (has_new_auth || has_legacy_auth)
+        }
+    }
+}
+
+fn translation_mt_ready(cfg: &crate::translation::config::TranslationConfig) -> bool {
+    if !cfg.mt.enabled || cfg.target_language.trim().is_empty() {
+        return false;
+    }
+
+    match cfg.mt.provider {
+        crate::translation::config::MtProvider::OpenAiCompatible => {
+            !cfg.mt.base_url.trim().is_empty() && !cfg.mt.model.trim().is_empty()
+        }
+        crate::translation::config::MtProvider::Apple => true,
+    }
+}
+
+fn translation_tts_ready(cfg: &crate::translation::config::TranslationConfig) -> bool {
+    if !cfg.tts.enabled {
+        return false;
+    }
+
+    match cfg.tts.provider {
+        crate::translation::config::TtsProvider::ElevenLabs
+        | crate::translation::config::TtsProvider::MiniMax => {
+            !cfg.tts.base_url.trim().is_empty()
+                && !cfg.tts.api_key.trim().is_empty()
+                && !cfg.tts.voice_id.trim().is_empty()
+                && !cfg.tts.model.trim().is_empty()
+        }
+        crate::translation::config::TtsProvider::KokoroOnnx => {
+            !cfg.tts.model.trim().is_empty() && config::resolve_model_dir(&cfg.tts.model).exists()
+        }
+    }
 }
 
 fn build_llm_provider(
@@ -2086,7 +2169,10 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
     core.translation_audio_tx = None;
 
     if let Some(old_handle) = core.translation_handle.take() {
-        if let Err(e) = core.runtime.block_on(timeout(Duration::from_secs(10), old_handle)) {
+        if let Err(e) = core
+            .runtime
+            .block_on(timeout(Duration::from_secs(10), old_handle))
+        {
             log::warn!("[translation] previous engine stop timed out or failed: {e}");
         }
     }
@@ -2100,9 +2186,10 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
     let dictionary = core.dictionary.clone();
     let http_client = core.llm_http_client.clone();
     let translation_config = cfg.translation.clone();
+    let translation_mode = translation_runtime_mode(&cfg);
 
     let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
-    let engine = TranslationEngine::new(translation_config, http_client, factory);
+    let engine = TranslationEngine::new(translation_config, http_client, factory, translation_mode);
 
     let handle = core.runtime.spawn(async move {
         if let Err(e) = engine.run(audio_rx, stop).await {
@@ -2152,10 +2239,7 @@ pub extern "C" fn sp_core_translation_stop() -> i32 {
 /// # Safety
 /// `samples_ptr` must be a valid pointer to `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn sp_core_translation_push_audio(
-    samples_ptr: *const u8,
-    len: usize,
-) -> i32 {
+pub unsafe extern "C" fn sp_core_translation_push_audio(samples_ptr: *const u8, len: usize) -> i32 {
     if samples_ptr.is_null() || len == 0 {
         return 0;
     }
@@ -2323,6 +2407,33 @@ mod tests {
         assert!(!llm_output_translation_enabled_for_session(&cfg));
     }
 
+    #[test]
+    fn translation_runtime_falls_back_to_passthrough_when_tts_not_ready() {
+        let cfg = Config::default();
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);
+    }
+
+    #[test]
+    fn translation_runtime_uses_translate_when_local_backends_are_ready() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-translation-ready-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "doubaoime".into();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::KokoroOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
+    }
     #[test]
     fn validate_prompt_templates_rejects_blank_prompt() {
         let templates = vec![config::PromptTemplate {

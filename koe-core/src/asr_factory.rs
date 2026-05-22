@@ -1,9 +1,7 @@
 use crate::config::{self, Config};
 #[cfg(feature = "apple-speech")]
 use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
-use koe_asr::{
-    AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, QwenAsrProvider,
-};
+use koe_asr::{AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, QwenAsrProvider};
 #[cfg(feature = "mlx")]
 use koe_asr::{MlxConfig, MlxProvider};
 #[cfg(feature = "sherpa-onnx")]
@@ -14,7 +12,10 @@ use koe_asr::{SherpaOnnxConfig, SherpaOnnxProvider};
 /// Kept in its own module so that adding ASR providers (the part of the codebase
 /// upstream changes most frequently) does not collide with translation-related
 /// edits in `lib.rs`.
-pub fn build_asr_provider(cfg: &Config, dictionary: &[String]) -> (AsrConfig, Box<dyn AsrProvider>) {
+pub fn build_asr_provider(
+    cfg: &Config,
+    dictionary: &[String],
+) -> (AsrConfig, Box<dyn AsrProvider>) {
     let asr_provider_name = cfg.asr.provider.clone();
     match asr_provider_name.as_str() {
         "doubaoime" => {
