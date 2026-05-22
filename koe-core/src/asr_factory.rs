@@ -43,7 +43,7 @@ pub fn build_asr_provider(cfg: &Config, dictionary: &[String]) -> (AsrConfig, Bo
                 enable_punc: true,
                 enable_nonstream: false,
                 hotwords: Vec::new(),
-                language: ime.language.clone(),
+                language: None,
                 custom_headers,
                 end_window_size: None,
                 force_to_speech_time: None,
