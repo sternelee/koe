@@ -468,7 +468,26 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
 }
 
 - (void)requestNotificationPermission {
-    [self.permissionManager requestNotificationPermission];
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings * _Nonnull settings) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UNAuthorizationStatus authorizationStatus = settings.authorizationStatus;
+            if (authorizationStatus == UNAuthorizationStatusNotDetermined) {
+                [self.permissionManager requestNotificationPermissionWithCompletion:^(BOOL granted) {
+                    [self refreshPermissionStatus];
+                }];
+                return;
+            }
+
+            if (authorizationStatus == UNAuthorizationStatusAuthorized
+                || authorizationStatus == UNAuthorizationStatusProvisional) {
+                [self refreshPermissionStatus];
+                return;
+            }
+
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.notifications?id=nz.owo.koe"]];
+        });
+    }];
 }
 
 - (void)refreshStats {

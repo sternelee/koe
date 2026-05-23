@@ -45,6 +45,7 @@ targetTemplates:
           - "-lc++"
           - "-lSystem"
           - "-lresolv"
+          - "-framework Accelerate"
           - "-framework Security"
           - "-framework CoreFoundation"
           - "-framework UserNotifications"

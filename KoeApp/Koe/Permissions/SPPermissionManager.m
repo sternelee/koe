@@ -95,6 +95,10 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
 }
 
 - (void)requestNotificationPermission {
+    [self requestNotificationPermissionWithCompletion:nil];
+}
+
+- (void)requestNotificationPermissionWithCompletion:(void (^)(BOOL granted))completion {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
                           completionHandler:^(BOOL granted, NSError * _Nullable error) {
@@ -102,6 +106,11 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
             NSLog(@"[Koe] Notification permission request error: %@", error.localizedDescription);
         } else {
             NSLog(@"[Koe] Notification permission %@", granted ? @"granted" : @"denied");
+        }
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(granted);
+            });
         }
     }];
 }

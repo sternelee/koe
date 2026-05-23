@@ -115,6 +115,7 @@ pub fn supported_providers() -> &'static [&'static str] {
         "mlx",
         #[cfg(feature = "sherpa-onnx")]
         "sherpa-onnx",
+        "whisper",
     ]
 }
 
@@ -159,10 +160,34 @@ fn scan_dir_recursive(dir: &Path, models: &mut Vec<DiscoveredModel>) {
     }
 }
 
+fn infer_legacy_manifest_mode(manifest: &ModelManifest) -> Option<&'static str> {
+    let has_explicit_mode = manifest
+        .mode
+        .as_deref()
+        .map(|mode| !mode.trim().is_empty())
+        .unwrap_or(false);
+    if has_explicit_mode {
+        return None;
+    }
+
+    if manifest.provider == "sherpa-onnx" {
+        let repo = manifest.repo.to_ascii_lowercase();
+        let description = manifest.description.to_ascii_lowercase();
+        if repo.contains("kokoro") || description.contains("tts") {
+            return Some("tts");
+        }
+    }
+
+    None
+}
+
 fn load_manifest(model_dir: &Path) -> Option<DiscoveredModel> {
     let manifest_path = model_dir.join(MANIFEST_FILE);
     let content = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: ModelManifest = serde_json::from_str(&content).ok()?;
+    let mut manifest: ModelManifest = serde_json::from_str(&content).ok()?;
+    if let Some(mode) = infer_legacy_manifest_mode(&manifest) {
+        manifest.mode = Some(mode.to_string());
+    }
     Some(DiscoveredModel {
         path: model_dir.to_path_buf(),
         manifest,
@@ -743,6 +768,37 @@ mod tests {
             model_status(&tmp, VerifyMode::ForceVerify),
             ModelStatus::Installed
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_manifest_infers_kokoro_tts_mode_when_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-model-test-kokoro-mode-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let manifest = ModelManifest {
+            provider: "sherpa-onnx".into(),
+            mode: None,
+            description: "Kokoro English TTS".into(),
+            repo: "csukuangfj/sherpa-onnx-kokoro-1.0".into(),
+            files: vec![],
+        };
+
+        fs::write(
+            tmp.join(MANIFEST_FILE),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let discovered = load_manifest(&tmp).expect("manifest should load");
+        assert_eq!(discovered.manifest.mode.as_deref(), Some("tts"));
 
         let _ = fs::remove_dir_all(&tmp);
     }

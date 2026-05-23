@@ -4,6 +4,63 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
 
+#[cfg(feature = "sherpa-onnx")]
+const KOKORO_PRESET_VOICES: &[(&str, i32)] = &[
+    ("af_alloy", 0),
+    ("af_aoede", 1),
+    ("af_bella", 2),
+    ("af_heart", 3),
+    ("af_jessica", 4),
+    ("af_kore", 5),
+    ("af_nicole", 6),
+    ("af_nova", 7),
+    ("af_river", 8),
+    ("af_sarah", 9),
+    ("af_sky", 10),
+    ("am_adam", 11),
+    ("am_echo", 12),
+    ("am_eric", 13),
+    ("am_fenrir", 14),
+    ("am_liam", 15),
+    ("am_michael", 16),
+    ("am_onyx", 17),
+    ("am_puck", 18),
+    ("am_santa", 19),
+    ("bf_alice", 20),
+    ("bf_emma", 21),
+    ("bf_isabella", 22),
+    ("bf_lily", 23),
+    ("bm_daniel", 24),
+    ("bm_fable", 25),
+    ("bm_george", 26),
+    ("bm_lewis", 27),
+    ("ef_dora", 28),
+    ("em_alex", 29),
+    ("ff_siwis", 30),
+    ("hf_alpha", 31),
+    ("hf_beta", 32),
+    ("hm_omega", 33),
+    ("hm_psi", 34),
+    ("if_sara", 35),
+    ("im_nicola", 36),
+    ("jf_alpha", 37),
+    ("jf_gongitsune", 38),
+    ("jf_nezumi", 39),
+    ("jf_tebukuro", 40),
+    ("jm_kumo", 41),
+    ("pf_dora", 42),
+    ("pm_alex", 43),
+    ("pm_santa", 44),
+    ("zf_xiaobei", 45),
+    ("zf_xiaoni", 46),
+    ("zf_xiaoxiao", 47),
+    ("zf_xiaoyi", 48),
+    ("zm_yunjian", 49),
+    ("zm_yunxi", 50),
+    ("zm_yunxia", 51),
+    ("zm_yunyang", 52),
+];
+
 /// Text-to-speech client that supports multiple cloud and local providers.
 pub struct TtsClient {
     client: Client,
@@ -21,10 +78,11 @@ impl TtsClient {
                 None
             } else {
                 let model_dir = crate::config::resolve_model_dir(&config.model);
-                match KokoroOnnxBackend::new(&model_dir, config.speaker_id, config.speed) {
+                let speaker_id = Self::kokoro_speaker_id(&config);
+                match KokoroOnnxBackend::new(&model_dir, speaker_id, config.speed) {
                     Ok(backend) => {
                         log::info!(
-                            "[tts] Kokoro ONNX backend loaded from {}",
+                            "[tts] Kokoro ONNX backend loaded from {} (speaker_id={speaker_id})",
                             model_dir.display()
                         );
                         Some(backend)
@@ -173,11 +231,25 @@ impl TtsClient {
         Ok((samples, sample_rate))
     }
 
-    async fn kokoro_synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
+    #[cfg(feature = "sherpa-onnx")]
+    fn kokoro_speaker_id(config: &TtsConfig) -> i32 {
+        let preset = config.preset_voice.trim();
+        if preset.is_empty() {
+            return config.speaker_id;
+        }
+
+        KOKORO_PRESET_VOICES
+            .iter()
+            .find(|(voice_id, _)| *voice_id == preset)
+            .map(|(_, sid)| *sid)
+            .unwrap_or(config.speaker_id)
+    }
+
+    async fn kokoro_synthesize(&self, _text: &str) -> Result<(Vec<f32>, u32)> {
         #[cfg(feature = "sherpa-onnx")]
         {
             if let Some(ref kokoro) = self.kokoro {
-                let text = text.to_string();
+                let text = _text.to_string();
                 let kokoro = kokoro.clone();
                 tokio::task::spawn_blocking(move || kokoro.synthesize(&text))
                     .await
@@ -338,5 +410,28 @@ fn require_file(dir: &std::path::Path, name: &str) -> Result<String> {
             "TTS file not found: {}",
             p.display()
         )))
+    }
+}
+
+#[cfg(all(test, feature = "sherpa-onnx"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kokoro_preset_voice_maps_to_expected_speaker_id() {
+        let mut config = TtsConfig::default();
+        config.provider = TtsProvider::KokoroOnnx;
+        config.preset_voice = "af_heart".into();
+        config.speaker_id = 99;
+        assert_eq!(TtsClient::kokoro_speaker_id(&config), 3);
+    }
+
+    #[test]
+    fn kokoro_unknown_preset_falls_back_to_numeric_speaker_id() {
+        let mut config = TtsConfig::default();
+        config.provider = TtsProvider::KokoroOnnx;
+        config.preset_voice = "unknown_voice".into();
+        config.speaker_id = 12;
+        assert_eq!(TtsClient::kokoro_speaker_id(&config), 12);
     }
 }

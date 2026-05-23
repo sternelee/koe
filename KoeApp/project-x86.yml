@@ -8,6 +8,8 @@ options:
 packages:
   KoeAppleSpeech:
     path: ../Packages/KoeAppleSpeech
+  KoeAppleTranslation:
+    path: ../Packages/KoeAppleTranslation
 
 settings:
   base:
@@ -45,6 +47,7 @@ targetTemplates:
           - "-framework CoreFoundation"
           - "-framework UserNotifications"
           - "-framework SystemConfiguration"
+          - "-framework Accelerate"
         ENABLE_APP_SANDBOX: NO
         CLANG_ENABLE_OBJC_ARC: YES
     frameworks:
@@ -66,6 +69,8 @@ targets:
     dependencies:
       - package: KoeAppleSpeech
         product: KoeAppleSpeech
+      - package: KoeAppleTranslation
+        product: KoeAppleTranslation
     preBuildScripts:
       - name: Build Rust Library
         script: |

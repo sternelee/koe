@@ -52,6 +52,7 @@ pub mod qwen;
 #[cfg(feature = "sherpa-onnx")]
 pub mod sherpa_onnx;
 pub mod transcript;
+pub mod whisper;
 
 #[cfg(feature = "apple-speech")]
 pub use apple_speech::{AppleSpeechConfig, AppleSpeechProvider};
@@ -67,3 +68,4 @@ pub use qwen::QwenAsrProvider;
 #[cfg(feature = "sherpa-onnx")]
 pub use sherpa_onnx::{SherpaOnnxConfig, SherpaOnnxProvider};
 pub use transcript::TranscriptAggregator;
+pub use whisper::{WhisperConfig, WhisperProvider};

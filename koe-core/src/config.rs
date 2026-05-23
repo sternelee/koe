@@ -62,6 +62,10 @@ pub struct AsrSection {
     #[serde(default)]
     pub qwen: QwenAsrConfig,
 
+    /// Whisper local ASR configuration.
+    #[serde(default)]
+    pub whisper: WhisperAsrConfig,
+
     /// MLX local ASR configuration (Apple Silicon only)
     #[serde(default)]
     pub mlx: MlxAsrConfig,
@@ -180,6 +184,24 @@ pub struct DoubaoAsrConfig {
     pub headers: std::collections::HashMap<String, String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct WhisperAsrConfig {
+    /// Model directory name under ~/.koe/models/whisper/
+    #[serde(default = "default_whisper_model")]
+    pub model: String,
+    /// Language hint for Whisper. Use "auto" to allow autodetect.
+    #[serde(default = "default_whisper_language")]
+    pub language: String,
+}
+
+impl Default for WhisperAsrConfig {
+    fn default() -> Self {
+        Self {
+            model: default_whisper_model(),
+            language: default_whisper_language(),
+        }
+    }
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct MlxAsrConfig {
     /// Model directory name under ~/.koe/models/mlx/
@@ -754,6 +776,12 @@ fn default_mlx_delay_preset() -> String {
     "realtime".into()
 }
 fn default_mlx_language() -> String {
+    "auto".into()
+}
+fn default_whisper_model() -> String {
+    "whisper/turbo".into()
+}
+fn default_whisper_language() -> String {
     "auto".into()
 }
 fn default_sherpa_onnx_model() -> String {
@@ -1381,6 +1409,31 @@ pub fn load_config() -> Result<Config> {
     Ok(config)
 }
 
+fn sync_default_manifests(models_dir: &Path) -> Result<bool> {
+    let mut changed = false;
+    for (rel_path, content) in DEFAULT_MANIFESTS {
+        let manifest_dir = models_dir.join(rel_path);
+        let manifest_file = manifest_dir.join(".koe-manifest.json");
+        let current = std::fs::read_to_string(&manifest_file).ok();
+        if current.as_deref() == Some(*content) {
+            continue;
+        }
+
+        std::fs::create_dir_all(&manifest_dir)
+            .map_err(|e| KoeError::Config(format!("create {}: {e}", manifest_dir.display())))?;
+        std::fs::write(&manifest_file, content)
+            .map_err(|e| KoeError::Config(format!("write {}: {e}", manifest_file.display())))?;
+        log::info!(
+            "{} manifest: {}",
+            if current.is_some() { "refreshed" } else { "installed" },
+            manifest_file.display()
+        );
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
 /// Ensure ~/.koe/ exists with default config.yaml and dictionary.txt.
 /// Returns true if files were created (first launch).
 pub fn ensure_defaults() -> Result<bool> {
@@ -1414,22 +1467,15 @@ pub fn ensure_defaults() -> Result<bool> {
         }
     }
 
-    // Install default model manifests into ~/.koe/models/
+
+    // Install or refresh default model manifests into ~/.koe/models/
     let models_dir = crate::model_manager::models_dir();
-    for (rel_path, content) in DEFAULT_MANIFESTS {
-        let manifest_dir = models_dir.join(rel_path);
-        let manifest_file = manifest_dir.join(".koe-manifest.json");
-        if !manifest_file.exists() {
-            std::fs::create_dir_all(&manifest_dir)
-                .map_err(|e| KoeError::Config(format!("create {}: {e}", manifest_dir.display())))?;
-            std::fs::write(&manifest_file, content)
-                .map_err(|e| KoeError::Config(format!("write {}: {e}", manifest_file.display())))?;
-            log::info!("installed manifest: {}", manifest_file.display());
-            created = true;
-        }
+    if sync_default_manifests(&models_dir)? {
+        created = true;
     }
 
     Ok(created)
+
 }
 
 // ─── Key-path Get / Set ────────────────────────────────────────────
@@ -1638,7 +1684,7 @@ const DEFAULT_CONFIG_YAML: &str = r#"# Koe - Voice Input Tool Configuration
 # ~/.koe/config.yaml
 
 asr:
-  # ASR provider: "doubaoime" (default, free), "doubao", "qwen", "apple-speech", "mlx", "sherpa-onnx"
+  # ASR provider: "doubaoime" (default, free), "doubao", "qwen", "whisper", "apple-speech", "mlx", "sherpa-onnx"
   provider: "doubaoime"
 
   # DoubaoIME (豆包输入法) free ASR — no API key required, auto device registration
@@ -1680,6 +1726,11 @@ asr:
     final_wait_timeout_ms: 5000
     # headers:           # custom HTTP headers for WebSocket connection
     #   X-Custom-Header: "value"
+
+  # Whisper local ASR (whisper.cpp via whisper-rs)
+  whisper:
+    model: "whisper/turbo"
+    language: "auto"
 
   # Apple Speech local ASR (macOS 26+, zero-config, no model download)
   apple-speech:
@@ -1785,7 +1836,8 @@ translation:
     model: "eleven_multilingual_v2"  # For kokoro_onnx: model directory under ~/.koe/models/ (e.g. "kokoro/kokoro-en")
     base_url: "https://api.elevenlabs.io"
     speed: 1.0
-    speaker_id: 0             # For kokoro_onnx: speaker ID (0–49)
+    preset_voice: ""          # For kokoro_onnx: e.g. af_heart, zf_xiaoxiao
+    speaker_id: 0             # Numeric fallback for kokoro_onnx (0–52)
     timeout_ms: 30000
 
 prompt_templates:
@@ -1821,6 +1873,9 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("sherpa-onnx/multilingual-8lang"),
     manifest!("sherpa-onnx/zh-xlarge"),
     manifest!("kokoro/kokoro-en"),
+    manifest!("whisper/base"),
+    manifest!("whisper/small"),
+    manifest!("whisper/turbo"),
 ];
 
 #[cfg(test)]
@@ -2068,6 +2123,33 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp2);
     }
 
+    #[test]
+    fn sync_default_manifests_overwrites_stale_builtin_manifest() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-manifest-sync-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let models_dir = tmp.join("models");
+        let manifest_dir = models_dir.join("kokoro/kokoro-en");
+        fs::create_dir_all(&manifest_dir).unwrap();
+
+        let manifest_file = manifest_dir.join(".koe-manifest.json");
+        fs::write(&manifest_file, "stale manifest").unwrap();
+
+        let changed = sync_default_manifests(&models_dir).unwrap();
+        let content = fs::read_to_string(&manifest_file).unwrap();
+
+        assert!(changed);
+        assert_eq!(content, manifest!("kokoro/kokoro-en").1);
+
+        let changed_again = sync_default_manifests(&models_dir).unwrap();
+        assert!(!changed_again);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
     #[test]
     fn config_accepts_legacy_minimax_tts_provider_value() {
         let raw = r#"

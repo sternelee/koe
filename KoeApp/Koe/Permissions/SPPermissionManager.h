@@ -26,6 +26,7 @@ typedef NS_ENUM(NSInteger, SPPermissionType) {
 
 /// Request notification permission from the user.
 - (void)requestNotificationPermission;
+- (void)requestNotificationPermissionWithCompletion:(nullable void (^)(BOOL granted))completion;
 
 /// Check whether notification permission has been granted.
 /// @param completion Called on main queue with the current authorization status.

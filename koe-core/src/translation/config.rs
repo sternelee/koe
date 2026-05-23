@@ -131,7 +131,9 @@ pub struct TtsConfig {
     pub base_url: String,
     /// Playback speed multiplier.
     pub speed: f32,
-    /// Speaker ID for multi-speaker models (e.g. Kokoro ONNX, 0–49).
+    /// Human-friendly preset voice id for multi-speaker models such as Kokoro.
+    pub preset_voice: String,
+    /// Numeric speaker ID fallback for multi-speaker backends.
     pub speaker_id: i32,
     /// Request timeout in milliseconds.
     pub timeout_ms: u64,
@@ -147,6 +149,7 @@ impl Default for TtsConfig {
             model: "eleven_multilingual_v2".to_string(),
             base_url: "https://api.elevenlabs.io".to_string(),
             speed: 1.0,
+            preset_voice: String::new(),
             speaker_id: 0,
             timeout_ms: 30_000,
         }

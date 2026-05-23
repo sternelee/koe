@@ -1,25 +1,26 @@
 {
     "provider": "sherpa-onnx",
-    "description": "Kokoro English TTS (ONNX, 24kHz, 50 speakers)",
-    "repo": "csukuangfj/sherpa-onnx-kokoro-1.0",
+    "mode": "tts",
+    "description": "Kokoro v1.0 multilingual TTS (ONNX, 24kHz)",
+    "repo": "csukuangfj/kokoro-multi-lang-v1_0",
     "files": [
         {
             "name": "model.onnx",
-            "size": 310380672,
-            "sha256": "",
-            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/model.onnx"
+            "size": 325630829,
+            "sha256": "c436dc6a842b62aba06af67e40bafcfb9c60ac3af895358f1974ad9a7f7c026b",
+            "url": "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0/resolve/main/model.onnx"
         },
         {
             "name": "voices.bin",
-            "size": 18638400,
-            "sha256": "",
-            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/voices.bin"
+            "size": 27678720,
+            "sha256": "8a77c0d397026208d22211f37670b5b3b11e03f190756b25a1d24041fced82a9",
+            "url": "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0/resolve/main/voices.bin"
         },
         {
             "name": "tokens.txt",
-            "size": 3847,
+            "size": 687,
             "sha256": "",
-            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-kokoro-1.0/resolve/main/tokens.txt"
+            "url": "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0/resolve/main/tokens.txt"
         }
     ]
 }

@@ -194,28 +194,68 @@ fn write_passthrough_chunk(
         .chunks_exact(2)
         .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
         .collect();
+    write_passthrough_mono_samples(
+        &mono_samples,
+        16_000,
+        output_buffer,
+        output_sample_rate,
+        output_channels,
+    )
+}
+
+fn write_passthrough_segment(
+    segment: &SpeechSegment,
+    output_buffer: &SharedOutputBuffer,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> Result<()> {
+    let mono_samples: Vec<f32> = segment
+        .samples
+        .iter()
+        .map(|sample| *sample as f32 / 32768.0)
+        .collect();
+    write_passthrough_mono_samples(
+        &mono_samples,
+        16_000,
+        output_buffer,
+        output_sample_rate,
+        output_channels,
+    )
+}
+
+fn write_passthrough_mono_samples(
+    mono_samples: &[f32],
+    input_sample_rate: u32,
+    output_buffer: &SharedOutputBuffer,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> Result<()> {
     if mono_samples.is_empty() {
         return Ok(());
     }
 
-    let resampled = if output_sample_rate != 16_000 {
-        resample_linear(&mono_samples, 16_000, output_sample_rate)
+    let resampled = if output_sample_rate != input_sample_rate {
+        resample_linear(mono_samples, input_sample_rate, output_sample_rate)
     } else {
-        mono_samples
+        mono_samples.to_vec()
     };
 
     let data = upmix_mono(&resampled, output_channels);
     let frame = AudioFrame {
-        timestamp_ns: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64,
+        timestamp_ns: now_timestamp_ns(),
         sample_rate: output_sample_rate,
         channels: output_channels,
         data,
     };
 
     output_buffer.write_frame(&frame)
+}
+
+fn now_timestamp_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
 fn upmix_mono(samples: &[f32], channels: u16) -> Vec<f32> {
@@ -250,9 +290,28 @@ async fn run_segment_pipeline(
     // 1. ASR
     let text = match run_asr(&segment, &asr_factory).await {
         Ok(t) if !t.trim().is_empty() => t,
-        Ok(_) => return,
+        Ok(_) => {
+            log::warn!("[translation] ASR produced no text; falling back to passthrough for this segment");
+            if let Err(e) = write_passthrough_segment(
+                &segment,
+                &output_buffer,
+                output_sample_rate,
+                output_channels,
+            ) {
+                log::warn!("[translation] passthrough fallback write failed: {e}");
+            }
+            return;
+        }
         Err(e) => {
-            log::warn!("[translation] ASR failed: {e}");
+            log::warn!("[translation] ASR failed: {e}; falling back to passthrough for this segment");
+            if let Err(write_err) = write_passthrough_segment(
+                &segment,
+                &output_buffer,
+                output_sample_rate,
+                output_channels,
+            ) {
+                log::warn!("[translation] passthrough fallback write failed: {write_err}");
+            }
             return;
         }
     };
@@ -260,6 +319,14 @@ async fn run_segment_pipeline(
 
     // 2. MT
     if !mt_enabled {
+        if let Err(e) = write_passthrough_segment(
+            &segment,
+            &output_buffer,
+            output_sample_rate,
+            output_channels,
+        ) {
+            log::warn!("[translation] passthrough fallback write failed: {e}");
+        }
         return;
     }
     let translated = match mt
@@ -268,24 +335,57 @@ async fn run_segment_pipeline(
     {
         Ok(t) => t,
         Err(e) => {
-            log::warn!("[translation] MT failed: {e}");
+            log::warn!("[translation] MT failed: {e}; falling back to passthrough for this segment");
+            if let Err(write_err) = write_passthrough_segment(
+                &segment,
+                &output_buffer,
+                output_sample_rate,
+                output_channels,
+            ) {
+                log::warn!("[translation] passthrough fallback write failed: {write_err}");
+            }
             return;
         }
     };
     log::info!("[translation] MT: {translated}");
 
     if translated.trim().is_empty() {
+        log::warn!("[translation] MT returned empty text; falling back to passthrough for this segment");
+        if let Err(e) = write_passthrough_segment(
+            &segment,
+            &output_buffer,
+            output_sample_rate,
+            output_channels,
+        ) {
+            log::warn!("[translation] passthrough fallback write failed: {e}");
+        }
         return;
     }
 
     // 3. TTS
     if !tts_enabled {
+        if let Err(e) = write_passthrough_segment(
+            &segment,
+            &output_buffer,
+            output_sample_rate,
+            output_channels,
+        ) {
+            log::warn!("[translation] passthrough fallback write failed: {e}");
+        }
         return;
     }
     let (samples, tts_rate) = match tts.synthesize(&translated).await {
         Ok(r) => r,
         Err(e) => {
-            log::warn!("[translation] TTS failed: {e}");
+            log::warn!("[translation] TTS failed: {e}; falling back to passthrough for this segment");
+            if let Err(write_err) = write_passthrough_segment(
+                &segment,
+                &output_buffer,
+                output_sample_rate,
+                output_channels,
+            ) {
+                log::warn!("[translation] passthrough fallback write failed: {write_err}");
+            }
             return;
         }
     };
@@ -299,10 +399,7 @@ async fn run_segment_pipeline(
 
     // 5. Write to shared mmap buffer
     let frame = AudioFrame {
-        timestamp_ns: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64,
+        timestamp_ns: now_timestamp_ns(),
         sample_rate: output_sample_rate,
         channels: output_channels,
         data: output_samples,
@@ -399,4 +496,32 @@ fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
         output.push(s0 + (s1 - s0) * frac);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn shared_buffer_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn passthrough_segment_writes_audio_when_translation_fails() {
+        let _guard = shared_buffer_test_lock().lock().unwrap();
+        let buffer = SharedOutputBuffer::new(256, 1, 48_000).expect("buffer");
+        let segment = SpeechSegment {
+            samples: vec![1200, -1200, 2400, -2400, 1200, -1200, 0, 0],
+            duration_ms: 1,
+        };
+
+        write_passthrough_segment(&segment, &buffer, 48_000, 1).expect("fallback write");
+
+        let snapshot = buffer.snapshot();
+        assert!(snapshot.header.write_index_frames > 0);
+        assert!(snapshot.header.last_timestamp_ns > 0);
+        assert!(snapshot.samples.iter().any(|sample| sample.abs() > 0.0));
+    }
 }

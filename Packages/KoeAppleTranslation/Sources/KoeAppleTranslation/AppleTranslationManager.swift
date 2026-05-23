@@ -33,16 +33,14 @@ final class AppleTranslationManager {
 
     @available(macOS 26.0, *)
     private func translate(sourceText: String, sourceLang: String?, targetLang: String) async throws -> String {
-        guard let sourceCode = sourceLang?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !sourceCode.isEmpty,
-              sourceCode.caseInsensitiveCompare("auto") != .orderedSame,
-              let sourceLanguage = Self.language(sourceCode) else {
+        let sourceLanguage = sourceLang.flatMap(Self.language)
+            ?? Locale.preferredLanguages.compactMap(Self.language).first
+        guard let sourceLanguage, let targetLanguage = Self.language(targetLang) else {
             throw NSError(domain: "nz.owo.koe.apple-translation", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Apple Translation requires an explicit source language (translation.source_language).",
+                NSLocalizedDescriptionKey: "Apple Translation requires a source language or a preferred system language, plus a target language.",
             ])
         }
 
-        let targetLanguage = Self.language(targetLang)
         let session = TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
         let response = try await session.translate(sourceText)
         return response.targetText

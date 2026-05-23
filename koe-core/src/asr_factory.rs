@@ -1,7 +1,10 @@
 use crate::config::{self, Config};
 #[cfg(feature = "apple-speech")]
 use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
-use koe_asr::{AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, QwenAsrProvider};
+use koe_asr::{
+    AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, QwenAsrProvider, WhisperConfig,
+    WhisperProvider,
+};
 #[cfg(feature = "mlx")]
 use koe_asr::{MlxConfig, MlxProvider};
 #[cfg(feature = "sherpa-onnx")]
@@ -83,6 +86,21 @@ pub fn build_asr_provider(
                 context_messages: Vec::new(),
             };
             (config, Box::new(QwenAsrProvider::new()))
+        }
+        "whisper" => {
+            let whisper = &cfg.asr.whisper;
+            let whisper_config = WhisperConfig {
+                model_dir: config::resolve_model_dir(&whisper.model),
+                language: if whisper.language.trim().is_empty() || whisper.language == "auto" {
+                    None
+                } else {
+                    Some(whisper.language.clone())
+                },
+            };
+            (
+                AsrConfig::default(),
+                Box::new(WhisperProvider::new(whisper_config)),
+            )
         }
         #[cfg(feature = "mlx")]
         "mlx" => {

@@ -1225,6 +1225,43 @@ fn llm_output_translation_enabled_for_session(cfg: &config::LlmSection) -> bool 
         .unwrap_or(false)
 }
 
+fn effective_translation_target_language(cfg: &config::Config) -> String {
+    let trimmed = cfg.translation.target_language.trim();
+    if trimmed.is_empty() {
+        "en".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_translation_language_code(language: &str) -> Option<String> {
+    let trimmed = language.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    Some(trimmed.replace('_', "-"))
+}
+
+fn inferred_translation_source_language(cfg: &config::AsrSection) -> Option<String> {
+    match cfg.provider.as_str() {
+        "qwen" => normalize_translation_language_code(&cfg.qwen.language),
+        "whisper" => normalize_translation_language_code(&cfg.whisper.language),
+        "mlx" => normalize_translation_language_code(&cfg.mlx.language),
+        "apple-speech" => normalize_translation_language_code(&cfg.apple_speech.locale),
+        "doubao" => cfg
+            .doubao
+            .language
+            .as_deref()
+            .and_then(normalize_translation_language_code),
+        _ => None,
+    }
+}
+
+fn effective_translation_source_language(cfg: &config::Config) -> Option<String> {
+    normalize_translation_language_code(&cfg.translation.source_language)
+        .or_else(|| inferred_translation_source_language(&cfg.asr))
+}
+
 fn translation_runtime_mode(cfg: &config::Config) -> TranslationMode {
     if translation_pipeline_ready(cfg) {
         TranslationMode::Translate
@@ -1235,7 +1272,7 @@ fn translation_runtime_mode(cfg: &config::Config) -> TranslationMode {
 
 fn translation_pipeline_ready(cfg: &config::Config) -> bool {
     translation_asr_ready(&cfg.asr)
-        && translation_mt_ready(&cfg.translation)
+        && translation_mt_ready(cfg)
         && translation_tts_ready(&cfg.translation)
 }
 
@@ -1246,6 +1283,10 @@ fn translation_asr_ready(cfg: &config::AsrSection) -> bool {
             !cfg.qwen.url.trim().is_empty()
                 && !cfg.qwen.model.trim().is_empty()
                 && !cfg.qwen.api_key.trim().is_empty()
+        }
+        "whisper" => {
+            !cfg.whisper.model.trim().is_empty()
+                && config::resolve_model_dir(&cfg.whisper.model).exists()
         }
         "mlx" => {
             !cfg.mlx.model.trim().is_empty() && config::resolve_model_dir(&cfg.mlx.model).exists()
@@ -1266,18 +1307,21 @@ fn translation_asr_ready(cfg: &config::AsrSection) -> bool {
     }
 }
 
-fn translation_mt_ready(cfg: &crate::translation::config::TranslationConfig) -> bool {
-    if !cfg.mt.enabled || cfg.target_language.trim().is_empty() {
+fn translation_mt_ready(cfg: &config::Config) -> bool {
+    if !cfg.translation.mt.enabled || effective_translation_target_language(cfg).is_empty() {
         return false;
     }
 
-    match cfg.mt.provider {
+    match cfg.translation.mt.provider {
         crate::translation::config::MtProvider::OpenAiCompatible => {
-            !cfg.mt.base_url.trim().is_empty() && !cfg.mt.model.trim().is_empty()
+            !cfg.translation.mt.base_url.trim().is_empty()
+                && !cfg.translation.mt.model.trim().is_empty()
         }
         crate::translation::config::MtProvider::Apple => true,
     }
 }
+
+
 
 fn translation_tts_ready(cfg: &crate::translation::config::TranslationConfig) -> bool {
     if !cfg.tts.enabled {
@@ -1304,6 +1348,8 @@ fn build_llm_provider(
     llm_http_client: Client,
     profile: config::LlmProfileRuntimeConfig,
 ) -> Box<dyn LlmProvider> {
+    #[cfg(not(feature = "mlx"))]
+    let _ = session_id;
     match profile.provider.as_str() {
         #[cfg(feature = "mlx")]
         "mlx" => {
@@ -2185,11 +2231,19 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
     let cfg = core.config.clone();
     let dictionary = core.dictionary.clone();
     let http_client = core.llm_http_client.clone();
-    let translation_config = cfg.translation.clone();
+    let mut translation_config = cfg.translation.clone();
+    translation_config.target_language = effective_translation_target_language(&cfg);
+    if let Some(source_language) = effective_translation_source_language(&cfg) {
+        translation_config.source_language = source_language;
+    } else if translation_config.source_language.trim().is_empty() {
+        translation_config.source_language = "auto".into();
+    }
     let translation_mode = translation_runtime_mode(&cfg);
 
     let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
     let engine = TranslationEngine::new(translation_config, http_client, factory, translation_mode);
+
+
 
     let handle = core.runtime.spawn(async move {
         if let Err(e) = engine.run(audio_rx, stop).await {
@@ -2414,7 +2468,7 @@ mod tests {
     }
 
     #[test]
-    fn translation_runtime_uses_translate_when_local_backends_are_ready() {
+    fn translation_runtime_uses_translate_with_apple_translation_autodetect_and_default_target() {
         let model_dir = std::env::temp_dir().join(format!(
             "koe-translation-ready-{}",
             std::time::SystemTime::now()
@@ -2425,11 +2479,16 @@ mod tests {
         std::fs::create_dir_all(&model_dir).unwrap();
 
         let mut cfg = Config::default();
-        cfg.asr.provider = "doubaoime".into();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.target_language.clear();
+        cfg.translation.source_language.clear();
         cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
         cfg.translation.tts.provider = crate::translation::config::TtsProvider::KokoroOnnx;
         cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
 
+        assert_eq!(effective_translation_target_language(&cfg), "en");
+        assert_eq!(effective_translation_source_language(&cfg), None);
         assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
 
         let _ = std::fs::remove_dir_all(&model_dir);

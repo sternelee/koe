@@ -33,6 +33,124 @@ static const NSInteger kTranslationMtOpenAIViewTagBase = 6200;
 static const NSInteger kTranslationMtOpenAIViewTagCount = 9;
 static const NSInteger kTranslationTtsCloudOnlyTag = 6300;
 static const NSInteger kTranslationTtsKokoroOnlyTag = 6301;
+
+static NSArray<NSDictionary<NSString *, id> *> *kokoroPresetVoices(void) {
+    static NSArray<NSDictionary<NSString *, id> *> *voices;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        voices = @[
+            @{@"id": @"af_alloy", @"name": @"Alloy", @"sid": @0},
+            @{@"id": @"af_aoede", @"name": @"Aoede", @"sid": @1},
+            @{@"id": @"af_bella", @"name": @"Bella", @"sid": @2},
+            @{@"id": @"af_heart", @"name": @"Heart", @"sid": @3},
+            @{@"id": @"af_jessica", @"name": @"Jessica", @"sid": @4},
+            @{@"id": @"af_kore", @"name": @"Kore", @"sid": @5},
+            @{@"id": @"af_nicole", @"name": @"Nicole", @"sid": @6},
+            @{@"id": @"af_nova", @"name": @"Nova", @"sid": @7},
+            @{@"id": @"af_river", @"name": @"River", @"sid": @8},
+            @{@"id": @"af_sarah", @"name": @"Sarah", @"sid": @9},
+            @{@"id": @"af_sky", @"name": @"Sky", @"sid": @10},
+            @{@"id": @"am_adam", @"name": @"Adam", @"sid": @11},
+            @{@"id": @"am_echo", @"name": @"Echo", @"sid": @12},
+            @{@"id": @"am_eric", @"name": @"Eric", @"sid": @13},
+            @{@"id": @"am_fenrir", @"name": @"Fenrir", @"sid": @14},
+            @{@"id": @"am_liam", @"name": @"Liam", @"sid": @15},
+            @{@"id": @"am_michael", @"name": @"Michael", @"sid": @16},
+            @{@"id": @"am_onyx", @"name": @"Onyx", @"sid": @17},
+            @{@"id": @"am_puck", @"name": @"Puck", @"sid": @18},
+            @{@"id": @"am_santa", @"name": @"Santa", @"sid": @19},
+            @{@"id": @"bf_alice", @"name": @"Alice", @"sid": @20},
+            @{@"id": @"bf_emma", @"name": @"Emma", @"sid": @21},
+            @{@"id": @"bf_isabella", @"name": @"Isabella", @"sid": @22},
+            @{@"id": @"bf_lily", @"name": @"Lily", @"sid": @23},
+            @{@"id": @"bm_daniel", @"name": @"Daniel", @"sid": @24},
+            @{@"id": @"bm_fable", @"name": @"Fable", @"sid": @25},
+            @{@"id": @"bm_george", @"name": @"George", @"sid": @26},
+            @{@"id": @"bm_lewis", @"name": @"Lewis", @"sid": @27},
+            @{@"id": @"ef_dora", @"name": @"Dora", @"sid": @28},
+            @{@"id": @"em_alex", @"name": @"Alex", @"sid": @29},
+            @{@"id": @"ff_siwis", @"name": @"Siwis", @"sid": @30},
+            @{@"id": @"hf_alpha", @"name": @"Alpha", @"sid": @31},
+            @{@"id": @"hf_beta", @"name": @"Beta", @"sid": @32},
+            @{@"id": @"hm_omega", @"name": @"Omega", @"sid": @33},
+            @{@"id": @"hm_psi", @"name": @"Psi", @"sid": @34},
+            @{@"id": @"if_sara", @"name": @"Sara", @"sid": @35},
+            @{@"id": @"im_nicola", @"name": @"Nicola", @"sid": @36},
+            @{@"id": @"jf_alpha", @"name": @"Alpha (JA)", @"sid": @37},
+            @{@"id": @"jf_gongitsune", @"name": @"Gongitsune", @"sid": @38},
+            @{@"id": @"jf_nezumi", @"name": @"Nezumi", @"sid": @39},
+            @{@"id": @"jf_tebukuro", @"name": @"Tebukuro", @"sid": @40},
+            @{@"id": @"jm_kumo", @"name": @"Kumo", @"sid": @41},
+            @{@"id": @"pf_dora", @"name": @"Dora (PT)", @"sid": @42},
+            @{@"id": @"pm_alex", @"name": @"Alex (PT)", @"sid": @43},
+            @{@"id": @"pm_santa", @"name": @"Santa (PT)", @"sid": @44},
+            @{@"id": @"zf_xiaobei", @"name": @"Xiaobei", @"sid": @45},
+            @{@"id": @"zf_xiaoni", @"name": @"Xiaoni", @"sid": @46},
+            @{@"id": @"zf_xiaoxiao", @"name": @"Xiaoxiao", @"sid": @47},
+            @{@"id": @"zf_xiaoyi", @"name": @"Xiaoyi", @"sid": @48},
+            @{@"id": @"zm_yunjian", @"name": @"Yunjian", @"sid": @49},
+            @{@"id": @"zm_yunxi", @"name": @"Yunxi", @"sid": @50},
+            @{@"id": @"zm_yunxia", @"name": @"Yunxia", @"sid": @51},
+            @{@"id": @"zm_yunyang", @"name": @"Yunyang", @"sid": @52},
+        ];
+    });
+    return voices;
+}
+
+static NSString *kokoroPresetVoiceForSpeakerId(NSInteger speakerID) {
+    for (NSDictionary<NSString *, id> *voice in kokoroPresetVoices()) {
+        if ([voice[@"sid"] integerValue] == speakerID) {
+            return voice[@"id"];
+        }
+    }
+    return nil;
+}
+
+static NSInteger kokoroSpeakerIdForPresetVoice(NSString *presetVoice) {
+    for (NSDictionary<NSString *, id> *voice in kokoroPresetVoices()) {
+        if ([voice[@"id"] isEqualToString:presetVoice]) {
+            return [voice[@"sid"] integerValue];
+        }
+    }
+    return NSNotFound;
+}
+
+static NSString *whisperLanguageForAsrPopupValue(NSString *popupValue) {
+    if (popupValue.length == 0) {
+        return @"auto";
+    }
+    NSDictionary<NSString *, NSString *> *mapping = @{
+        @"zh-CN": @"zh",
+        @"en-US": @"en",
+        @"ja-JP": @"ja",
+        @"ko-KR": @"ko",
+        @"de-DE": @"de",
+        @"fr-FR": @"fr",
+        @"es-MX": @"es",
+        @"pt-BR": @"pt",
+        @"yue-CN": @"zh",
+    };
+    return mapping[popupValue] ?: popupValue.lowercaseString;
+}
+
+static NSString *asrPopupValueForWhisperLanguage(NSString *language) {
+    NSString *normalized = language.lowercaseString;
+    if (normalized.length == 0 || [normalized isEqualToString:@"auto"]) {
+        return @"";
+    }
+    NSDictionary<NSString *, NSString *> *mapping = @{
+        @"zh": @"zh-CN",
+        @"en": @"en-US",
+        @"ja": @"ja-JP",
+        @"ko": @"ko-KR",
+        @"de": @"de-DE",
+        @"fr": @"fr-FR",
+        @"es": @"es-MX",
+        @"pt": @"pt-BR",
+        @"yue": @"zh-CN",
+    };
+    return mapping[normalized] ?: @"";
+}
 static NSString *const kLlmProfileAreaShiftIdentifier = @"llm-profile-area-shift";
 static const CGFloat kLlmOutputTranslationCollapsedDelta = 122.0;
 static const NSInteger kOverlayFontSizeDefault = 13;
@@ -538,7 +656,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSPopUpButton *appleSpeechLocalePopup;
 
 // LLM fields
-@property (nonatomic, strong) NSButton *llmEnabledCheckbox;
+@property (nonatomic, strong) NSSwitch *llmEnabledCheckbox;
 @property (nonatomic, strong) NSTableView *llmProfileTableView;
 @property (nonatomic, strong) NSScrollView *llmProfileTableScroll;
 @property (nonatomic, strong) NSButton *llmAddProfileButton;
@@ -648,8 +766,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSButton *translationTtsApiKeyToggle;
 @property (nonatomic, strong) NSTextField *translationTtsVoiceIdField;
 @property (nonatomic, strong) NSTextField *translationTtsModelField;
+@property (nonatomic, strong) NSPopUpButton *translationTtsLocalModelPopup;
+@property (nonatomic, strong) NSTextField *translationTtsModelStatusLabel;
+@property (nonatomic, strong) NSButton *translationTtsModelDownloadButton;
+@property (nonatomic, strong) NSButton *translationTtsModelDeleteButton;
+@property (nonatomic, strong) NSProgressIndicator *translationTtsModelProgressBar;
+@property (nonatomic, strong) NSTextField *translationTtsModelProgressSizeLabel;
 @property (nonatomic, strong) NSTextField *translationTtsBaseUrlField;
-@property (nonatomic, strong) NSTextField *translationTtsSpeakerIdField;
+@property (nonatomic, strong) NSPopUpButton *translationTtsSpeakerIdField;
 
 // ── Virtual Microphone (Translation pane) ──
 @property (nonatomic, strong) NSView *virtualMicStatusDot;
@@ -681,6 +805,94 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)populateLlmLocalModelPopup;
 - (void)updateLlmModelStatusLabel;
 - (void)refreshLlmRemoteModels:(id)sender;
+- (void)populateTranslationTtsKokoroVoices;
+- (void)selectTranslationTtsKokoroVoicePreset:(NSString *)presetVoice speakerID:(NSInteger)speakerID;
+- (void)populateTranslationTtsLocalModelPopup;
+- (void)translationTtsLocalModelChanged:(id)sender;
+- (void)updateTranslationTtsModelStatusLabel;
+- (void)applyTranslationTtsModelStatus:(NSInteger)status;
+- (void)applyTranslationTtsModelStatus:(NSInteger)status verifying:(BOOL)verifying;
+- (void)translationTtsDownloadSelectedModel:(id)sender;
+- (void)translationTtsDeleteSelectedModel:(id)sender;
+- (void)switchToPane:(NSString *)identifier;
+- (NSView *)buildAsrPane;
+- (NSView *)buildLlmPane;
+- (NSView *)buildOverlayPane;
+- (NSView *)buildHotkeyPane;
+- (NSView *)buildDictionaryPane;
+- (NSView *)buildSystemPromptPane;
+- (NSView *)buildTemplatesPane;
+- (NSView *)buildTranslationPane;
+- (NSView *)buildAboutPane;
+- (void)addButtonsToPane:(NSView *)pane atY:(CGFloat)y width:(CGFloat)paneWidth;
+- (NSTextField *)formLabel:(NSString *)title frame:(NSRect)frame;
+- (NSTextField *)formTextField:(NSRect)frame placeholder:(NSString *)placeholder;
+- (NSTextField *)descriptionLabel:(NSString *)text;
+- (NSTextField *)addSettingsDescriptionText:(NSString *)text toPane:(NSView *)pane topY:(CGFloat)topY x:(CGFloat)x width:(CGFloat)width;
+- (void)applySettingsPaneBackgroundToView:(NSView *)pane;
+- (NSTextField *)sectionTitleLabel:(NSString *)title frame:(NSRect)frame;
+- (NSButton *)eyeButtonWithFrame:(NSRect)frame action:(SEL)action;
+- (void)asrAuthModeChanged:(NSSegmentedControl *)sender;
+- (void)toggleAsrAccessKeyVisibility:(NSButton *)sender;
+- (void)toggleQwenApiKeyVisibility:(NSButton *)sender;
+- (void)toggleAsrApiKeyVisibility:(NSButton *)sender;
+- (void)downloadSelectedModel:(id)sender;
+- (void)deleteSelectedModel:(id)sender;
+- (void)toggleTranslationMtApiKeyVisibility:(NSButton *)sender;
+- (void)toggleTranslationTtsApiKeyVisibility:(NSButton *)sender;
+- (NSSwitch *)settingsSwitchWithAction:(SEL)action;
+- (NSSwitch *)settingsSwitchWithAction:(SEL)action controlSize:(NSControlSize)controlSize;
+- (NSView *)settingsToggleCardWithFrame:(NSRect)frame title:(NSString *)title toggle:(NSSwitch *)toggle;
+- (CGFloat)fittingHeightForWrappingLabel:(NSTextField *)label width:(CGFloat)width;
+- (NSTextField *)overlayValueLabel;
+- (NSView *)sliderControlWithSlider:(NSSlider *)slider valueLabel:(NSTextField *)valueLabel width:(CGFloat)width;
+- (NSPopUpButton *)overlayFontFamilyPopupControl;
+- (NSPopUpButton *)overlayMaxVisibleLinesPopupControl;
+- (NSView *)hotkeyPickerControlWithPopup:(NSPopUpButton *)popup recordButton:(NSButton *)button resetButton:(NSButton *)resetButton;
+- (void)toolbarItemClicked:(id)sender;
+- (void)llmEnabledToggled:(id)sender;
+- (void)llmOutputTranslationToggled:(id)sender;
+- (void)showAddLlmProfileMenu:(id)sender;
+- (void)addLlmProfileFromMenu:(id)sender;
+- (void)deleteLlmProfile:(id)sender;
+- (void)llmProfileNameChanged:(id)sender;
+- (void)toggleLlmApiKeyVisibility:(NSButton *)sender;
+- (void)toggleLlmRemoteModelPicker:(id)sender;
+- (void)llmRemoteModelChanged:(id)sender;
+- (void)llmDownloadSelectedModel:(id)sender;
+- (void)llmDeleteSelectedModel:(id)sender;
+- (void)testLlmConnection:(id)sender;
+- (void)overlayControlChanged:(id)sender;
+- (void)resetOverlaySettings:(id)sender;
+- (void)triggerHotkeyChanged:(id)sender;
+- (void)recordTriggerHotkey:(id)sender;
+- (void)resetTriggerHotkey:(id)sender;
+- (void)handleTemplatePrimaryActions:(NSSegmentedControl *)sender;
+- (void)handleTemplateReorderActions:(NSSegmentedControl *)sender;
+- (void)toggleSelectedTemplateEnabled:(id)sender;
+- (void)translationInputDeviceChanged:(id)sender;
+- (void)translationEnabledToggled:(id)sender;
+- (void)translationMtProviderChanged:(id)sender;
+- (void)installVirtualMicDriver:(id)sender;
+- (void)uninstallVirtualMicDriver:(id)sender;
+- (void)openGitHub:(id)sender;
+- (void)openDocs:(id)sender;
+- (void)cancelSetup:(id)sender;
+- (NSView *)surfaceCardViewWithFrame:(NSRect)frame;
+- (void)setHidden:(BOOL)hidden forViewsWithTagInRange:(NSRange)range inView:(NSView *)view;
+- (NSSlider *)overlaySliderWithMin:(double)minValue max:(double)maxValue action:(SEL)action;
+- (NSArray<NSView *> *)cardRowWithLabel:(NSString *)label control:(NSView *)control;
+- (void)layoutCardRowControls:(NSView *)card width:(CGFloat)width;
+- (NSView *)cardWithTitle:(NSString *)title rows:(NSArray<NSView *> *)rows width:(CGFloat)width;
+- (void)updateOverlayLineLimitControlsEnabled;
+- (NSString *)selectedOverlayFontFamilyValue;
+- (NSInteger)selectedOverlayMaxVisibleLinesValue;
+- (void)selectOverlayFontFamilyValue:(NSString *)value;
+- (void)selectOverlayMaxVisibleLinesValue:(NSInteger)value;
+- (void)llmLocalModelChanged:(id)sender;
+- (NSSegmentedControl *)templateActionSegmentedControlWithSymbols:(NSArray<NSString *> *)symbolNames toolTips:(NSArray<NSString *> *)toolTips action:(SEL)action;
+- (NSTextField *)settingsRowLabelWithString:(NSString *)text;
+- (void)translationStepChanged:(id)sender;
 
 @end
 
@@ -908,6 +1120,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSDictionary *localProviderLabels = @{
         @"mlx": KoeLocalizedString(@"setupWizard.llm.profile.mlx"),
         @"sherpa-onnx": KoeLocalizedString(@"setupWizard.asr.provider.sherpaOnnx"),
+        @"whisper": KoeLocalizedString(@"setupWizard.asr.provider.whisper"),
     };
     for (NSString *provider in supportedLocalProviders) {
         NSString *label = localProviderLabels[provider];
@@ -2991,12 +3204,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
         [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.provider") frame:NSMakeRect(0, sy, labelW, 22)]];
         self.translationTtsProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, 200, 26) pullsDown:NO];
+        NSArray<NSString *> *supportedLocalProviders = [self.rustBridge supportedLocalProviders];
         [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.elevenlabs")];
         [self.translationTtsProviderPopup lastItem].representedObject = @"elevenlabs";
         [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.minimax")];
         [self.translationTtsProviderPopup lastItem].representedObject = @"mini_max";
-        [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.kokoroOnnx")];
-        [self.translationTtsProviderPopup lastItem].representedObject = @"kokoro_onnx";
+        if ([supportedLocalProviders containsObject:@"sherpa-onnx"]) {
+            [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.kokoroOnnx")];
+            [self.translationTtsProviderPopup lastItem].representedObject = @"kokoro_onnx";
+        }
         self.translationTtsProviderPopup.target = self;
         self.translationTtsProviderPopup.action = @selector(translationTtsProviderChanged:);
         [section addSubview:self.translationTtsProviderPopup];
@@ -3030,14 +3246,78 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         NSTextField *ttsSpeakerIdLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.speakerId") frame:NSMakeRect(0, sy, labelW, 22)];
         ttsSpeakerIdLabel.tag = kTranslationTtsKokoroOnlyTag;
         [section addSubview:ttsSpeakerIdLabel];
-        self.translationTtsSpeakerIdField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"0"];
+        self.translationTtsSpeakerIdField = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW, 26) pullsDown:NO];
         self.translationTtsSpeakerIdField.tag = kTranslationTtsKokoroOnlyTag;
+        [self populateTranslationTtsKokoroVoices];
         [section addSubview:self.translationTtsSpeakerIdField];
         sy -= rowH;
 
-        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)]];
+        NSTextField *ttsModelLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)];
+        [section addSubview:ttsModelLabel];
         self.translationTtsModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"eleven_multilingual_v2"];
+        self.translationTtsModelField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsModelField];
+        self.translationTtsLocalModelPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 26, 26) pullsDown:NO];
+        self.translationTtsLocalModelPopup.tag = kTranslationTtsKokoroOnlyTag;
+        self.translationTtsLocalModelPopup.hidden = YES;
+        [self.translationTtsLocalModelPopup setTarget:self];
+        [self.translationTtsLocalModelPopup setAction:@selector(translationTtsLocalModelChanged:)];
+        [section addSubview:self.translationTtsLocalModelPopup];
+        self.translationTtsModelDownloadButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, sy + 1, 20, 20)];
+        self.translationTtsModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                              accessibilityDescription:KoeLocalizedString(@"setupWizard.common.download")];
+        self.translationTtsModelDownloadButton.bezelStyle = NSBezelStyleInline;
+        self.translationTtsModelDownloadButton.bordered = NO;
+        self.translationTtsModelDownloadButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+        self.translationTtsModelDownloadButton.target = self;
+        self.translationTtsModelDownloadButton.action = @selector(translationTtsDownloadSelectedModel:);
+        self.translationTtsModelDownloadButton.tag = kTranslationTtsKokoroOnlyTag;
+        self.translationTtsModelDownloadButton.hidden = YES;
+        [section addSubview:self.translationTtsModelDownloadButton];
+        sy -= rowH;
+
+        self.translationTtsModelStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, sy + 2, fieldW - 32, 18)];
+        self.translationTtsModelStatusLabel.bezeled = NO;
+        self.translationTtsModelStatusLabel.drawsBackground = NO;
+        self.translationTtsModelStatusLabel.editable = NO;
+        self.translationTtsModelStatusLabel.selectable = NO;
+        self.translationTtsModelStatusLabel.font = [NSFont systemFontOfSize:12];
+        self.translationTtsModelStatusLabel.tag = kTranslationTtsKokoroOnlyTag;
+        self.translationTtsModelStatusLabel.hidden = YES;
+        [section addSubview:self.translationTtsModelStatusLabel];
+        self.translationTtsModelDeleteButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, sy + 1, 20, 20)];
+        self.translationTtsModelDeleteButton.image = [NSImage imageWithSystemSymbolName:@"trash"
+                                                            accessibilityDescription:KoeLocalizedString(@"setupWizard.common.delete")];
+        self.translationTtsModelDeleteButton.bezelStyle = NSBezelStyleInline;
+        self.translationTtsModelDeleteButton.bordered = NO;
+        self.translationTtsModelDeleteButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+        self.translationTtsModelDeleteButton.target = self;
+        self.translationTtsModelDeleteButton.action = @selector(translationTtsDeleteSelectedModel:);
+        self.translationTtsModelDeleteButton.tag = kTranslationTtsKokoroOnlyTag;
+        self.translationTtsModelDeleteButton.hidden = YES;
+        [section addSubview:self.translationTtsModelDeleteButton];
+        sy -= rowH;
+
+        self.translationTtsModelProgressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(fieldX, sy + 10, fieldW - 120, 10)];
+        self.translationTtsModelProgressBar.controlSize = NSControlSizeMini;
+        self.translationTtsModelProgressBar.style = NSProgressIndicatorStyleBar;
+        self.translationTtsModelProgressBar.minValue = 0;
+        self.translationTtsModelProgressBar.maxValue = 100;
+        self.translationTtsModelProgressBar.indeterminate = NO;
+
+        self.translationTtsModelProgressBar.hidden = YES;
+        [section addSubview:self.translationTtsModelProgressBar];
+        self.translationTtsModelProgressSizeLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 114, sy + 2, 114, 18)];
+        self.translationTtsModelProgressSizeLabel.bezeled = NO;
+        self.translationTtsModelProgressSizeLabel.drawsBackground = NO;
+        self.translationTtsModelProgressSizeLabel.editable = NO;
+        self.translationTtsModelProgressSizeLabel.selectable = NO;
+        self.translationTtsModelProgressSizeLabel.alignment = NSTextAlignmentRight;
+        self.translationTtsModelProgressSizeLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+        self.translationTtsModelProgressSizeLabel.textColor = [NSColor secondaryLabelColor];
+
+        self.translationTtsModelProgressSizeLabel.hidden = YES;
+        [section addSubview:self.translationTtsModelProgressSizeLabel];
         sy -= rowH;
 
         NSTextField *ttsBaseUrlLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)];
@@ -3144,12 +3424,26 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self updateTranslationMtFieldsEnabled];
     self.translationTtsEnabledSwitch.enabled = enabled;
     self.translationTtsProviderPopup.enabled = enabled;
+    NSString *ttsProvider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+    BOOL isKokoro = [ttsProvider isEqualToString:@"kokoro_onnx"];
     self.translationTtsApiKeySecureField.enabled = enabled;
     self.translationTtsApiKeyField.enabled = enabled;
     self.translationTtsApiKeyToggle.enabled = enabled;
     self.translationTtsVoiceIdField.enabled = enabled;
-    self.translationTtsModelField.enabled = enabled;
+    self.translationTtsModelField.enabled = enabled && !isKokoro;
     self.translationTtsBaseUrlField.enabled = enabled;
+    self.translationTtsSpeakerIdField.enabled = enabled;
+    if (isKokoro) {
+        [self updateTranslationTtsModelStatusLabel];
+        id selectedKokoroModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+        self.translationTtsLocalModelPopup.enabled = enabled && [selectedKokoroModel isKindOfClass:[NSString class]];
+        self.translationTtsModelDownloadButton.enabled = enabled && self.translationTtsModelDownloadButton.enabled;
+        self.translationTtsModelDeleteButton.enabled = enabled && self.translationTtsModelDeleteButton.enabled;
+    } else {
+        self.translationTtsLocalModelPopup.enabled = NO;
+        self.translationTtsModelDownloadButton.enabled = NO;
+        self.translationTtsModelDeleteButton.enabled = NO;
+    }
 }
 
 - (void)translationEnabledToggled:(id)sender {
@@ -3221,6 +3515,33 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     }
 }
 
+- (void)populateTranslationTtsKokoroVoices {
+    [self.translationTtsSpeakerIdField removeAllItems];
+    for (NSDictionary<NSString *, id> *voice in kokoroPresetVoices()) {
+        NSString *voiceID = voice[@"id"];
+        NSString *voiceName = voice[@"name"];
+        [self.translationTtsSpeakerIdField addItemWithTitle:[NSString stringWithFormat:@"%@ (%@)", voiceName, voiceID]];
+        self.translationTtsSpeakerIdField.lastItem.representedObject = voiceID;
+    }
+    if (self.translationTtsSpeakerIdField.numberOfItems > 0) {
+        [self.translationTtsSpeakerIdField selectItemAtIndex:0];
+    }
+}
+
+- (void)selectTranslationTtsKokoroVoicePreset:(NSString *)presetVoice speakerID:(NSInteger)speakerID {
+    NSString *resolvedPreset = presetVoice.length > 0 ? presetVoice : kokoroPresetVoiceForSpeakerId(speakerID);
+    if (resolvedPreset.length == 0) {
+        resolvedPreset = @"af_heart";
+    }
+    for (NSInteger i = 0; i < self.translationTtsSpeakerIdField.numberOfItems; i++) {
+        if ([[self.translationTtsSpeakerIdField itemAtIndex:i].representedObject isEqualToString:resolvedPreset]) {
+            [self.translationTtsSpeakerIdField selectItemAtIndex:i];
+            return;
+        }
+    }
+    [self.translationTtsSpeakerIdField selectItemAtIndex:0];
+}
+
 - (void)translationTtsProviderChanged:(id)sender {
     [self updateTranslationTtsPlaceholders];
     [self updateTranslationTtsFieldsVisibility];
@@ -3237,6 +3558,23 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
             v.hidden = !isKokoro;
         }
     }
+    if (isKokoro) {
+        [self populateTranslationTtsLocalModelPopup];
+        NSString *configuredModel = self.translationTtsModelField.stringValue;
+        if (configuredModel.length > 0) {
+            for (NSInteger i = 0; i < self.translationTtsLocalModelPopup.numberOfItems; i++) {
+                if ([[self.translationTtsLocalModelPopup itemAtIndex:i].representedObject isEqualToString:configuredModel]) {
+                    [self.translationTtsLocalModelPopup selectItemAtIndex:i];
+                    break;
+                }
+            }
+        }
+        [self updateTranslationTtsModelStatusLabel];
+    } else {
+        self.translationTtsModelProgressBar.hidden = YES;
+        self.translationTtsModelProgressSizeLabel.hidden = YES;
+    }
+    [self updateTranslationEnabledAvailability];
 }
 
 - (void)updateTranslationTtsPlaceholders {
@@ -3251,6 +3589,185 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationTtsModelField.placeholderString = @"eleven_multilingual_v2";
         self.translationTtsBaseUrlField.placeholderString = @"https://api.elevenlabs.io";
         self.translationTtsVoiceIdField.placeholderString = KoeLocalizedString(@"setupWizard.translation.placeholder.voiceIdElevenlabs");
+    }
+}
+
+- (void)populateTranslationTtsLocalModelPopup {
+    [self.translationTtsLocalModelPopup removeAllItems];
+
+    NSArray<NSDictionary *> *models = [self.rustBridge scanModels];
+    for (NSDictionary *model in models) {
+        if (![model[@"provider"] isEqualToString:@"sherpa-onnx"]) continue;
+        NSString *modelMode = model[@"mode"];
+        if (!modelMode || modelMode.length == 0) modelMode = @"asr";
+        if (![modelMode isEqualToString:@"tts"]) continue;
+
+        NSString *path = model[@"path"];
+        NSString *title = model[@"description"] ?: path;
+        [self.translationTtsLocalModelPopup addItemWithTitle:title];
+        [self.translationTtsLocalModelPopup lastItem].representedObject = path;
+    }
+
+    if (self.translationTtsLocalModelPopup.numberOfItems == 0) {
+        [self.translationTtsLocalModelPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.common.noModelsFound")];
+        self.translationTtsLocalModelPopup.enabled = NO;
+    } else {
+        self.translationTtsLocalModelPopup.enabled = YES;
+    }
+}
+
+- (void)translationTtsLocalModelChanged:(id)sender {
+    [self updateTranslationTtsModelStatusLabel];
+}
+
+- (void)updateTranslationTtsModelStatusLabel {
+    NSString *modelPath = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) {
+        self.translationTtsModelStatusLabel.stringValue = @"";
+        self.translationTtsModelDownloadButton.enabled = NO;
+        self.translationTtsModelDeleteButton.enabled = NO;
+        self.translationTtsModelProgressBar.hidden = YES;
+        self.translationTtsModelProgressSizeLabel.hidden = YES;
+        return;
+    }
+
+    if ([self.downloadingModels containsObject:modelPath]) {
+        self.translationTtsModelStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.downloading");
+        self.translationTtsModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+        self.translationTtsModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle" accessibilityDescription:@"Stop"];
+        self.translationTtsModelDownloadButton.enabled = YES;
+        self.translationTtsModelDeleteButton.enabled = NO;
+        self.translationTtsModelProgressBar.hidden = NO;
+        self.translationTtsModelProgressSizeLabel.hidden = NO;
+        return;
+    }
+
+    NSInteger cachedStatus = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
+    if (cachedStatus == 2) {
+        [self applyTranslationTtsModelStatus:cachedStatus];
+        return;
+    }
+
+    [self applyTranslationTtsModelStatus:(cachedStatus > 0 ? cachedStatus : 1) verifying:YES];
+    dispatch_async(_verifyQueue, ^{
+        NSInteger verified = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyNormal];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *current = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+            if ([current isEqualToString:modelPath]) {
+                [self applyTranslationTtsModelStatus:verified];
+            }
+        });
+    });
+}
+
+- (void)applyTranslationTtsModelStatus:(NSInteger)status {
+    [self applyTranslationTtsModelStatus:status verifying:NO];
+}
+
+- (void)applyTranslationTtsModelStatus:(NSInteger)status verifying:(BOOL)verifying {
+    self.translationTtsModelProgressBar.hidden = YES;
+    self.translationTtsModelProgressSizeLabel.hidden = YES;
+    self.translationTtsModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                           accessibilityDescription:KoeLocalizedString(@"setupWizard.common.download")];
+    switch (status) {
+        case 2:
+            self.translationTtsModelStatusLabel.stringValue = verifying ? KoeLocalizedString(@"setupWizard.common.status.verifyingInstalled") : KoeLocalizedString(@"setupWizard.common.status.installed");
+            self.translationTtsModelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemGreenColor];
+            self.translationTtsModelDownloadButton.enabled = NO;
+            self.translationTtsModelDeleteButton.enabled = YES;
+            break;
+        case 1:
+            self.translationTtsModelStatusLabel.stringValue = verifying ? KoeLocalizedString(@"setupWizard.common.status.verifyingIncomplete") : KoeLocalizedString(@"setupWizard.common.status.incomplete");
+            self.translationTtsModelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemOrangeColor];
+            self.translationTtsModelDownloadButton.enabled = YES;
+            self.translationTtsModelDeleteButton.enabled = YES;
+            break;
+        default:
+            self.translationTtsModelStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.notInstalled");
+            self.translationTtsModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+            self.translationTtsModelDownloadButton.enabled = YES;
+            self.translationTtsModelDeleteButton.enabled = NO;
+            break;
+    }
+}
+
+- (void)translationTtsDownloadSelectedModel:(id)sender {
+    NSString *modelPath = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) return;
+
+    if ([self.downloadingModels containsObject:modelPath]) {
+        [self.rustBridge cancelDownload:modelPath];
+        return;
+    }
+
+    if (!self.downloadingModels) {
+        self.downloadingModels = [NSMutableSet new];
+    }
+    [self.downloadingModels addObject:modelPath];
+
+    self.translationTtsModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle" accessibilityDescription:@"Stop"];
+    self.translationTtsModelDownloadButton.hidden = NO;
+    self.translationTtsModelStatusLabel.stringValue = @"Downloading...";
+    self.translationTtsModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.translationTtsModelProgressBar.hidden = NO;
+    self.translationTtsModelProgressBar.doubleValue = 0;
+    self.translationTtsModelProgressSizeLabel.hidden = NO;
+    self.translationTtsModelProgressSizeLabel.stringValue = @"";
+
+    __block uint64_t totalBytesAllFiles = 0;
+    for (NSDictionary *m in [self.rustBridge scanModels]) {
+        if ([m[@"path"] isEqualToString:modelPath]) {
+            totalBytesAllFiles = [m[@"total_size"] unsignedLongLongValue];
+            break;
+        }
+    }
+    __block NSMutableDictionary<NSNumber *, NSNumber *> *fileDownloaded = [NSMutableDictionary new];
+
+    __weak typeof(self) weakSelf = self;
+    [self.rustBridge downloadModel:modelPath
+        progress:^(NSUInteger fileIndex, NSUInteger fileCount,
+                   uint64_t downloaded, uint64_t total, NSString *filename) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            NSString *selected = strongSelf.translationTtsLocalModelPopup.selectedItem.representedObject;
+            if (![modelPath isEqualToString:selected]) return;
+
+            fileDownloaded[@(fileIndex)] = @(downloaded);
+            uint64_t totalDownloaded = 0;
+            for (NSNumber *v in fileDownloaded.allValues) totalDownloaded += v.unsignedLongLongValue;
+
+            double pct = (totalBytesAllFiles > 0)
+                ? (double)totalDownloaded / (double)totalBytesAllFiles * 100.0 : 0;
+            strongSelf.translationTtsModelProgressBar.doubleValue = pct;
+            strongSelf.translationTtsModelStatusLabel.stringValue = @"Downloading";
+            strongSelf.translationTtsModelProgressSizeLabel.stringValue =
+                [NSString stringWithFormat:@"%.1f / %.1f MB",
+                    (double)totalDownloaded / 1048576.0,
+                    (double)totalBytesAllFiles / 1048576.0];
+        }
+        completion:^(BOOL success, NSString *message) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf.downloadingModels removeObject:modelPath];
+            [strongSelf updateTranslationTtsModelStatusLabel];
+        }];
+}
+
+- (void)translationTtsDeleteSelectedModel:(id)sender {
+    NSString *modelPath = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Remove Model Files?";
+    alert.informativeText = @"Downloaded model files will be deleted. The model can be re-downloaded later.";
+    [alert addButtonWithTitle:@"Remove"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.alertStyle = NSAlertStyleWarning;
+
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [self.rustBridge removeModelFiles:modelPath];
+        [self updateTranslationTtsModelStatusLabel];
     }
 }
 
@@ -3975,6 +4492,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL isDoubao = [selectedProvider isEqualToString:@"doubao"];
     BOOL isQwen = [selectedProvider isEqualToString:@"qwen"];
     BOOL isAppleSpeech = [selectedProvider isEqualToString:@"apple-speech"];
+    BOOL isWhisper = [selectedProvider isEqualToString:@"whisper"];
     BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isAppleSpeech;
 
     [self setHidden:!isDoubao
@@ -4000,7 +4518,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.asrQwenApiKeySecureField.hidden = !isQwen;
     self.asrQwenApiKeyToggle.hidden = !isQwen;
 
-    BOOL showLanguage = isDoubao;
+    BOOL showLanguage = isDoubao || isWhisper;
     [self setHidden:!showLanguage
         forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1008]
                       inView:self.currentPaneView];
@@ -4009,7 +4527,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL advancedExpanded = isDoubao && (self.asrAdvancedDisclosure.state == NSControlStateValueOn);
     self.asrAdvancedContainer.hidden = !advancedExpanded;
     if (showLanguage) {
-        NSString *lang = configGet(@"asr.doubao.language");
+        NSString *lang = isWhisper
+            ? asrPopupValueForWhisperLanguage(configGet(@"asr.whisper.language"))
+            : configGet(@"asr.doubao.language");
         BOOL found = NO;
         for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
             if ([[self.asrLanguagePopup itemAtIndex:i].representedObject isEqualToString:lang]) {
@@ -4849,6 +5369,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             currentModel = configGet(@"asr.mlx.model");
         } else if ([provider isEqualToString:@"sherpa-onnx"]) {
             currentModel = configGet(@"asr.sherpa-onnx.model");
+        } else if ([provider isEqualToString:@"whisper"]) {
+            currentModel = configGet(@"asr.whisper.model");
         }
         if (currentModel.length > 0) {
             for (NSInteger i = 0; i < self.localModelPopup.numberOfItems; i++) {
@@ -4953,8 +5475,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
         NSString *enabled = configGet(@"translation.enabled");
         self.translationEnabledSwitch.state = [enabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
-        self.translationTargetLangField.stringValue = configGet(@"translation.target_language");
-        self.translationSourceLangField.stringValue = configGet(@"translation.source_language");
+        NSString *targetLanguage = configGet(@"translation.target_language");
+        self.translationTargetLangField.stringValue = targetLanguage.length > 0 ? targetLanguage : @"en";
+        NSString *sourceLanguage = configGet(@"translation.source_language");
+        self.translationSourceLangField.stringValue = sourceLanguage.length > 0 ? sourceLanguage : @"auto";
+
 
         NSString *mtEnabled = configGet(@"translation.mt.enabled");
         self.translationMtEnabledSwitch.state = [mtEnabled isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
@@ -4999,7 +5524,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.translationTtsVoiceIdField.stringValue = configGet(@"translation.tts.voice_id");
         self.translationTtsModelField.stringValue = configGet(@"translation.tts.model");
         self.translationTtsBaseUrlField.stringValue = configGet(@"translation.tts.base_url");
-        self.translationTtsSpeakerIdField.stringValue = configGet(@"translation.tts.speaker_id");
+        [self selectTranslationTtsKokoroVoicePreset:configGet(@"translation.tts.preset_voice")
+                                          speakerID:configGet(@"translation.tts.speaker_id").integerValue];
         [self updateTranslationTtsPlaceholders];
         [self updateTranslationTtsFieldsVisibility];
 
@@ -5127,6 +5653,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
             NSString *accelerateValue = (self.asrAccelerateCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
             saveOk &= configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+        } else if ([selectedProvider isEqualToString:@"whisper"]) {
+            NSString *langValue = self.asrLanguagePopup.selectedItem.representedObject ?: @"";
+            saveOk &= configSet(@"asr.whisper.language", whisperLanguageForAsrPopupValue(langValue));
         }
 
         NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
@@ -5148,6 +5677,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
             if (modelPath) {
                 saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+            }
+        } else if ([selectedProvider isEqualToString:@"whisper"]) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) {
+                saveOk &= configSet(@"asr.whisper.model", modelPath);
             }
         }
     }
@@ -5212,8 +5746,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     if (self.translationEnabledSwitch) {
         NSString *translationEnabled = (self.translationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"translation.enabled", translationEnabled);
-        saveOk &= configSet(@"translation.target_language", self.translationTargetLangField.stringValue);
-        saveOk &= configSet(@"translation.source_language", self.translationSourceLangField.stringValue);
+        NSString *targetLanguage = [[self.translationTargetLangField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+        NSString *sourceLanguage = [[self.translationSourceLangField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+        saveOk &= configSet(@"translation.target_language", targetLanguage.length > 0 ? targetLanguage : @"en");
+        saveOk &= configSet(@"translation.source_language", sourceLanguage.length > 0 ? sourceLanguage : @"auto");
 
         NSString *mtEnabled = (self.translationMtEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"translation.mt.enabled", mtEnabled);
@@ -5235,9 +5771,26 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         NSString *ttsApiKey = self.translationTtsApiKeyToggle.tag == 1 ? self.translationTtsApiKeyField.stringValue : self.translationTtsApiKeySecureField.stringValue;
         saveOk &= configSet(@"translation.tts.api_key", ttsApiKey);
         saveOk &= configSet(@"translation.tts.voice_id", self.translationTtsVoiceIdField.stringValue);
-        saveOk &= configSet(@"translation.tts.model", self.translationTtsModelField.stringValue);
+        NSString *ttsModel = self.translationTtsModelField.stringValue;
+        if ([ttsProvider isEqualToString:@"kokoro_onnx"]) {
+            NSString *selectedModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+            if ([selectedModel isKindOfClass:[NSString class]] && selectedModel.length > 0) {
+                ttsModel = selectedModel;
+            }
+        }
+        saveOk &= configSet(@"translation.tts.model", ttsModel);
         saveOk &= configSet(@"translation.tts.base_url", self.translationTtsBaseUrlField.stringValue);
-        saveOk &= configSet(@"translation.tts.speaker_id", self.translationTtsSpeakerIdField.stringValue);
+        NSString *kokoroPresetVoice = [self.translationTtsSpeakerIdField.selectedItem.representedObject isKindOfClass:[NSString class]]
+            ? self.translationTtsSpeakerIdField.selectedItem.representedObject
+            : @"";
+        NSInteger kokoroSpeakerID = kokoroSpeakerIdForPresetVoice(kokoroPresetVoice);
+        if (kokoroSpeakerID == NSNotFound) {
+            kokoroSpeakerID = 3;
+        }
+        if ([ttsProvider isEqualToString:@"kokoro_onnx"]) {
+            saveOk &= configSet(@"translation.tts.preset_voice", kokoroPresetVoice);
+            saveOk &= configSet(@"translation.tts.speaker_id", [NSString stringWithFormat:@"%ld", (long)kokoroSpeakerID]);
+        }
     }
 
     if (!saveOk) {
@@ -5789,6 +6342,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         [self testDoubaoConnection];
     } else if ([provider isEqualToString:@"qwen"]) {
         [self testQwenConnection];
+    } else {
+        self.asrTestResultLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.installed");
+        self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
     }
 }
 

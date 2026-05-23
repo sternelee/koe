@@ -110,13 +110,13 @@
 "setupWizard.translation.label.model" = "模型";
 "setupWizard.translation.label.systemPrompt" = "系统提示词";
 "setupWizard.translation.label.voiceId" = "Voice ID";
-"setupWizard.translation.label.speakerId" = "说话人 ID";
+"setupWizard.translation.label.speakerId" = "音色";
 "setupWizard.translation.input.sharedHint" = "与主语音输入共享同一全局设置。";
 "setupWizard.translation.input.unavailableFormat" = "已选设备不可用：%@";
-"setupWizard.translation.general.sourceTip" = "提示：为更好兼容 Apple Translation，建议设置明确的源语言。";
+"setupWizard.translation.general.sourceTip" = "提示：源语言留空或设为 auto 时，Koe 会优先使用系统首选语言；如需更稳定结果，也可以手动指定。";
 "setupWizard.translation.mt.provider.openai" = "OpenAI 兼容接口";
 "setupWizard.translation.mt.provider.apple" = "Apple Translation（系统 API）";
-"setupWizard.translation.mt.appleHint" = "Apple Translation 使用系统 API，无需配置 Base URL、API Key 或模型。";
+"setupWizard.translation.mt.appleHint" = "Apple Translation 使用系统 API，无需配置 Base URL、API Key 或模型；源语言为 auto 时，Koe 会回退到系统首选语言。";
 "setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
 "setupWizard.translation.tts.provider.minimax" = "MiniMax";
 "setupWizard.translation.tts.provider.kokoroOnnx" = "Kokoro ONNX（本地）";
@@ -176,6 +176,7 @@
 "setupWizard.asr.provider.qwen" = "Qwen（阿里云）";
 "setupWizard.asr.provider.appleSpeech" = "Apple Speech（设备端）";
 "setupWizard.asr.provider.sherpaOnnx" = "Sherpa-ONNX";
+"setupWizard.asr.provider.whisper" = "Whisper（本地）";
 "setupWizard.asr.label.appKey" = "App Key";
 "setupWizard.asr.label.language" = "语言";
 "setupWizard.asr.label.accessKey" = "Access Key";
