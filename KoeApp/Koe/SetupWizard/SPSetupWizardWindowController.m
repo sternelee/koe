@@ -31,6 +31,9 @@ static NSString *const kOverlayFontFamilySystemLabel = @"System Default";
 static NSString *const kTranslationLastStepKey = @"SPTranslationWizardLastStep";
 static const NSInteger kTranslationMtOpenAIViewTagBase = 6200;
 static const NSInteger kTranslationMtOpenAIViewTagCount = 9;
+static const NSInteger kTranslationMtLocalOnlyTag = 6210;
+static const NSInteger kTranslationMtModelOnlyTag = 6211;
+
 static const NSInteger kTranslationTtsCloudOnlyTag = 6300;
 static const NSInteger kTranslationTtsKokoroOnlyTag = 6301;
 
@@ -759,6 +762,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *translationMtModelField;
 @property (nonatomic, strong) NSTextField *translationMtSystemPromptField;
 @property (nonatomic, strong) NSTextField *translationMtAppleHintLabel;
+@property (nonatomic, strong) NSTextField *translationMtLocalHintLabel;
+@property (nonatomic, strong) NSTextField *translationMtLocalModelField;
+
 @property (nonatomic, strong) NSSwitch *translationTtsEnabledSwitch;
 @property (nonatomic, strong) NSPopUpButton *translationTtsProviderPopup;
 @property (nonatomic, strong) NSSecureTextField *translationTtsApiKeySecureField;
@@ -813,6 +819,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)applyTranslationTtsModelStatus:(NSInteger)status;
 - (void)applyTranslationTtsModelStatus:(NSInteger)status verifying:(BOOL)verifying;
 - (void)translationTtsDownloadSelectedModel:(id)sender;
+- (void)updateTranslationMtPlaceholders;
 - (void)translationTtsDeleteSelectedModel:(id)sender;
 - (void)switchToPane:(NSString *)identifier;
 - (NSView *)buildAsrPane;
@@ -3136,6 +3143,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self.translationMtProviderPopup lastItem].representedObject = @"open_ai_compatible";
         [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.apple")];
         [self.translationMtProviderPopup lastItem].representedObject = @"apple";
+        if ([[self.rustBridge supportedLocalProviders] containsObject:@"mt-local"]) {
+            [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.local")];
+            [self.translationMtProviderPopup lastItem].representedObject = @"local";
+        }
         self.translationMtProviderPopup.target = self;
         self.translationMtProviderPopup.action = @selector(translationMtProviderChanged:);
         [section addSubview:self.translationMtProviderPopup];
@@ -3172,11 +3183,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         sy -= rowH;
 
         NSTextField *mtModelLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.model") frame:NSMakeRect(0, sy, labelW, 22)];
-        mtModelLabel.tag = kTranslationMtOpenAIViewTagBase + 5;
+        mtModelLabel.tag = kTranslationMtModelOnlyTag;
         [section addSubview:mtModelLabel];
         self.translationMtModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"gpt-4o-mini"];
         self.translationMtModelField.tag = kTranslationMtOpenAIViewTagBase + 6;
         [section addSubview:self.translationMtModelField];
+        self.translationMtLocalModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"mt-local/opus-mt-zh-en"];
+        self.translationMtLocalModelField.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtLocalModelField.hidden = YES;
+        [section addSubview:self.translationMtLocalModelField];
         sy -= rowH;
 
         NSTextField *mtSystemPromptLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.systemPrompt") frame:NSMakeRect(0, sy, labelW, 22)];
@@ -3185,6 +3200,12 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtSystemPromptField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.placeholder.mtSystemPrompt")];
         self.translationMtSystemPromptField.tag = kTranslationMtOpenAIViewTagBase + 8;
         [section addSubview:self.translationMtSystemPromptField];
+        self.translationMtLocalHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.mt.localHint")];
+        self.translationMtLocalHintLabel.tag = kTranslationMtLocalOnlyTag;
+        CGFloat mtLocalHintHeight = [self fittingHeightForWrappingLabel:self.translationMtLocalHintLabel width:fieldW];
+        self.translationMtLocalHintLabel.frame = NSMakeRect(fieldX, sy + (rowH - mtLocalHintHeight) / 2.0, fieldW, mtLocalHintHeight);
+        self.translationMtLocalHintLabel.hidden = YES;
+        [section addSubview:self.translationMtLocalHintLabel];
     }
 
     // TTS section
@@ -3458,17 +3479,28 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL enabled = self.translationEnabledSwitch.enabled && (self.translationEnabledSwitch.state == NSControlStateValueOn);
     NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
     BOOL usesOpenAIFields = [provider isEqualToString:@"open_ai_compatible"];
+    BOOL usesLocalModel = [provider isEqualToString:@"local"];
+    BOOL usesAnyModelField = usesOpenAIFields || usesLocalModel;
 
     self.translationMtBaseUrlField.enabled = enabled && usesOpenAIFields;
     self.translationMtApiKeySecureField.enabled = enabled && usesOpenAIFields;
     self.translationMtApiKeyField.enabled = enabled && usesOpenAIFields;
     self.translationMtApiKeyToggle.enabled = enabled && usesOpenAIFields;
     self.translationMtModelField.enabled = enabled && usesOpenAIFields;
+    self.translationMtLocalModelField.enabled = enabled && usesLocalModel;
     self.translationMtSystemPromptField.enabled = enabled && usesOpenAIFields;
 
     [self setHidden:!usesOpenAIFields
  forViewsWithTagInRange:NSMakeRange(kTranslationMtOpenAIViewTagBase, kTranslationMtOpenAIViewTagCount)
              inView:self.translationMtSectionView];
+
+    for (NSView *view in self.translationMtSectionView.subviews) {
+        if (view.tag == kTranslationMtLocalOnlyTag) {
+            view.hidden = !usesLocalModel;
+        } else if (view.tag == kTranslationMtModelOnlyTag) {
+            view.hidden = !usesAnyModelField;
+        }
+    }
 
     if (usesOpenAIFields) {
         BOOL showPlain = (self.translationMtApiKeyToggle.tag == 1);
@@ -3480,7 +3512,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     }
 
     self.translationMtApiKeyToggle.hidden = !usesOpenAIFields;
-    self.translationMtAppleHintLabel.hidden = usesOpenAIFields;
+    self.translationMtAppleHintLabel.hidden = !(enabled && [provider isEqualToString:@"apple"]);
+    [self updateTranslationMtPlaceholders];
 }
 
 - (void)toggleTranslationMtApiKeyVisibility:(NSButton *)sender {
@@ -3496,6 +3529,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtApiKeySecureField.hidden = NO;
         sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
         sender.tag = 0;
+    }
+}
+
+- (void)updateTranslationMtPlaceholders {
+    NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
+    if ([provider isEqualToString:@"local"]) {
+        self.translationMtLocalModelField.placeholderString = @"mt-local/opus-mt-zh-en";
+    } else {
+        self.translationMtModelField.placeholderString = @"gpt-4o-mini";
+        self.translationMtBaseUrlField.placeholderString = @"https://api.openai.com/v1";
     }
 }
 
@@ -5506,8 +5549,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         NSString *mtApiKey = configGet(@"translation.mt.api_key");
         self.translationMtApiKeySecureField.stringValue = mtApiKey;
         self.translationMtApiKeyField.stringValue = mtApiKey;
-        self.translationMtModelField.stringValue = configGet(@"translation.mt.model");
+        NSString *mtModel = configGet(@"translation.mt.model");
+        self.translationMtModelField.stringValue = mtModel;
+        self.translationMtLocalModelField.stringValue = mtModel;
         self.translationMtSystemPromptField.stringValue = configGet(@"translation.mt.system_prompt");
+
 
         NSString *ttsEnabled = configGet(@"translation.tts.enabled");
         self.translationTtsEnabledSwitch.state = [ttsEnabled isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
@@ -5761,7 +5807,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"translation.mt.base_url", self.translationMtBaseUrlField.stringValue);
         NSString *mtApiKey = self.translationMtApiKeyToggle.tag == 1 ? self.translationMtApiKeyField.stringValue : self.translationMtApiKeySecureField.stringValue;
         saveOk &= configSet(@"translation.mt.api_key", mtApiKey);
-        saveOk &= configSet(@"translation.mt.model", self.translationMtModelField.stringValue);
+        NSString *mtModel = [mtProvider isEqualToString:@"local"] ? self.translationMtLocalModelField.stringValue : self.translationMtModelField.stringValue;
+        saveOk &= configSet(@"translation.mt.model", mtModel);
         saveOk &= configSet(@"translation.mt.system_prompt", self.translationMtSystemPromptField.stringValue);
 
         NSString *ttsEnabled = (self.translationTtsEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";

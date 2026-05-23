@@ -1822,10 +1822,10 @@ translation:
   max_speech_ms: 30000        # hard cap on segment duration
   mt:
     enabled: true
-    provider: "open_ai_compatible" # open_ai_compatible | apple (apple needs macOS 15+)
+    provider: "open_ai_compatible" # open_ai_compatible | apple | local
     base_url: "https://api.openai.com/v1"
     api_key: ""               # or use ${OPENAI_API_KEY}
-    model: "gpt-4o-mini"
+    model: "gpt-4o-mini"      # local provider: model dir with encoder/decoder/tokenizer files
     system_prompt: "You are a professional translator. Translate the user's text into the target language. Preserve meaning, tone, and formatting. Output ONLY the translated text, with no extra commentary."
     timeout_ms: 10000
   tts:

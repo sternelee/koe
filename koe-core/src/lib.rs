@@ -1318,6 +1318,20 @@ fn translation_mt_ready(cfg: &config::Config) -> bool {
                 && !cfg.translation.mt.model.trim().is_empty()
         }
         crate::translation::config::MtProvider::Apple => true,
+        crate::translation::config::MtProvider::Local => {
+            if cfg.translation.mt.model.trim().is_empty() {
+                return false;
+            }
+            let model_dir = config::resolve_model_dir(&cfg.translation.mt.model);
+            if !model_dir.exists() || !crate::translation::local_mt::model_files_ready(&model_dir) {
+                return false;
+            }
+            if crate::translation::local_mt::provider_requires_source_language(&model_dir) {
+                effective_translation_source_language(cfg).is_some()
+            } else {
+                true
+            }
+        }
     }
 }
 
@@ -2492,6 +2506,63 @@ mod tests {
         assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
 
         let _ = std::fs::remove_dir_all(&model_dir);
+    }
+
+    #[test]
+    fn translation_runtime_uses_translate_with_local_mt_opus_model() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-local-mt-opus-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("encoder_model.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder_model_merged.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"{}").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.source_language.clear();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Local;
+        cfg.translation.mt.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::KokoroOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
+    }
+
+    #[test]
+    fn translation_runtime_falls_back_when_local_mt_needs_source_language() {
+        let parent = std::env::temp_dir().join(format!(
+            "koe-local-mt-parent-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let model_dir = parent.join("nllb-200-distilled-600M");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("encoder_model.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder_model_merged.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"{}").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.source_language.clear();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Local;
+        cfg.translation.mt.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::KokoroOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);
+
+        let _ = std::fs::remove_dir_all(&parent);
     }
     #[test]
     fn validate_prompt_templates_rejects_blank_prompt() {

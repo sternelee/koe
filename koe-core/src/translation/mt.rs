@@ -1,8 +1,10 @@
 use crate::errors::{KoeError, Result};
 use crate::translation::config::{MtConfig, MtProvider};
+use crate::translation::local_mt::{self, LocalMtBackend};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
+use std::sync::Arc;
 use std::time::Duration;
 
 extern "C" {
@@ -15,24 +17,40 @@ extern "C" {
     fn koe_apple_translation_free_string(ptr: *mut c_char);
 }
 
-/// Machine translation client using an OpenAI-compatible chat completions API.
+/// Machine translation client.
 pub struct MtClient {
     client: Client,
     config: MtConfig,
+    local_backend: Option<Arc<dyn LocalMtBackend>>,
+    local_backend_error: Option<String>,
 }
 
 impl MtClient {
-    pub fn new(client: Client, config: MtConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, config: MtConfig, source_lang: Option<&str>) -> Self {
+        let (local_backend, local_backend_error) = if config.provider == MtProvider::Local {
+            if config.model.trim().is_empty() {
+                (None, Some("local MT model path is empty".to_string()))
+            } else {
+                let model_path = crate::config::resolve_model_dir(&config.model);
+                match local_mt::load_backend(&model_path, source_lang) {
+                    Ok(backend) => (Some(backend), None),
+                    Err(err) => (None, Some(err.to_string())),
+                }
+            }
+        } else {
+            (None, None)
+        };
+
+        Self {
+            client,
+            config,
+            local_backend,
+            local_backend_error,
+        }
     }
 
     /// Translate `text` into the target language.
-    pub async fn translate(
-        &self,
-        text: &str,
-        source_lang: &str,
-        target_lang: &str,
-    ) -> Result<String> {
+    pub async fn translate(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
         if text.trim().is_empty() {
             return Ok(String::new());
         }
@@ -47,6 +65,7 @@ impl MtClient {
                 self.translate_openai_compatible(text, normalized_target).await
             }
             MtProvider::Apple => self.translate_apple(text, source_lang, normalized_target),
+            MtProvider::Local => self.translate_local(text, normalized_target),
         }
     }
 
@@ -165,5 +184,16 @@ impl MtClient {
         }
 
         Ok(translated.trim().to_string())
+    }
+
+    fn translate_local(&self, text: &str, target_lang: &str) -> Result<String> {
+        let backend = self.local_backend.as_ref().ok_or_else(|| {
+            KoeError::LlmFailed(
+                self.local_backend_error
+                    .clone()
+                    .unwrap_or_else(|| "local MT backend is not initialized".to_string()),
+            )
+        })?;
+        backend.translate(text, target_lang)
     }
 }

@@ -57,7 +57,10 @@ pub enum MtProvider {
     OpenAiCompatible,
     /// Apple Translation.framework on-device translator (macOS 15+).
     Apple,
+    /// Local Marian / NLLB ONNX translation model.
+    Local,
 }
+
 
 impl Default for MtProvider {
     fn default() -> Self {
@@ -75,9 +78,11 @@ pub struct MtConfig {
     pub base_url: String,
     /// API key.
     pub api_key: String,
-    /// Model name.
+    /// Model name or local model directory.
+    /// For local MT: relative path under ~/.koe/models/ or absolute path containing
+    /// encoder_model.onnx, decoder_model[_merged].onnx, and tokenizer.json.
     pub model: String,
-    /// System prompt for translation.
+    /// System prompt for translation (OpenAI-compatible only).
     pub system_prompt: String,
     /// Request timeout in milliseconds.
     pub timeout_ms: u64,

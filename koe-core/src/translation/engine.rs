@@ -85,9 +85,12 @@ impl TranslationEngine {
             16_000,
         );
 
+        let source_language = self.config.source_language.clone();
+        let target_language = self.config.target_language.clone();
         let mt = Arc::new(MtClient::new(
             self.http_client.clone(),
             self.config.mt.clone(),
+            Some(source_language.as_str()),
         ));
         let tts = Arc::new(TtsClient::new(
             self.http_client.clone(),
@@ -95,8 +98,6 @@ impl TranslationEngine {
         ));
 
         let asr_factory = self.asr_factory.clone();
-        let source_language = self.config.source_language.clone();
-        let target_language = self.config.target_language.clone();
         let mt_enabled = self.config.mt.enabled;
         let tts_enabled = self.config.tts.enabled;
         let output_sample_rate = self.config.output_sample_rate;

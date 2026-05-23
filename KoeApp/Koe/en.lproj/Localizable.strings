@@ -116,7 +116,9 @@
 "setupWizard.translation.general.sourceTip" = "Tip: leave Source Language as auto to use your preferred system language, or set it explicitly for more predictable results.";
 "setupWizard.translation.mt.provider.openai" = "OpenAI-compatible";
 "setupWizard.translation.mt.provider.apple" = "Apple Translation (system API)";
+"setupWizard.translation.mt.provider.local" = "Local Marian / NLLB";
 "setupWizard.translation.mt.appleHint" = "Apple Translation uses system APIs. No Base URL, API key, or model configuration is required. If Source Language is auto, Koe falls back to your preferred system language.";
+"setupWizard.translation.mt.localHint" = "Enter a local model directory under ~/.koe/models or an absolute path. The folder must contain encoder_model.onnx, decoder_model[_merged].onnx, and tokenizer.json.";
 "setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
 "setupWizard.translation.tts.provider.minimax" = "MiniMax";
 "setupWizard.translation.tts.provider.kokoroOnnx" = "Kokoro ONNX (Local)";
