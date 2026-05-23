@@ -1876,6 +1876,8 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("whisper/base"),
     manifest!("whisper/small"),
     manifest!("whisper/turbo"),
+    manifest!("mt-local/opus-mt-zh-en"),
+    manifest!("mt-local/opus-mt-en-zh"),
 ];
 
 #[cfg(test)]

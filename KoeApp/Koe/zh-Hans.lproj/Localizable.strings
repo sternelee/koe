@@ -118,7 +118,8 @@
 "setupWizard.translation.mt.provider.apple" = "Apple Translation（系统 API）";
 "setupWizard.translation.mt.provider.local" = "本地 Marian / NLLB";
 "setupWizard.translation.mt.appleHint" = "Apple Translation 使用系统 API，无需配置 Base URL、API Key 或模型；源语言为 auto 时，Koe 会回退到系统首选语言。";
-"setupWizard.translation.mt.localHint" = "填写 ~/.koe/models 下的本地模型目录或绝对路径。目录内需包含 encoder_model.onnx、decoder_model[_merged].onnx 和 tokenizer.json。";
+"setupWizard.translation.label.bundledModel" = "内置模型";
+"setupWizard.translation.mt.localHint" = "可先在下方选择内置模型一键下载，也可以直接填写 ~/.koe/models 下的本地模型目录或绝对路径。目录内需包含 encoder_model.onnx、decoder_model[_merged].onnx 和 tokenizer.json。";
 "setupWizard.translation.tts.provider.elevenlabs" = "ElevenLabs";
 "setupWizard.translation.tts.provider.minimax" = "MiniMax";
 "setupWizard.translation.tts.provider.kokoroOnnx" = "Kokoro ONNX（本地）";

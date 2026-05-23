@@ -764,6 +764,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *translationMtAppleHintLabel;
 @property (nonatomic, strong) NSTextField *translationMtLocalHintLabel;
 @property (nonatomic, strong) NSTextField *translationMtLocalModelField;
+@property (nonatomic, strong) NSPopUpButton *translationMtLocalModelPopup;
+@property (nonatomic, strong) NSTextField *translationMtModelStatusLabel;
+@property (nonatomic, strong) NSButton *translationMtModelDownloadButton;
+@property (nonatomic, strong) NSButton *translationMtModelDeleteButton;
+@property (nonatomic, strong) NSProgressIndicator *translationMtModelProgressBar;
+@property (nonatomic, strong) NSTextField *translationMtModelProgressSizeLabel;
+
 
 @property (nonatomic, strong) NSSwitch *translationTtsEnabledSwitch;
 @property (nonatomic, strong) NSPopUpButton *translationTtsProviderPopup;
@@ -813,6 +820,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)refreshLlmRemoteModels:(id)sender;
 - (void)populateTranslationTtsKokoroVoices;
 - (void)selectTranslationTtsKokoroVoicePreset:(NSString *)presetVoice speakerID:(NSInteger)speakerID;
+- (void)populateTranslationMtLocalModelPopup;
+- (void)translationMtLocalModelChanged:(id)sender;
+- (void)updateTranslationMtModelStatusLabel;
+- (void)applyTranslationMtModelStatus:(NSInteger)status;
+- (void)applyTranslationMtModelStatus:(NSInteger)status verifying:(BOOL)verifying;
+- (void)translationMtDownloadSelectedModel:(id)sender;
+- (void)translationMtDeleteSelectedModel:(id)sender;
+
 - (void)populateTranslationTtsLocalModelPopup;
 - (void)translationTtsLocalModelChanged:(id)sender;
 - (void)updateTranslationTtsModelStatusLabel;
@@ -3188,10 +3203,77 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"gpt-4o-mini"];
         self.translationMtModelField.tag = kTranslationMtOpenAIViewTagBase + 6;
         [section addSubview:self.translationMtModelField];
-        self.translationMtLocalModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"mt-local/opus-mt-zh-en"];
+        self.translationMtLocalModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"mt-local/opus-mt-zh-en or /absolute/path"];
         self.translationMtLocalModelField.tag = kTranslationMtLocalOnlyTag;
         self.translationMtLocalModelField.hidden = YES;
         [section addSubview:self.translationMtLocalModelField];
+        sy -= rowH;
+
+        NSTextField *mtBundledModelLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.bundledModel") frame:NSMakeRect(0, sy, labelW, 22)];
+        mtBundledModelLabel.tag = kTranslationMtLocalOnlyTag;
+        mtBundledModelLabel.hidden = YES;
+        [section addSubview:mtBundledModelLabel];
+        self.translationMtLocalModelPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 26, 26) pullsDown:NO];
+        self.translationMtLocalModelPopup.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtLocalModelPopup.hidden = YES;
+        self.translationMtLocalModelPopup.target = self;
+        self.translationMtLocalModelPopup.action = @selector(translationMtLocalModelChanged:);
+        [section addSubview:self.translationMtLocalModelPopup];
+        self.translationMtModelDownloadButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, sy + 1, 20, 20)];
+        self.translationMtModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                               accessibilityDescription:KoeLocalizedString(@"setupWizard.common.download")];
+        self.translationMtModelDownloadButton.bezelStyle = NSBezelStyleInline;
+        self.translationMtModelDownloadButton.bordered = NO;
+        self.translationMtModelDownloadButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+        self.translationMtModelDownloadButton.target = self;
+        self.translationMtModelDownloadButton.action = @selector(translationMtDownloadSelectedModel:);
+        self.translationMtModelDownloadButton.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtModelDownloadButton.hidden = YES;
+        [section addSubview:self.translationMtModelDownloadButton];
+        sy -= rowH;
+
+        self.translationMtModelStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, sy + 2, fieldW - 32, 18)];
+        self.translationMtModelStatusLabel.bezeled = NO;
+        self.translationMtModelStatusLabel.drawsBackground = NO;
+        self.translationMtModelStatusLabel.editable = NO;
+        self.translationMtModelStatusLabel.selectable = NO;
+        self.translationMtModelStatusLabel.font = [NSFont systemFontOfSize:12];
+        self.translationMtModelStatusLabel.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtModelStatusLabel.hidden = YES;
+        [section addSubview:self.translationMtModelStatusLabel];
+        self.translationMtModelDeleteButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 20, sy + 1, 20, 20)];
+        self.translationMtModelDeleteButton.image = [NSImage imageWithSystemSymbolName:@"trash"
+                                                             accessibilityDescription:KoeLocalizedString(@"setupWizard.common.delete")];
+        self.translationMtModelDeleteButton.bezelStyle = NSBezelStyleInline;
+        self.translationMtModelDeleteButton.bordered = NO;
+        self.translationMtModelDeleteButton.imageScaling = NSImageScaleProportionallyUpOrDown;
+        self.translationMtModelDeleteButton.target = self;
+        self.translationMtModelDeleteButton.action = @selector(translationMtDeleteSelectedModel:);
+        self.translationMtModelDeleteButton.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtModelDeleteButton.hidden = YES;
+        [section addSubview:self.translationMtModelDeleteButton];
+        sy -= rowH;
+
+        self.translationMtModelProgressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(fieldX, sy + 10, fieldW - 120, 10)];
+        self.translationMtModelProgressBar.controlSize = NSControlSizeMini;
+        self.translationMtModelProgressBar.style = NSProgressIndicatorStyleBar;
+        self.translationMtModelProgressBar.minValue = 0;
+        self.translationMtModelProgressBar.maxValue = 100;
+        self.translationMtModelProgressBar.indeterminate = NO;
+
+        self.translationMtModelProgressBar.hidden = YES;
+        [section addSubview:self.translationMtModelProgressBar];
+        self.translationMtModelProgressSizeLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX + fieldW - 114, sy + 2, 114, 18)];
+        self.translationMtModelProgressSizeLabel.bezeled = NO;
+        self.translationMtModelProgressSizeLabel.drawsBackground = NO;
+        self.translationMtModelProgressSizeLabel.editable = NO;
+        self.translationMtModelProgressSizeLabel.selectable = NO;
+        self.translationMtModelProgressSizeLabel.alignment = NSTextAlignmentRight;
+        self.translationMtModelProgressSizeLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+        self.translationMtModelProgressSizeLabel.textColor = [NSColor secondaryLabelColor];
+        self.translationMtModelProgressSizeLabel.tag = kTranslationMtLocalOnlyTag;
+        self.translationMtModelProgressSizeLabel.hidden = YES;
+        [section addSubview:self.translationMtModelProgressSizeLabel];
         sy -= rowH;
 
         NSTextField *mtSystemPromptLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.systemPrompt") frame:NSMakeRect(0, sy, labelW, 22)];
@@ -3206,8 +3288,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtLocalHintLabel.frame = NSMakeRect(fieldX, sy + (rowH - mtLocalHintHeight) / 2.0, fieldW, mtLocalHintHeight);
         self.translationMtLocalHintLabel.hidden = YES;
         [section addSubview:self.translationMtLocalHintLabel];
-    }
 
+    }
     // TTS section
     {
         NSView *section = self.translationTtsSectionView;
@@ -3488,6 +3570,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationMtApiKeyToggle.enabled = enabled && usesOpenAIFields;
     self.translationMtModelField.enabled = enabled && usesOpenAIFields;
     self.translationMtLocalModelField.enabled = enabled && usesLocalModel;
+    self.translationMtLocalModelPopup.enabled = NO;
+
     self.translationMtSystemPromptField.enabled = enabled && usesOpenAIFields;
 
     [self setHidden:!usesOpenAIFields
@@ -3514,6 +3598,237 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationMtApiKeyToggle.hidden = !usesOpenAIFields;
     self.translationMtAppleHintLabel.hidden = !(enabled && [provider isEqualToString:@"apple"]);
     [self updateTranslationMtPlaceholders];
+
+    if (usesLocalModel) {
+        [self populateTranslationMtLocalModelPopup];
+        NSString *configuredModel = self.translationMtLocalModelField.stringValue;
+        if (configuredModel.length > 0) {
+            for (NSInteger i = 0; i < self.translationMtLocalModelPopup.numberOfItems; i++) {
+                if ([[self.translationMtLocalModelPopup itemAtIndex:i].representedObject isEqualToString:configuredModel]) {
+                    [self.translationMtLocalModelPopup selectItemAtIndex:i];
+                    break;
+                }
+            }
+        }
+        [self updateTranslationMtModelStatusLabel];
+        id selectedLocalModel = self.translationMtLocalModelPopup.selectedItem.representedObject;
+        self.translationMtLocalModelPopup.enabled = enabled && [selectedLocalModel isKindOfClass:[NSString class]];
+        self.translationMtModelDownloadButton.enabled = enabled && self.translationMtModelDownloadButton.enabled;
+        self.translationMtModelDeleteButton.enabled = enabled && self.translationMtModelDeleteButton.enabled;
+    } else {
+        self.translationMtLocalModelPopup.enabled = NO;
+        self.translationMtModelDownloadButton.enabled = NO;
+        self.translationMtModelDeleteButton.enabled = NO;
+        self.translationMtModelProgressBar.hidden = YES;
+        self.translationMtModelProgressSizeLabel.hidden = YES;
+    }
+}
+
+- (void)updateTranslationMtPlaceholders {
+    NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
+    if ([provider isEqualToString:@"local"]) {
+        self.translationMtLocalModelField.placeholderString = @"mt-local/opus-mt-zh-en or /absolute/path";
+    } else {
+        self.translationMtModelField.placeholderString = @"gpt-4o-mini";
+        self.translationMtBaseUrlField.placeholderString = @"https://api.openai.com/v1";
+    }
+}
+
+- (void)populateTranslationMtLocalModelPopup {
+    NSString *preferredPath = [self.translationMtLocalModelPopup.selectedItem.representedObject isKindOfClass:[NSString class]]
+        ? self.translationMtLocalModelPopup.selectedItem.representedObject
+        : self.translationMtLocalModelField.stringValue;
+    [self.translationMtLocalModelPopup removeAllItems];
+
+    NSArray<NSDictionary *> *models = [self.rustBridge scanModels];
+    for (NSDictionary *model in models) {
+        if (![model[@"provider"] isEqualToString:@"mt-local"]) continue;
+        NSString *modelMode = model[@"mode"];
+        if (!modelMode || modelMode.length == 0) modelMode = @"mt";
+        if (![modelMode isEqualToString:@"mt"]) continue;
+
+        NSString *path = model[@"path"];
+        NSString *title = model[@"description"] ?: path;
+        [self.translationMtLocalModelPopup addItemWithTitle:title];
+        self.translationMtLocalModelPopup.lastItem.representedObject = path;
+    }
+
+    if (self.translationMtLocalModelPopup.numberOfItems == 0) {
+        [self.translationMtLocalModelPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.common.noModelsFound")];
+        self.translationMtLocalModelPopup.enabled = NO;
+        return;
+    }
+
+    self.translationMtLocalModelPopup.enabled = YES;
+    if (preferredPath.length > 0) {
+        for (NSInteger i = 0; i < self.translationMtLocalModelPopup.numberOfItems; i++) {
+            if ([[self.translationMtLocalModelPopup itemAtIndex:i].representedObject isEqualToString:preferredPath]) {
+                [self.translationMtLocalModelPopup selectItemAtIndex:i];
+                return;
+            }
+        }
+    }
+    [self.translationMtLocalModelPopup selectItemAtIndex:0];
+}
+
+- (void)translationMtLocalModelChanged:(id)sender {
+    NSString *modelPath = self.translationMtLocalModelPopup.selectedItem.representedObject;
+    if ([modelPath isKindOfClass:[NSString class]] && modelPath.length > 0) {
+        self.translationMtLocalModelField.stringValue = modelPath;
+    }
+    [self updateTranslationMtModelStatusLabel];
+}
+
+- (void)updateTranslationMtModelStatusLabel {
+    NSString *modelPath = self.translationMtLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) {
+        self.translationMtModelStatusLabel.stringValue = @"";
+        self.translationMtModelDownloadButton.enabled = NO;
+        self.translationMtModelDeleteButton.enabled = NO;
+        self.translationMtModelProgressBar.hidden = YES;
+        self.translationMtModelProgressSizeLabel.hidden = YES;
+        return;
+    }
+
+    if ([self.downloadingModels containsObject:modelPath]) {
+        self.translationMtModelStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.downloading");
+        self.translationMtModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+        self.translationMtModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle" accessibilityDescription:@"Stop"];
+        self.translationMtModelDownloadButton.enabled = YES;
+        self.translationMtModelDeleteButton.enabled = NO;
+        self.translationMtModelProgressBar.hidden = NO;
+        self.translationMtModelProgressSizeLabel.hidden = NO;
+        return;
+    }
+
+    NSInteger cachedStatus = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
+    if (cachedStatus == 2) {
+        [self applyTranslationMtModelStatus:cachedStatus];
+        return;
+    }
+
+    [self applyTranslationMtModelStatus:(cachedStatus > 0 ? cachedStatus : 1) verifying:YES];
+    dispatch_async(_verifyQueue, ^{
+        NSInteger verified = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyNormal];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *current = self.translationMtLocalModelPopup.selectedItem.representedObject;
+            if ([current isEqualToString:modelPath]) {
+                [self applyTranslationMtModelStatus:verified];
+            }
+        });
+    });
+}
+
+- (void)applyTranslationMtModelStatus:(NSInteger)status {
+    [self applyTranslationMtModelStatus:status verifying:NO];
+}
+
+- (void)applyTranslationMtModelStatus:(NSInteger)status verifying:(BOOL)verifying {
+    self.translationMtModelProgressBar.hidden = YES;
+    self.translationMtModelProgressSizeLabel.hidden = YES;
+    self.translationMtModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
+                                                            accessibilityDescription:KoeLocalizedString(@"setupWizard.common.download")];
+    switch (status) {
+        case 2:
+            self.translationMtModelStatusLabel.stringValue = verifying ? KoeLocalizedString(@"setupWizard.common.status.verifyingInstalled") : KoeLocalizedString(@"setupWizard.common.status.installed");
+            self.translationMtModelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemGreenColor];
+            self.translationMtModelDownloadButton.enabled = NO;
+            self.translationMtModelDeleteButton.enabled = YES;
+            break;
+        case 1:
+            self.translationMtModelStatusLabel.stringValue = verifying ? KoeLocalizedString(@"setupWizard.common.status.verifyingIncomplete") : KoeLocalizedString(@"setupWizard.common.status.incomplete");
+            self.translationMtModelStatusLabel.textColor = verifying ? [NSColor secondaryLabelColor] : [NSColor systemOrangeColor];
+            self.translationMtModelDownloadButton.enabled = YES;
+            self.translationMtModelDeleteButton.enabled = YES;
+            break;
+        default:
+            self.translationMtModelStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.notInstalled");
+            self.translationMtModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+            self.translationMtModelDownloadButton.enabled = YES;
+            self.translationMtModelDeleteButton.enabled = NO;
+            break;
+    }
+}
+
+- (void)translationMtDownloadSelectedModel:(id)sender {
+    NSString *modelPath = self.translationMtLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) return;
+
+    self.translationMtLocalModelField.stringValue = modelPath;
+    if ([self.downloadingModels containsObject:modelPath]) {
+        [self.rustBridge cancelDownload:modelPath];
+        return;
+    }
+
+    if (!self.downloadingModels) {
+        self.downloadingModels = [NSMutableSet new];
+    }
+    [self.downloadingModels addObject:modelPath];
+
+    self.translationMtModelDownloadButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle" accessibilityDescription:@"Stop"];
+    self.translationMtModelDownloadButton.hidden = NO;
+    self.translationMtModelStatusLabel.stringValue = @"Downloading...";
+    self.translationMtModelStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.translationMtModelProgressBar.hidden = NO;
+    self.translationMtModelProgressBar.doubleValue = 0;
+    self.translationMtModelProgressSizeLabel.hidden = NO;
+    self.translationMtModelProgressSizeLabel.stringValue = @"";
+
+    __block uint64_t totalBytesAllFiles = 0;
+    for (NSDictionary *m in [self.rustBridge scanModels]) {
+        if ([m[@"path"] isEqualToString:modelPath]) {
+            totalBytesAllFiles = [m[@"total_size"] unsignedLongLongValue];
+            break;
+        }
+    }
+    __block NSMutableDictionary<NSNumber *, NSNumber *> *fileDownloaded = [NSMutableDictionary new];
+
+    __weak typeof(self) weakSelf = self;
+    [self.rustBridge downloadModel:modelPath
+        progress:^(NSUInteger fileIndex, NSUInteger fileCount,
+                   uint64_t downloaded, uint64_t total, NSString *filename) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            NSString *selected = strongSelf.translationMtLocalModelPopup.selectedItem.representedObject;
+            if (![modelPath isEqualToString:selected]) return;
+
+            fileDownloaded[@(fileIndex)] = @(downloaded);
+            uint64_t totalDownloaded = 0;
+            for (NSNumber *v in fileDownloaded.allValues) totalDownloaded += v.unsignedLongLongValue;
+
+            double pct = (totalBytesAllFiles > 0)
+                ? (double)totalDownloaded / (double)totalBytesAllFiles * 100.0 : 0;
+            strongSelf.translationMtModelProgressBar.doubleValue = pct;
+            strongSelf.translationMtModelStatusLabel.stringValue = @"Downloading";
+            strongSelf.translationMtModelProgressSizeLabel.stringValue =
+                [NSString stringWithFormat:@"%.1f / %.1f MB",
+                    (double)totalDownloaded / 1048576.0,
+                    (double)totalBytesAllFiles / 1048576.0];
+        }
+        completion:^(BOOL success, NSString *message) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf.downloadingModels removeObject:modelPath];
+            [strongSelf updateTranslationMtModelStatusLabel];
+        }];
+}
+
+- (void)translationMtDeleteSelectedModel:(id)sender {
+    NSString *modelPath = self.translationMtLocalModelPopup.selectedItem.representedObject;
+    if (![modelPath isKindOfClass:[NSString class]] || modelPath.length == 0) return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Remove Model Files?";
+    alert.informativeText = @"Downloaded model files will be deleted. The model can be re-downloaded later.";
+    [alert addButtonWithTitle:@"Remove"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.alertStyle = NSAlertStyleWarning;
+
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [self.rustBridge removeModelFiles:modelPath];
+        [self updateTranslationMtModelStatusLabel];
+    }
 }
 
 - (void)toggleTranslationMtApiKeyVisibility:(NSButton *)sender {
@@ -3531,17 +3846,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         sender.tag = 0;
     }
 }
-
-- (void)updateTranslationMtPlaceholders {
-    NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
-    if ([provider isEqualToString:@"local"]) {
-        self.translationMtLocalModelField.placeholderString = @"mt-local/opus-mt-zh-en";
-    } else {
-        self.translationMtModelField.placeholderString = @"gpt-4o-mini";
-        self.translationMtBaseUrlField.placeholderString = @"https://api.openai.com/v1";
-    }
-}
-
 - (void)toggleTranslationTtsApiKeyVisibility:(NSButton *)sender {
     if (sender.tag == 0) {
         self.translationTtsApiKeyField.stringValue = self.translationTtsApiKeySecureField.stringValue;

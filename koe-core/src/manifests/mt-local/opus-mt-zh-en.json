@@ -1,0 +1,26 @@
+{
+  "provider": "mt-local",
+  "mode": "mt",
+  "description": "OPUS-MT Chinese → English (local Marian ONNX)",
+  "repo": "onnx-community/opus-mt-zh-en",
+  "files": [
+    {
+      "name": "encoder_model.onnx",
+      "size": 209942461,
+      "sha256": "57b664dad9511c1ad0c51164eab0144f289d7dd75c0327615ded328c04b57525",
+      "url": "https://huggingface.co/onnx-community/opus-mt-zh-en/resolve/main/onnx/encoder_model.onnx"
+    },
+    {
+      "name": "decoder_model_merged.onnx",
+      "size": 235912391,
+      "sha256": "0a76c93e440bac256d9f99ce0d2a6b7ae2b38a40980a5249d4dd3c8604430630",
+      "url": "https://huggingface.co/onnx-community/opus-mt-zh-en/resolve/main/onnx/decoder_model_merged.onnx"
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 6381339,
+      "sha256": "b306d0301cf280bfd647d7067b5ade2a97b987e6d678df110703c002433643ff",
+      "url": "https://huggingface.co/onnx-community/opus-mt-zh-en/resolve/main/tokenizer.json"
+    }
+  ]
+}
