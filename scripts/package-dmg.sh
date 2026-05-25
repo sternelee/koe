@@ -57,7 +57,18 @@ rm -f "$AS_SCRIPT"
 # Detach, compress, and clean up
 hdiutil detach "$MOUNT" -force
 rm -f "$DMG_OUT"
-hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_OUT"
-rm -f "$TEMP_DMG"
 
-echo "✅ DMG ready: $DMG_OUT ($(du -h "$DMG_OUT" | cut -f1))"
+for attempt in 1 2 3 4 5; do
+    if hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_OUT"; then
+        rm -f "$TEMP_DMG"
+        echo "✅ DMG ready: $DMG_OUT ($(du -h "$DMG_OUT" | cut -f1))"
+        exit 0
+    fi
+
+    if [ "$attempt" -eq 5 ]; then
+        rm -f "$TEMP_DMG"
+        exit 1
+    fi
+
+    sleep 2
+done
