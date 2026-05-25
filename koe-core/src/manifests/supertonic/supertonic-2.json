@@ -1,0 +1,50 @@
+{
+  "provider": "sherpa-onnx",
+  "mode": "tts",
+  "description": "Supertonic 2 multilingual TTS (ONNX int8, 44.1kHz)",
+  "repo": "csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06",
+  "files": [
+    {
+      "name": "duration_predictor.int8.onnx",
+      "size": 1521526,
+      "sha256": "6d556b3691165c364be91dc0bd894656b5949f5acd2750d8ec2f954010845011",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/duration_predictor.int8.onnx"
+    },
+    {
+      "name": "text_encoder.int8.onnx",
+      "size": 27431318,
+      "sha256": "dd5f535ed629f7df86071043e15f541ce1b2ab7f1bdbce4c7892b307bca79fa3",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/text_encoder.int8.onnx"
+    },
+    {
+      "name": "vector_estimator.int8.onnx",
+      "size": 40686657,
+      "sha256": "9cce89801068dc998719fbc91777f99f3f4d16ee36592281f8703f32e305daa2",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/vector_estimator.int8.onnx"
+    },
+    {
+      "name": "vocoder.int8.onnx",
+      "size": 25977132,
+      "sha256": "db99c36fb871fbfb128b903662995f2e22213e875f2434f319f8d10ee0f10e90",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/vocoder.int8.onnx"
+    },
+    {
+      "name": "tts.json",
+      "size": 8699,
+      "sha256": "ee531d9af9b80438a2ed703e22155ee6c83b12595ab22fd3bb6de94c7502fe96",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/tts.json"
+    },
+    {
+      "name": "unicode_indexer.bin",
+      "size": 262144,
+      "sha256": "06557ec23778a2c67130a99e28f5f550b9598fc1f04049cbb35d864549913154",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/unicode_indexer.bin"
+    },
+    {
+      "name": "voice.bin",
+      "size": 517168,
+      "sha256": "12e0919ffc641ff20858026a4c655fbd9e5c414800bb1b756c9d4011e2536325",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-tts-int8-2026-03-06/resolve/main/voice.bin"
+    }
+  ]
+}

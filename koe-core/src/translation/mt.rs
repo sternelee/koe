@@ -50,7 +50,12 @@ impl MtClient {
     }
 
     /// Translate `text` into the target language.
-    pub async fn translate(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
+    pub async fn translate(
+        &self,
+        text: &str,
+        source_lang: &str,
+        target_lang: &str,
+    ) -> Result<String> {
         if text.trim().is_empty() {
             return Ok(String::new());
         }
@@ -62,7 +67,8 @@ impl MtClient {
 
         match self.config.provider {
             MtProvider::OpenAiCompatible => {
-                self.translate_openai_compatible(text, normalized_target).await
+                self.translate_openai_compatible(text, normalized_target)
+                    .await
             }
             MtProvider::Apple => self.translate_apple(text, source_lang, normalized_target),
             MtProvider::Local => self.translate_local(text, normalized_target),
@@ -142,21 +148,23 @@ impl MtClient {
 
         let source_text = CString::new(text)
             .map_err(|_| KoeError::LlmFailed("MT input contains NUL byte".to_string()))?;
-        let source_lang = if source_lang.trim().is_empty() || source_lang.eq_ignore_ascii_case("auto") {
-            None
-        } else {
-            Some(
-                CString::new(source_lang)
-                    .map_err(|_| KoeError::LlmFailed("source language contains NUL byte".to_string()))?,
-            )
-        };
+        let source_lang =
+            if source_lang.trim().is_empty() || source_lang.eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                Some(CString::new(source_lang).map_err(|_| {
+                    KoeError::LlmFailed("source language contains NUL byte".to_string())
+                })?)
+            };
         let target_lang = CString::new(target_lang)
             .map_err(|_| KoeError::LlmFailed("target language contains NUL byte".to_string()))?;
 
         let ptr = unsafe {
             koe_apple_translation_translate(
                 source_text.as_ptr(),
-                source_lang.as_ref().map_or(std::ptr::null(), |lang| lang.as_ptr()),
+                source_lang
+                    .as_ref()
+                    .map_or(std::ptr::null(), |lang| lang.as_ptr()),
                 target_lang.as_ptr(),
             )
         };

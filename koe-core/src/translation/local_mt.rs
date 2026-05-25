@@ -26,14 +26,20 @@ mod imp {
         Nllb200,
     }
 
-    pub fn load_backend(model_path: &Path, source_lang: Option<&str>) -> Result<Arc<dyn LocalMtBackend>> {
+    pub fn load_backend(
+        model_path: &Path,
+        source_lang: Option<&str>,
+    ) -> Result<Arc<dyn LocalMtBackend>> {
         let model_id = model_id_from_path(model_path);
         let backend = MarianBackend::new(&model_id, model_path, source_lang.unwrap_or("auto"))?;
         Ok(Arc::new(backend))
     }
 
     pub fn provider_requires_source_language(model_path: &Path) -> bool {
-        matches!(model_family(&model_id_from_path(model_path)), LocalMtModelFamily::Nllb200)
+        matches!(
+            model_family(&model_id_from_path(model_path)),
+            LocalMtModelFamily::Nllb200
+        )
     }
 
     pub fn model_files_ready(model_path: &Path) -> bool {
@@ -174,7 +180,11 @@ mod imp {
                 .map_err(|e| KoeError::Config(format!("local MT hidden reshape: {e}")))
         }
 
-        fn greedy_decode(&self, encoder_hidden: &ArrayD<f32>, target_lang: &str) -> Result<Vec<i64>> {
+        fn greedy_decode(
+            &self,
+            encoder_hidden: &ArrayD<f32>,
+            target_lang: &str,
+        ) -> Result<Vec<i64>> {
             let bos_id = self
                 .target_lang_token_id(target_lang)
                 .unwrap_or_else(|| self.bos_token_id());
@@ -198,8 +208,9 @@ mod imp {
                     .map_err(|e| KoeError::Config(format!("local MT decoder ids tensor: {e}")))?;
                 let enc_mask_t = Tensor::from_array(enc_mask)
                     .map_err(|e| KoeError::Config(format!("local MT decoder mask tensor: {e}")))?;
-                let enc_hidden_t = Tensor::from_array(enc_hidden)
-                    .map_err(|e| KoeError::Config(format!("local MT decoder hidden tensor: {e}")))?;
+                let enc_hidden_t = Tensor::from_array(enc_hidden).map_err(|e| {
+                    KoeError::Config(format!("local MT decoder hidden tensor: {e}"))
+                })?;
 
                 let mut decoder = self.decoder.lock().unwrap();
                 let outputs = decoder
@@ -316,8 +327,12 @@ mod imp {
 
         #[test]
         fn nllb_models_require_explicit_source_language() {
-            assert!(provider_requires_source_language(Path::new("mt-local/nllb-200-distilled-600M")));
-            assert!(!provider_requires_source_language(Path::new("mt-local/opus-mt-zh-en")));
+            assert!(provider_requires_source_language(Path::new(
+                "mt-local/nllb-200-distilled-600M"
+            )));
+            assert!(!provider_requires_source_language(Path::new(
+                "mt-local/opus-mt-zh-en"
+            )));
         }
 
         #[test]
@@ -333,7 +348,10 @@ mod imp {
 pub use imp::{load_backend, model_files_ready, provider_requires_source_language};
 
 #[cfg(not(feature = "local-mt"))]
-pub fn load_backend(_model_path: &Path, _source_lang: Option<&str>) -> Result<Arc<dyn LocalMtBackend>> {
+pub fn load_backend(
+    _model_path: &Path,
+    _source_lang: Option<&str>,
+) -> Result<Arc<dyn LocalMtBackend>> {
     Err(KoeError::Config(
         "local MT support is not compiled into this build".to_string(),
     ))

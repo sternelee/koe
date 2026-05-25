@@ -1335,8 +1335,6 @@ fn translation_mt_ready(cfg: &config::Config) -> bool {
     }
 }
 
-
-
 fn translation_tts_ready(cfg: &crate::translation::config::TranslationConfig) -> bool {
     if !cfg.tts.enabled {
         return false;
@@ -1352,6 +1350,16 @@ fn translation_tts_ready(cfg: &crate::translation::config::TranslationConfig) ->
         }
         crate::translation::config::TtsProvider::KokoroOnnx => {
             !cfg.tts.model.trim().is_empty() && config::resolve_model_dir(&cfg.tts.model).exists()
+        }
+        crate::translation::config::TtsProvider::SupertonicOnnx => {
+            let target_language = if cfg.target_language.trim().is_empty() {
+                "en"
+            } else {
+                cfg.target_language.trim()
+            };
+            !cfg.tts.model.trim().is_empty()
+                && config::resolve_model_dir(&cfg.tts.model).exists()
+                && crate::translation::tts::supertonic_language_code(target_language).is_some()
         }
     }
 }
@@ -2257,8 +2265,6 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
     let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
     let engine = TranslationEngine::new(translation_config, http_client, factory, translation_mode);
 
-
-
     let handle = core.runtime.spawn(async move {
         if let Err(e) = engine.run(audio_rx, stop).await {
             log::error!("[translation] engine error: {e}");
@@ -2479,6 +2485,54 @@ mod tests {
     fn translation_runtime_falls_back_to_passthrough_when_tts_not_ready() {
         let cfg = Config::default();
         assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);
+    }
+
+    #[test]
+    fn translation_runtime_uses_translate_with_supertonic_and_supported_target_language() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-supertonic-ready-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.target_language = "fr".into();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::SupertonicOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
+    }
+
+    #[test]
+    fn translation_runtime_falls_back_when_supertonic_target_language_is_unsupported() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-supertonic-unsupported-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.target_language = "zh".into();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::SupertonicOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
     }
 
     #[test]

@@ -1425,7 +1425,11 @@ fn sync_default_manifests(models_dir: &Path) -> Result<bool> {
             .map_err(|e| KoeError::Config(format!("write {}: {e}", manifest_file.display())))?;
         log::info!(
             "{} manifest: {}",
-            if current.is_some() { "refreshed" } else { "installed" },
+            if current.is_some() {
+                "refreshed"
+            } else {
+                "installed"
+            },
             manifest_file.display()
         );
         changed = true;
@@ -1467,7 +1471,6 @@ pub fn ensure_defaults() -> Result<bool> {
         }
     }
 
-
     // Install or refresh default model manifests into ~/.koe/models/
     let models_dir = crate::model_manager::models_dir();
     if sync_default_manifests(&models_dir)? {
@@ -1475,7 +1478,6 @@ pub fn ensure_defaults() -> Result<bool> {
     }
 
     Ok(created)
-
 }
 
 // ─── Key-path Get / Set ────────────────────────────────────────────
@@ -1830,14 +1832,15 @@ translation:
     timeout_ms: 10000
   tts:
     enabled: true
-    provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx
+    provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx | supertonic_onnx
     api_key: ""               # or use ${ELEVENLABS_API_KEY} (cloud providers only)
     voice_id: ""              # ElevenLabs voice ID (cloud providers only)
-    model: "eleven_multilingual_v2"  # For kokoro_onnx: model directory under ~/.koe/models/ (e.g. "kokoro/kokoro-en")
+    model: "eleven_multilingual_v2"  # For local sherpa-onnx TTS: model dir under ~/.koe/models/ (e.g. "kokoro/kokoro-en" or "supertonic/supertonic-2")
     base_url: "https://api.elevenlabs.io"
     speed: 1.0
     preset_voice: ""          # For kokoro_onnx: e.g. af_heart, zf_xiaoxiao
-    speaker_id: 0             # Numeric fallback for kokoro_onnx (0–52)
+    speaker_id: 0             # For supertonic_onnx: style index 0–9 for the bundled model
+
     timeout_ms: 30000
 
 prompt_templates:
@@ -1873,6 +1876,7 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("sherpa-onnx/multilingual-8lang"),
     manifest!("sherpa-onnx/zh-xlarge"),
     manifest!("kokoro/kokoro-en"),
+    manifest!("supertonic/supertonic-2"),
     manifest!("whisper/base"),
     manifest!("whisper/small"),
     manifest!("whisper/turbo"),

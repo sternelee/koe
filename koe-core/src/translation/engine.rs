@@ -292,7 +292,9 @@ async fn run_segment_pipeline(
     let text = match run_asr(&segment, &asr_factory).await {
         Ok(t) if !t.trim().is_empty() => t,
         Ok(_) => {
-            log::warn!("[translation] ASR produced no text; falling back to passthrough for this segment");
+            log::warn!(
+                "[translation] ASR produced no text; falling back to passthrough for this segment"
+            );
             if let Err(e) = write_passthrough_segment(
                 &segment,
                 &output_buffer,
@@ -304,7 +306,9 @@ async fn run_segment_pipeline(
             return;
         }
         Err(e) => {
-            log::warn!("[translation] ASR failed: {e}; falling back to passthrough for this segment");
+            log::warn!(
+                "[translation] ASR failed: {e}; falling back to passthrough for this segment"
+            );
             if let Err(write_err) = write_passthrough_segment(
                 &segment,
                 &output_buffer,
@@ -336,7 +340,9 @@ async fn run_segment_pipeline(
     {
         Ok(t) => t,
         Err(e) => {
-            log::warn!("[translation] MT failed: {e}; falling back to passthrough for this segment");
+            log::warn!(
+                "[translation] MT failed: {e}; falling back to passthrough for this segment"
+            );
             if let Err(write_err) = write_passthrough_segment(
                 &segment,
                 &output_buffer,
@@ -351,7 +357,9 @@ async fn run_segment_pipeline(
     log::info!("[translation] MT: {translated}");
 
     if translated.trim().is_empty() {
-        log::warn!("[translation] MT returned empty text; falling back to passthrough for this segment");
+        log::warn!(
+            "[translation] MT returned empty text; falling back to passthrough for this segment"
+        );
         if let Err(e) = write_passthrough_segment(
             &segment,
             &output_buffer,
@@ -375,10 +383,12 @@ async fn run_segment_pipeline(
         }
         return;
     }
-    let (samples, tts_rate) = match tts.synthesize(&translated).await {
+    let (samples, tts_rate) = match tts.synthesize(&translated, Some(&target_language)).await {
         Ok(r) => r,
         Err(e) => {
-            log::warn!("[translation] TTS failed: {e}; falling back to passthrough for this segment");
+            log::warn!(
+                "[translation] TTS failed: {e}; falling back to passthrough for this segment"
+            );
             if let Err(write_err) = write_passthrough_segment(
                 &segment,
                 &output_buffer,

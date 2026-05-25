@@ -118,6 +118,26 @@ static NSInteger kokoroSpeakerIdForPresetVoice(NSString *presetVoice) {
     return NSNotFound;
 }
 
+static NSArray<NSDictionary<NSString *, id> *> *supertonicPresetVoices(void) {
+    static NSArray<NSDictionary<NSString *, id> *> *voices;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        voices = @[
+            @{@"id": @"0", @"name": @"Style 1", @"sid": @0},
+            @{@"id": @"1", @"name": @"Style 2", @"sid": @1},
+            @{@"id": @"2", @"name": @"Style 3", @"sid": @2},
+            @{@"id": @"3", @"name": @"Style 4", @"sid": @3},
+            @{@"id": @"4", @"name": @"Style 5", @"sid": @4},
+            @{@"id": @"5", @"name": @"Style 6", @"sid": @5},
+            @{@"id": @"6", @"name": @"Style 7", @"sid": @6},
+            @{@"id": @"7", @"name": @"Style 8", @"sid": @7},
+            @{@"id": @"8", @"name": @"Style 9", @"sid": @8},
+            @{@"id": @"9", @"name": @"Style 10", @"sid": @9},
+        ];
+    });
+    return voices;
+}
+
 static NSString *whisperLanguageForAsrPopupValue(NSString *popupValue) {
     if (popupValue.length == 0) {
         return @"auto";
@@ -820,6 +840,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)refreshLlmRemoteModels:(id)sender;
 - (void)populateTranslationTtsKokoroVoices;
 - (void)selectTranslationTtsKokoroVoicePreset:(NSString *)presetVoice speakerID:(NSInteger)speakerID;
+- (void)populateTranslationTtsSupertonicVoices;
+- (void)selectTranslationTtsSupertonicSpeakerID:(NSInteger)speakerID;
 - (void)populateTranslationMtLocalModelPopup;
 - (void)translationMtLocalModelChanged:(id)sender;
 - (void)updateTranslationMtModelStatusLabel;
@@ -3315,6 +3337,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         if ([supportedLocalProviders containsObject:@"sherpa-onnx"]) {
             [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.kokoroOnnx")];
             [self.translationTtsProviderPopup lastItem].representedObject = @"kokoro_onnx";
+            [self.translationTtsProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.tts.provider.supertonicOnnx")];
+            [self.translationTtsProviderPopup lastItem].representedObject = @"supertonic_onnx";
         }
         self.translationTtsProviderPopup.target = self;
         self.translationTtsProviderPopup.action = @selector(translationTtsProviderChanged:);
@@ -3528,18 +3552,18 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationTtsEnabledSwitch.enabled = enabled;
     self.translationTtsProviderPopup.enabled = enabled;
     NSString *ttsProvider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
-    BOOL isKokoro = [ttsProvider isEqualToString:@"kokoro_onnx"];
+    BOOL usesLocalModel = [ttsProvider isEqualToString:@"kokoro_onnx"] || [ttsProvider isEqualToString:@"supertonic_onnx"];
     self.translationTtsApiKeySecureField.enabled = enabled;
     self.translationTtsApiKeyField.enabled = enabled;
     self.translationTtsApiKeyToggle.enabled = enabled;
     self.translationTtsVoiceIdField.enabled = enabled;
-    self.translationTtsModelField.enabled = enabled && !isKokoro;
+    self.translationTtsModelField.enabled = enabled && !usesLocalModel;
     self.translationTtsBaseUrlField.enabled = enabled;
-    self.translationTtsSpeakerIdField.enabled = enabled;
-    if (isKokoro) {
+    self.translationTtsSpeakerIdField.enabled = enabled && usesLocalModel;
+    if (usesLocalModel) {
         [self updateTranslationTtsModelStatusLabel];
-        id selectedKokoroModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
-        self.translationTtsLocalModelPopup.enabled = enabled && [selectedKokoroModel isKindOfClass:[NSString class]];
+        id selectedLocalModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
+        self.translationTtsLocalModelPopup.enabled = enabled && [selectedLocalModel isKindOfClass:[NSString class]];
         self.translationTtsModelDownloadButton.enabled = enabled && self.translationTtsModelDownloadButton.enabled;
         self.translationTtsModelDeleteButton.enabled = enabled && self.translationTtsModelDeleteButton.enabled;
     } else {
@@ -3889,23 +3913,53 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self.translationTtsSpeakerIdField selectItemAtIndex:0];
 }
 
+- (void)populateTranslationTtsSupertonicVoices {
+    [self.translationTtsSpeakerIdField removeAllItems];
+    for (NSDictionary<NSString *, id> *voice in supertonicPresetVoices()) {
+        NSString *voiceID = voice[@"id"];
+        NSString *voiceName = voice[@"name"];
+        [self.translationTtsSpeakerIdField addItemWithTitle:[NSString stringWithFormat:@"%@ (%@)", voiceName, voiceID]];
+        self.translationTtsSpeakerIdField.lastItem.representedObject = voiceID;
+    }
+    if (self.translationTtsSpeakerIdField.numberOfItems > 0) {
+        [self.translationTtsSpeakerIdField selectItemAtIndex:0];
+    }
+}
+
+- (void)selectTranslationTtsSupertonicSpeakerID:(NSInteger)speakerID {
+    NSString *resolvedSpeakerID = [NSString stringWithFormat:@"%ld", (long)MAX(0, MIN(9, speakerID))];
+    for (NSInteger i = 0; i < self.translationTtsSpeakerIdField.numberOfItems; i++) {
+        if ([[self.translationTtsSpeakerIdField itemAtIndex:i].representedObject isEqualToString:resolvedSpeakerID]) {
+            [self.translationTtsSpeakerIdField selectItemAtIndex:i];
+            return;
+        }
+    }
+    [self.translationTtsSpeakerIdField selectItemAtIndex:0];
+}
+
 - (void)translationTtsProviderChanged:(id)sender {
+    NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+    if ([provider isEqualToString:@"kokoro_onnx"]) {
+        [self populateTranslationTtsKokoroVoices];
+    } else if ([provider isEqualToString:@"supertonic_onnx"]) {
+        [self populateTranslationTtsSupertonicVoices];
+    }
     [self updateTranslationTtsPlaceholders];
     [self updateTranslationTtsFieldsVisibility];
 }
 
 - (void)updateTranslationTtsFieldsVisibility {
     NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
-    BOOL isKokoro = [provider isEqualToString:@"kokoro_onnx"];
+    BOOL usesLocalModel = [provider isEqualToString:@"kokoro_onnx"] || [provider isEqualToString:@"supertonic_onnx"];
     NSView *section = self.translationTtsSectionView;
     for (NSView *v in section.subviews) {
         if (v.tag == kTranslationTtsCloudOnlyTag) {
-            v.hidden = isKokoro;
+            v.hidden = usesLocalModel;
         } else if (v.tag == kTranslationTtsKokoroOnlyTag) {
-            v.hidden = !isKokoro;
+            v.hidden = !usesLocalModel;
         }
     }
-    if (isKokoro) {
+    if (usesLocalModel) {
         [self populateTranslationTtsLocalModelPopup];
         NSString *configuredModel = self.translationTtsModelField.stringValue;
         if (configuredModel.length > 0) {
@@ -3928,6 +3982,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
     if ([provider isEqualToString:@"kokoro_onnx"]) {
         self.translationTtsModelField.placeholderString = @"kokoro/kokoro-en";
+    } else if ([provider isEqualToString:@"supertonic_onnx"]) {
+        self.translationTtsModelField.placeholderString = @"supertonic/supertonic-2";
     } else if ([provider isEqualToString:@"mini_max"] || [provider isEqualToString:@"minimax"]) {
         self.translationTtsModelField.placeholderString = @"speech-02-hd";
         self.translationTtsBaseUrlField.placeholderString = @"https://api.minimax.chat";
@@ -3940,6 +3996,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (void)populateTranslationTtsLocalModelPopup {
+    NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"kokoro_onnx";
+    NSString *requiredPrefix = [provider isEqualToString:@"supertonic_onnx"] ? @"supertonic/" : @"kokoro/";
+    NSString *preferredPath = [self.translationTtsLocalModelPopup.selectedItem.representedObject isKindOfClass:[NSString class]]
+        ? self.translationTtsLocalModelPopup.selectedItem.representedObject
+        : self.translationTtsModelField.stringValue;
     [self.translationTtsLocalModelPopup removeAllItems];
 
     NSArray<NSDictionary *> *models = [self.rustBridge scanModels];
@@ -3950,6 +4011,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         if (![modelMode isEqualToString:@"tts"]) continue;
 
         NSString *path = model[@"path"];
+        if (![path isKindOfClass:[NSString class]] || ![path hasPrefix:requiredPrefix]) continue;
         NSString *title = model[@"description"] ?: path;
         [self.translationTtsLocalModelPopup addItemWithTitle:title];
         [self.translationTtsLocalModelPopup lastItem].representedObject = path;
@@ -3958,9 +4020,19 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     if (self.translationTtsLocalModelPopup.numberOfItems == 0) {
         [self.translationTtsLocalModelPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.common.noModelsFound")];
         self.translationTtsLocalModelPopup.enabled = NO;
-    } else {
-        self.translationTtsLocalModelPopup.enabled = YES;
+        return;
     }
+
+    self.translationTtsLocalModelPopup.enabled = YES;
+    if (preferredPath.length > 0) {
+        for (NSInteger i = 0; i < self.translationTtsLocalModelPopup.numberOfItems; i++) {
+            if ([[self.translationTtsLocalModelPopup itemAtIndex:i].representedObject isEqualToString:preferredPath]) {
+                [self.translationTtsLocalModelPopup selectItemAtIndex:i];
+                return;
+            }
+        }
+    }
+    [self.translationTtsLocalModelPopup selectItemAtIndex:0];
 }
 
 - (void)translationTtsLocalModelChanged:(id)sender {
@@ -5874,10 +5946,17 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.translationTtsVoiceIdField.stringValue = configGet(@"translation.tts.voice_id");
         self.translationTtsModelField.stringValue = configGet(@"translation.tts.model");
         self.translationTtsBaseUrlField.stringValue = configGet(@"translation.tts.base_url");
-        [self selectTranslationTtsKokoroVoicePreset:configGet(@"translation.tts.preset_voice")
-                                          speakerID:configGet(@"translation.tts.speaker_id").integerValue];
+        if ([ttsProvider isEqualToString:@"supertonic_onnx"]) {
+            [self populateTranslationTtsSupertonicVoices];
+            [self selectTranslationTtsSupertonicSpeakerID:configGet(@"translation.tts.speaker_id").integerValue];
+        } else {
+            [self populateTranslationTtsKokoroVoices];
+            [self selectTranslationTtsKokoroVoicePreset:configGet(@"translation.tts.preset_voice")
+                                              speakerID:configGet(@"translation.tts.speaker_id").integerValue];
+        }
         [self updateTranslationTtsPlaceholders];
         [self updateTranslationTtsFieldsVisibility];
+
 
         [self updateTranslationMtFieldsEnabled];
         [self refreshVirtualMicStatus];
@@ -6123,7 +6202,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"translation.tts.api_key", ttsApiKey);
         saveOk &= configSet(@"translation.tts.voice_id", self.translationTtsVoiceIdField.stringValue);
         NSString *ttsModel = self.translationTtsModelField.stringValue;
-        if ([ttsProvider isEqualToString:@"kokoro_onnx"]) {
+        if ([ttsProvider isEqualToString:@"kokoro_onnx"] || [ttsProvider isEqualToString:@"supertonic_onnx"]) {
             NSString *selectedModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
             if ([selectedModel isKindOfClass:[NSString class]] && selectedModel.length > 0) {
                 ttsModel = selectedModel;
@@ -6131,16 +6210,24 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
         saveOk &= configSet(@"translation.tts.model", ttsModel);
         saveOk &= configSet(@"translation.tts.base_url", self.translationTtsBaseUrlField.stringValue);
-        NSString *kokoroPresetVoice = [self.translationTtsSpeakerIdField.selectedItem.representedObject isKindOfClass:[NSString class]]
+        NSString *localVoiceSelection = [self.translationTtsSpeakerIdField.selectedItem.representedObject isKindOfClass:[NSString class]]
             ? self.translationTtsSpeakerIdField.selectedItem.representedObject
             : @"";
-        NSInteger kokoroSpeakerID = kokoroSpeakerIdForPresetVoice(kokoroPresetVoice);
-        if (kokoroSpeakerID == NSNotFound) {
-            kokoroSpeakerID = 3;
-        }
+        NSInteger localSpeakerID = 0;
         if ([ttsProvider isEqualToString:@"kokoro_onnx"]) {
-            saveOk &= configSet(@"translation.tts.preset_voice", kokoroPresetVoice);
-            saveOk &= configSet(@"translation.tts.speaker_id", [NSString stringWithFormat:@"%ld", (long)kokoroSpeakerID]);
+            localSpeakerID = kokoroSpeakerIdForPresetVoice(localVoiceSelection);
+            if (localSpeakerID == NSNotFound) {
+                localSpeakerID = 3;
+            }
+            saveOk &= configSet(@"translation.tts.preset_voice", localVoiceSelection);
+            saveOk &= configSet(@"translation.tts.speaker_id", [NSString stringWithFormat:@"%ld", (long)localSpeakerID]);
+        } else if ([ttsProvider isEqualToString:@"supertonic_onnx"]) {
+            localSpeakerID = MAX(0, MIN(9, localVoiceSelection.integerValue));
+            saveOk &= configSet(@"translation.tts.preset_voice", @"");
+            saveOk &= configSet(@"translation.tts.speaker_id", [NSString stringWithFormat:@"%ld", (long)localSpeakerID]);
+        } else {
+            saveOk &= configSet(@"translation.tts.preset_voice", @"");
+            saveOk &= configSet(@"translation.tts.speaker_id", @"0");
         }
     }
 

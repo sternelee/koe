@@ -2,6 +2,8 @@ use crate::errors::{KoeError, Result};
 use crate::translation::config::{TtsConfig, TtsProvider};
 use reqwest::Client;
 use serde_json::{json, Value};
+#[cfg(feature = "sherpa-onnx")]
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[cfg(feature = "sherpa-onnx")]
@@ -61,54 +63,94 @@ const KOKORO_PRESET_VOICES: &[(&str, i32)] = &[
     ("zm_yunyang", 52),
 ];
 
+#[cfg(feature = "sherpa-onnx")]
+enum LocalTtsBackend {
+    Kokoro(KokoroOnnxBackend),
+    Supertonic(SupertonicOnnxBackend),
+}
+
 /// Text-to-speech client that supports multiple cloud and local providers.
 pub struct TtsClient {
     client: Client,
     config: TtsConfig,
     #[cfg(feature = "sherpa-onnx")]
-    kokoro: Option<KokoroOnnxBackend>,
+    local_backend: Option<LocalTtsBackend>,
 }
 
 impl TtsClient {
     pub fn new(client: Client, config: TtsConfig) -> Self {
         #[cfg(feature = "sherpa-onnx")]
-        let kokoro = if config.provider == TtsProvider::KokoroOnnx {
-            if config.model.is_empty() {
-                log::warn!("[tts] Kokoro ONNX provider selected but model path is empty");
-                None
-            } else {
-                let model_dir = crate::config::resolve_model_dir(&config.model);
-                let speaker_id = Self::kokoro_speaker_id(&config);
-                match KokoroOnnxBackend::new(&model_dir, speaker_id, config.speed) {
-                    Ok(backend) => {
-                        log::info!(
-                            "[tts] Kokoro ONNX backend loaded from {} (speaker_id={speaker_id})",
-                            model_dir.display()
-                        );
-                        Some(backend)
-                    }
-                    Err(e) => {
-                        log::warn!("[tts] Failed to load Kokoro ONNX backend: {e}");
-                        None
-                    }
-                }
-            }
-        } else {
-            None
-        };
+        let local_backend = Self::build_local_backend(&config);
 
         Self {
             client,
             config,
             #[cfg(feature = "sherpa-onnx")]
-            kokoro,
+            local_backend,
+        }
+    }
+
+    #[cfg(feature = "sherpa-onnx")]
+    fn build_local_backend(config: &TtsConfig) -> Option<LocalTtsBackend> {
+        match config.provider {
+            TtsProvider::KokoroOnnx => Self::load_kokoro_backend(config),
+            TtsProvider::SupertonicOnnx => Self::load_supertonic_backend(config),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "sherpa-onnx")]
+    fn load_kokoro_backend(config: &TtsConfig) -> Option<LocalTtsBackend> {
+        if config.model.is_empty() {
+            log::warn!("[tts] Kokoro ONNX provider selected but model path is empty");
+            return None;
+        }
+
+        let model_dir = crate::config::resolve_model_dir(&config.model);
+        let speaker_id = Self::kokoro_speaker_id(config);
+        match KokoroOnnxBackend::new(&model_dir, speaker_id, config.speed) {
+            Ok(backend) => {
+                log::info!(
+                    "[tts] Kokoro ONNX backend loaded from {} (speaker_id={speaker_id})",
+                    model_dir.display()
+                );
+                Some(LocalTtsBackend::Kokoro(backend))
+            }
+            Err(e) => {
+                log::warn!("[tts] Failed to load Kokoro ONNX backend: {e}");
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "sherpa-onnx")]
+    fn load_supertonic_backend(config: &TtsConfig) -> Option<LocalTtsBackend> {
+        if config.model.is_empty() {
+            log::warn!("[tts] Supertonic ONNX provider selected but model path is empty");
+            return None;
+        }
+
+        let model_dir = crate::config::resolve_model_dir(&config.model);
+        match SupertonicOnnxBackend::new(&model_dir, config.speaker_id, config.speed) {
+            Ok(backend) => {
+                log::info!(
+                    "[tts] Supertonic ONNX backend loaded from {} (speaker_id={})",
+                    model_dir.display(),
+                    config.speaker_id
+                );
+                Some(LocalTtsBackend::Supertonic(backend))
+            }
+            Err(e) => {
+                log::warn!("[tts] Failed to load Supertonic ONNX backend: {e}");
+                None
+            }
         }
     }
 
     /// Synthesize `text` into f32 PCM audio.
     ///
     /// Returns `(samples, sample_rate)`.
-    pub async fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
+    pub async fn synthesize(&self, text: &str, language: Option<&str>) -> Result<(Vec<f32>, u32)> {
         if text.trim().is_empty() {
             return Ok((Vec::new(), self.config.sample_rate()));
         }
@@ -117,6 +159,7 @@ impl TtsClient {
             TtsProvider::ElevenLabs => self.elevenlabs_synthesize(text).await,
             TtsProvider::MiniMax => self.minimax_synthesize(text).await,
             TtsProvider::KokoroOnnx => self.kokoro_synthesize(text).await,
+            TtsProvider::SupertonicOnnx => self.supertonic_synthesize(text, language).await,
         }
     }
 
@@ -248,7 +291,7 @@ impl TtsClient {
     async fn kokoro_synthesize(&self, _text: &str) -> Result<(Vec<f32>, u32)> {
         #[cfg(feature = "sherpa-onnx")]
         {
-            if let Some(ref kokoro) = self.kokoro {
+            if let Some(LocalTtsBackend::Kokoro(ref kokoro)) = self.local_backend {
                 let text = _text.to_string();
                 let kokoro = kokoro.clone();
                 tokio::task::spawn_blocking(move || kokoro.synthesize(&text))
@@ -267,6 +310,55 @@ impl TtsClient {
             ))
         }
     }
+
+    async fn supertonic_synthesize(
+        &self,
+        _text: &str,
+        language: Option<&str>,
+    ) -> Result<(Vec<f32>, u32)> {
+        #[cfg(feature = "sherpa-onnx")]
+        {
+            let lang = language.and_then(supertonic_language_code).ok_or_else(|| {
+                KoeError::Config(format!(
+                    "Supertonic ONNX supports only en, ko, es, pt, fr; got {:?}",
+                    language.unwrap_or("")
+                ))
+            })?;
+
+            if let Some(LocalTtsBackend::Supertonic(ref supertonic)) = self.local_backend {
+                let text = _text.to_string();
+                let supertonic = supertonic.clone();
+                let lang = lang.to_string();
+                tokio::task::spawn_blocking(move || supertonic.synthesize(&text, &lang))
+                    .await
+                    .map_err(|e| KoeError::LlmFailed(format!("TTS task failed: {e}")))?
+            } else {
+                Err(KoeError::Config(
+                    "Supertonic ONNX backend not initialized. Check model path.".to_string(),
+                ))
+            }
+        }
+        #[cfg(not(feature = "sherpa-onnx"))]
+        {
+            let _ = language;
+            Err(KoeError::Config(
+                "Supertonic ONNX TTS requires the sherpa-onnx feature".to_string(),
+            ))
+        }
+    }
+}
+
+pub(crate) fn supertonic_language_code(language: &str) -> Option<&'static str> {
+    let normalized = language.trim().to_ascii_lowercase();
+    let base = normalized.split(['-', '_']).next().unwrap_or("");
+    match base {
+        "en" => Some("en"),
+        "ko" => Some("ko"),
+        "es" => Some("es"),
+        "pt" => Some("pt"),
+        "fr" => Some("fr"),
+        _ => None,
+    }
 }
 
 fn pcm_i16le_to_f32(bytes: &[u8]) -> Vec<f32> {
@@ -282,7 +374,9 @@ impl TtsConfig {
     pub fn sample_rate(&self) -> u32 {
         match self.provider {
             #[cfg(feature = "sherpa-onnx")]
-            TtsProvider::KokoroOnnx => 24_000, // Kokoro outputs 24kHz
+            TtsProvider::KokoroOnnx => 24_000,
+            #[cfg(feature = "sherpa-onnx")]
+            TtsProvider::SupertonicOnnx => 44_100,
             _ => 24_000,
         }
     }
@@ -306,7 +400,6 @@ struct KokoroOnnxBackendInner {
 }
 
 #[cfg(feature = "sherpa-onnx")]
-// The sherpa-onnx wrapper itself is Send+Sync; we propagate that.
 unsafe impl Send for KokoroOnnxBackendInner {}
 #[cfg(feature = "sherpa-onnx")]
 unsafe impl Sync for KokoroOnnxBackendInner {}
@@ -316,7 +409,7 @@ impl KokoroOnnxBackend {
     pub fn new(model_dir: &std::path::Path, speaker_id: i32, speed: f32) -> Result<Self> {
         let config = build_kokoro_config(model_dir)?;
         let tts = sherpa_onnx::OfflineTts::create(&config)
-            .ok_or_else(|| KoeError::Config(format!("OfflineTts::create failed for Kokoro")))?;
+            .ok_or_else(|| KoeError::Config("OfflineTts::create failed for Kokoro".to_string()))?;
 
         log::info!(
             "[tts] Kokoro loaded: sample_rate={} num_speakers={}",
@@ -352,6 +445,77 @@ impl KokoroOnnxBackend {
     }
 }
 
+// =============================================================================
+// Supertonic ONNX backend (sherpa-onnx)
+// =============================================================================
+
+#[cfg(feature = "sherpa-onnx")]
+#[derive(Clone)]
+pub struct SupertonicOnnxBackend {
+    inner: std::sync::Arc<SupertonicOnnxBackendInner>,
+}
+
+#[cfg(feature = "sherpa-onnx")]
+struct SupertonicOnnxBackendInner {
+    tts: sherpa_onnx::OfflineTts,
+    speaker_id: i32,
+    speed: f32,
+    num_steps: i32,
+}
+
+#[cfg(feature = "sherpa-onnx")]
+unsafe impl Send for SupertonicOnnxBackendInner {}
+#[cfg(feature = "sherpa-onnx")]
+unsafe impl Sync for SupertonicOnnxBackendInner {}
+
+#[cfg(feature = "sherpa-onnx")]
+impl SupertonicOnnxBackend {
+    pub fn new(model_dir: &std::path::Path, speaker_id: i32, speed: f32) -> Result<Self> {
+        let config = build_supertonic_config(model_dir)?;
+        let tts = sherpa_onnx::OfflineTts::create(&config).ok_or_else(|| {
+            KoeError::Config("OfflineTts::create failed for Supertonic".to_string())
+        })?;
+
+        log::info!(
+            "[tts] Supertonic loaded: sample_rate={} num_speakers={}",
+            tts.sample_rate(),
+            tts.num_speakers(),
+        );
+
+        Ok(Self {
+            inner: std::sync::Arc::new(SupertonicOnnxBackendInner {
+                tts,
+                speaker_id,
+                speed,
+                num_steps: 8,
+            }),
+        })
+    }
+
+    pub fn synthesize(&self, text: &str, lang: &str) -> Result<(Vec<f32>, u32)> {
+        let mut extra = HashMap::with_capacity(1);
+        extra.insert("lang".to_string(), Value::String(lang.to_string()));
+
+        let gen_cfg = sherpa_onnx::GenerationConfig {
+            sid: self.inner.speaker_id,
+            speed: self.inner.speed,
+            num_steps: self.inner.num_steps,
+            extra: Some(extra),
+            ..Default::default()
+        };
+
+        let audio = self
+            .inner
+            .tts
+            .generate_with_config(text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)
+            .ok_or_else(|| KoeError::LlmFailed("TTS generate returned None".to_string()))?;
+
+        let samples = audio.samples().to_vec();
+        let sample_rate = audio.sample_rate() as u32;
+        Ok((samples, sample_rate))
+    }
+}
+
 #[cfg(feature = "sherpa-onnx")]
 fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsConfig> {
     let model = best_onnx(dir, "model").ok_or_else(|| {
@@ -360,7 +524,6 @@ fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsC
     let voices = require_file(dir, "voices.bin")?;
     let tokens = require_file(dir, "tokens.txt")?;
 
-    // Optional data_dir (for Chinese text normalisation)
     let data_dir = {
         let d = dir.join("espeak-ng-data");
         if d.exists() {
@@ -378,6 +541,52 @@ fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsC
                 tokens: Some(tokens),
                 data_dir,
                 ..Default::default()
+            },
+            num_threads: 2,
+            ..Default::default()
+        },
+        max_num_sentences: 1,
+        ..Default::default()
+    })
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn build_supertonic_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsConfig> {
+    let duration_predictor = best_onnx(dir, "duration_predictor").ok_or_else(|| {
+        KoeError::Config(format!(
+            "supertonic duration_predictor.onnx not found in {}",
+            dir.display()
+        ))
+    })?;
+    let text_encoder = best_onnx(dir, "text_encoder").ok_or_else(|| {
+        KoeError::Config(format!(
+            "supertonic text_encoder.onnx not found in {}",
+            dir.display()
+        ))
+    })?;
+    let vector_estimator = best_onnx(dir, "vector_estimator").ok_or_else(|| {
+        KoeError::Config(format!(
+            "supertonic vector_estimator.onnx not found in {}",
+            dir.display()
+        ))
+    })?;
+    let vocoder = best_onnx(dir, "vocoder").ok_or_else(|| {
+        KoeError::Config(format!(
+            "supertonic vocoder.onnx not found in {}",
+            dir.display()
+        ))
+    })?;
+
+    Ok(sherpa_onnx::OfflineTtsConfig {
+        model: sherpa_onnx::OfflineTtsModelConfig {
+            supertonic: sherpa_onnx::OfflineTtsSupertonicModelConfig {
+                duration_predictor: Some(duration_predictor),
+                text_encoder: Some(text_encoder),
+                vector_estimator: Some(vector_estimator),
+                vocoder: Some(vocoder),
+                tts_json: Some(require_file(dir, "tts.json")?),
+                unicode_indexer: Some(require_file(dir, "unicode_indexer.bin")?),
+                voice_style: Some(require_file(dir, "voice.bin")?),
             },
             num_threads: 2,
             ..Default::default()
@@ -433,5 +642,19 @@ mod tests {
         config.preset_voice = "unknown_voice".into();
         config.speaker_id = 12;
         assert_eq!(TtsClient::kokoro_speaker_id(&config), 12);
+    }
+
+    #[test]
+    fn supertonic_language_code_normalizes_supported_locales() {
+        assert_eq!(supertonic_language_code("en"), Some("en"));
+        assert_eq!(supertonic_language_code("PT-BR"), Some("pt"));
+        assert_eq!(supertonic_language_code("fr_CA"), Some("fr"));
+    }
+
+    #[test]
+    fn supertonic_language_code_rejects_unsupported_locales() {
+        assert_eq!(supertonic_language_code("zh-CN"), None);
+        assert_eq!(supertonic_language_code("ja"), None);
+        assert_eq!(supertonic_language_code(""), None);
     }
 }
