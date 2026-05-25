@@ -7,7 +7,7 @@
     {
       "name": "encoder_model.onnx",
       "size": 209942461,
-      "sha256": "57b664dad9511c1ad0c51164eab0144f289d7dd75c0327615ded328c04b57525",
+      "sha256": "92257f4246886bae8cc9c98dddb41224058a6bba11794d12c6c85dbdb7389d52",
       "url": "https://huggingface.co/onnx-community/opus-mt-zh-en/resolve/main/onnx/encoder_model.onnx"
     },
     {

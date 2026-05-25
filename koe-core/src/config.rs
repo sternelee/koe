@@ -2156,6 +2156,23 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn bundled_opus_mt_zh_en_manifest_has_correct_encoder_checksum() {
+        let manifest: crate::model_manager::ModelManifest =
+            serde_json::from_str(manifest!("mt-local/opus-mt-zh-en").1).unwrap();
+        let encoder = manifest
+            .files
+            .iter()
+            .find(|file| file.name == "encoder_model.onnx")
+            .unwrap();
+
+        assert_eq!(encoder.size, 209_942_461);
+        assert_eq!(
+            encoder.sha256,
+            "92257f4246886bae8cc9c98dddb41224058a6bba11794d12c6c85dbdb7389d52"
+        );
+    }
     #[test]
     fn config_accepts_legacy_minimax_tts_provider_value() {
         let raw = r#"

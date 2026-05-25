@@ -359,6 +359,12 @@ pub struct DownloadProgress {
     pub already_exists: bool,
 }
 
+#[derive(Debug)]
+struct VerifiedChecksum {
+    name: String,
+    entry: ChecksumEntry,
+}
+
 /// Download model files according to the manifest.
 ///
 /// - Skips files already present with correct size
@@ -424,9 +430,14 @@ where
     }
 
     let mut first_error: Option<KoeError> = None;
+    let mut verified_checksums = Vec::new();
     for handle in handles {
         match handle.await {
-            Ok(Ok(())) => {}
+            Ok(Ok(verified)) => {
+                if let Some(verified) = verified {
+                    verified_checksums.push(verified);
+                }
+            }
             Ok(Err(e)) => {
                 if first_error.is_none() {
                     cancel.cancel();
@@ -446,6 +457,15 @@ where
         return Err(e);
     }
 
+    if !verified_checksums.is_empty() {
+        let cache_path = model_dir.join(CHECKSUM_CACHE_FILE);
+        let mut cache = load_checksum_cache(&cache_path).unwrap_or_default();
+        for verified in verified_checksums {
+            cache.insert(verified.name, verified.entry);
+        }
+        write_checksum_cache(&cache_path, &cache)?;
+    }
+
     Ok(())
 }
 
@@ -457,7 +477,7 @@ async fn download_file<F>(
     file_count: usize,
     on_progress: &Arc<F>,
     cancel: &CancellationToken,
-) -> Result<()>
+) -> Result<Option<VerifiedChecksum>>
 where
     F: Fn(DownloadProgress),
 {
@@ -486,7 +506,13 @@ where
                             bytes_total: file.size,
                             already_exists: true,
                         });
-                        return Ok(());
+                        return Ok(Some(VerifiedChecksum {
+                            name: file.name.clone(),
+                            entry: ChecksumEntry {
+                                mtime: mtime_secs(&meta),
+                                sha256: hash,
+                            },
+                        }));
                     }
                 }
                 // sha256 read failed — fall through to re-download
@@ -499,7 +525,7 @@ where
                     bytes_total: file.size,
                     already_exists: true,
                 });
-                return Ok(());
+                return Ok(None);
             }
         }
     }
@@ -618,7 +644,21 @@ where
     std::fs::rename(&part_path, &dest)
         .map_err(|e| KoeError::Config(format!("rename {}: {e}", file.name)))?;
 
-    Ok(())
+    let verified = if file.sha256.is_empty() {
+        None
+    } else {
+        let meta = std::fs::metadata(&dest)
+            .map_err(|e| KoeError::Config(format!("stat {}: {e}", file.name)))?;
+        Some(VerifiedChecksum {
+            name: file.name.clone(),
+            entry: ChecksumEntry {
+                mtime: mtime_secs(&meta),
+                sha256: file.sha256.clone(),
+            },
+        })
+    };
+
+    Ok(verified)
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -1202,6 +1242,61 @@ mod tests {
 
         // No cache file should have been written
         assert!(!tmp.join(CHECKSUM_CACHE_FILE).exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_model_writes_checksum_cache_for_verified_existing_files() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-model-test-download-cache-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let content = b"installed model data";
+        let sha = {
+            let mut hasher = Sha256::new();
+            hasher.update(content);
+            format!("{:x}", hasher.finalize())
+        };
+        let manifest = ModelManifest {
+            provider: "test".into(),
+            mode: None,
+            description: "test".into(),
+            repo: "test/model".into(),
+            files: vec![ModelFile {
+                name: "model.bin".into(),
+                size: content.len() as u64,
+                sha256: sha.clone(),
+                url: String::new(),
+            }],
+        };
+        fs::write(
+            tmp.join(MANIFEST_FILE),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(tmp.join("model.bin"), content).unwrap();
+
+        assert_eq!(
+            model_status(&tmp, VerifyMode::CacheOnly),
+            ModelStatus::NotInstalled
+        );
+        assert!(!tmp.join(CHECKSUM_CACHE_FILE).exists());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(download_model(&tmp, |_| {}, CancellationToken::new()))
+            .unwrap();
+
+        assert!(tmp.join(CHECKSUM_CACHE_FILE).exists());
+        assert_eq!(
+            model_status(&tmp, VerifyMode::CacheOnly),
+            ModelStatus::Installed
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
