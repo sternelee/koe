@@ -12,8 +12,13 @@ pub trait LocalMtBackend: Send + Sync {
 #[cfg(feature = "local-mt")]
 mod imp {
     use super::*;
-    use ndarray::{Array2, ArrayD, IxDyn};
-    use ort::{inputs, session::Session, value::Tensor};
+    use ndarray::{Array1, Array2, Array4, ArrayD, IxDyn};
+    use ort::{
+        inputs,
+        session::{Session, SessionInputValue},
+        value::Tensor,
+    };
+    use serde_json::{Map, Value};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use tokenizers::Tokenizer;
@@ -33,6 +38,83 @@ mod imp {
         let model_id = model_id_from_path(model_path);
         let backend = MarianBackend::new(&model_id, model_path, source_lang.unwrap_or("auto"))?;
         Ok(Arc::new(backend))
+    }
+
+    fn load_tokenizer(tokenizer_path: &Path) -> Result<Tokenizer> {
+        let tokenizer_bytes = std::fs::read(tokenizer_path)
+            .map_err(|e| KoeError::Config(format!("local MT read tokenizer: {e}")))?;
+        let mut tokenizer_json: Value = serde_json::from_slice(&tokenizer_bytes)
+            .map_err(|e| KoeError::Config(format!("local MT tokenizer JSON: {e}")))?;
+        let sanitized = sanitize_broken_precompiled_normalizer(&mut tokenizer_json);
+        let tokenizer_bytes = if sanitized {
+            serde_json::to_vec(&tokenizer_json)
+                .map_err(|e| KoeError::Config(format!("local MT tokenizer rewrite: {e}")))?
+        } else {
+            tokenizer_bytes
+        };
+        let tokenizer = std::panic::catch_unwind(|| Tokenizer::from_bytes(&tokenizer_bytes))
+            .map_err(|payload| {
+                KoeError::Config(format!(
+                    "local MT tokenizer panic: {}",
+                    panic_payload_message(payload)
+                ))
+            })?
+            .map_err(|e| KoeError::Config(format!("local MT tokenizer: {e}")))?;
+        if sanitized {
+            log::warn!(
+                "[translation] local MT tokenizer {} contains unsupported null precompiled_charsmap; loading without that normalizer",
+                tokenizer_path.display()
+            );
+        }
+        Ok(tokenizer)
+    }
+
+    fn sanitize_broken_precompiled_normalizer(value: &mut Value) -> bool {
+        match value {
+            Value::Object(map) => sanitize_broken_precompiled_normalizer_map(map),
+            Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
+                sanitize_broken_precompiled_normalizer(item) || changed
+            }),
+            _ => false,
+        }
+    }
+
+    fn sanitize_broken_precompiled_normalizer_map(map: &mut Map<String, Value>) -> bool {
+        let mut changed = false;
+        if let Some(normalizer) = map.get_mut("normalizer") {
+            if is_broken_precompiled_normalizer(normalizer) {
+                *normalizer = Value::Null;
+                changed = true;
+            } else {
+                changed |= sanitize_broken_precompiled_normalizer(normalizer);
+            }
+        }
+        for (key, value) in map.iter_mut() {
+            if key != "normalizer" {
+                changed |= sanitize_broken_precompiled_normalizer(value);
+            }
+        }
+        changed
+    }
+
+    fn is_broken_precompiled_normalizer(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.get("type").and_then(Value::as_str) == Some("Precompiled")
+                    && map.get("precompiled_charsmap").is_some_and(Value::is_null)
+            }
+            _ => false,
+        }
+    }
+
+    fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic payload".to_string()
+        }
     }
 
     pub fn provider_requires_source_language(model_path: &Path) -> bool {
@@ -89,6 +171,7 @@ mod imp {
         source_lang: String,
         encoder: Mutex<Session>,
         decoder: Mutex<Session>,
+        has_merged_decoder: bool,
         tokenizer: Tokenizer,
     }
 
@@ -117,8 +200,9 @@ mod imp {
                 .map_err(|e| KoeError::Config(format!("local MT decoder threads: {e}")))?
                 .commit_from_file(&decoder_path)
                 .map_err(|e| KoeError::Config(format!("local MT load decoder: {e}")))?;
-            let tokenizer = Tokenizer::from_file(&tokenizer_path)
-                .map_err(|e| KoeError::Config(format!("local MT tokenizer: {e}")))?;
+            let has_merged_decoder = decoder_path.file_name().and_then(|name| name.to_str())
+                == Some("decoder_model_merged.onnx");
+            let tokenizer = load_tokenizer(&tokenizer_path)?;
 
             log::info!(
                 "[translation] local MT backend loaded from {} ({model_id})",
@@ -131,6 +215,7 @@ mod imp {
                 source_lang: source_lang.to_string(),
                 encoder: Mutex::new(encoder),
                 decoder: Mutex::new(decoder),
+                has_merged_decoder,
                 tokenizer,
             })
         }
@@ -213,13 +298,65 @@ mod imp {
                 })?;
 
                 let mut decoder = self.decoder.lock().unwrap();
-                let outputs = decoder
-                    .run(inputs![
+                let outputs = if self.has_merged_decoder {
+                    let use_cache_branch = Tensor::from_array(Array1::from_vec(vec![false]))
+                        .map_err(|e| {
+                            KoeError::Config(format!("local MT decoder cache flag tensor: {e}"))
+                        })?;
+                    let empty_decoder_cache =
+                        Tensor::from_array(Array4::<f32>::zeros((1, 8, 0, 64))).map_err(|e| {
+                            KoeError::Config(format!("local MT decoder empty cache tensor: {e}"))
+                        })?;
+                    let encoder_cache =
+                        Tensor::from_array(Array4::<f32>::zeros((1, 8, enc_seq_len, 64))).map_err(
+                            |e| {
+                                KoeError::Config(format!(
+                                    "local MT decoder encoder cache tensor: {e}"
+                                ))
+                            },
+                        )?;
+                    let mut named_inputs = vec![
+                        ("input_ids".to_string(), SessionInputValue::from(dec_ids_t)),
+                        (
+                            "encoder_attention_mask".to_string(),
+                            SessionInputValue::from(enc_mask_t),
+                        ),
+                        (
+                            "encoder_hidden_states".to_string(),
+                            SessionInputValue::from(enc_hidden_t),
+                        ),
+                        (
+                            "use_cache_branch".to_string(),
+                            SessionInputValue::from(use_cache_branch),
+                        ),
+                    ];
+                    for layer in 0..6 {
+                        named_inputs.push((
+                            format!("past_key_values.{layer}.decoder.key"),
+                            SessionInputValue::from(empty_decoder_cache.clone()),
+                        ));
+                        named_inputs.push((
+                            format!("past_key_values.{layer}.decoder.value"),
+                            SessionInputValue::from(empty_decoder_cache.clone()),
+                        ));
+                        named_inputs.push((
+                            format!("past_key_values.{layer}.encoder.key"),
+                            SessionInputValue::from(encoder_cache.clone()),
+                        ));
+                        named_inputs.push((
+                            format!("past_key_values.{layer}.encoder.value"),
+                            SessionInputValue::from(encoder_cache.clone()),
+                        ));
+                    }
+                    decoder.run(named_inputs)
+                } else {
+                    decoder.run(inputs![
                         "input_ids" => dec_ids_t,
                         "encoder_attention_mask" => enc_mask_t,
                         "encoder_hidden_states" => enc_hidden_t
                     ])
-                    .map_err(|e| KoeError::Config(format!("local MT decoder run: {e}")))?;
+                }
+                .map_err(|e| KoeError::Config(format!("local MT decoder run: {e}")))?;
 
                 let (shape, logits) = outputs["logits"]
                     .try_extract_tensor::<f32>()
@@ -324,6 +461,8 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use serde_json::json;
+        use tokenizers::Tokenizer;
 
         #[test]
         fn nllb_models_require_explicit_source_language() {
@@ -340,6 +479,137 @@ mod imp {
             assert_eq!(iso_to_nllb("zh"), "zho_Hans");
             assert_eq!(iso_to_nllb("en"), "eng_Latn");
             assert_eq!(iso_to_nllb("ja"), "jpn_Jpan");
+        }
+
+        #[test]
+        fn broken_precompiled_normalizer_is_removed_before_loading() {
+            let mut tokenizer_json = json!({
+                "version": "1.0",
+                "truncation": null,
+                "padding": null,
+                "added_tokens": [
+                    {
+                        "id": 0,
+                        "special": true,
+                        "content": "</s>",
+                        "single_word": false,
+                        "lstrip": false,
+                        "rstrip": false,
+                        "normalized": false
+                    },
+                    {
+                        "id": 1,
+                        "special": true,
+                        "content": "<unk>",
+                        "single_word": false,
+                        "lstrip": false,
+                        "rstrip": false,
+                        "normalized": false
+                    },
+                    {
+                        "id": 2,
+                        "special": true,
+                        "content": "<pad>",
+                        "single_word": false,
+                        "lstrip": false,
+                        "rstrip": false,
+                        "normalized": false
+                    }
+                ],
+                "normalizer": {
+                    "type": "Precompiled",
+                    "precompiled_charsmap": null
+                },
+                "pre_tokenizer": {
+                    "type": "Sequence",
+                    "pretokenizers": [
+                        {
+                            "type": "WhitespaceSplit"
+                        },
+                        {
+                            "type": "Metaspace",
+                            "replacement": "▁",
+                            "add_prefix_space": true
+                        }
+                    ]
+                },
+                "post_processor": {
+                    "type": "TemplateProcessing",
+                    "single": [
+                        {
+                            "Sequence": {
+                                "id": "A",
+                                "type_id": 0
+                            }
+                        },
+                        {
+                            "SpecialToken": {
+                                "id": "</s>",
+                                "type_id": 0
+                            }
+                        }
+                    ],
+                    "pair": [
+                        {
+                            "Sequence": {
+                                "id": "A",
+                                "type_id": 0
+                            }
+                        },
+                        {
+                            "SpecialToken": {
+                                "id": "</s>",
+                                "type_id": 0
+                            }
+                        },
+                        {
+                            "Sequence": {
+                                "id": "B",
+                                "type_id": 0
+                            }
+                        },
+                        {
+                            "SpecialToken": {
+                                "id": "</s>",
+                                "type_id": 0
+                            }
+                        }
+                    ],
+                    "special_tokens": {
+                        "</s>": {
+                            "id": "</s>",
+                            "ids": [0],
+                            "tokens": ["</s>"]
+                        }
+                    }
+                },
+                "decoder": {
+                    "type": "Metaspace",
+                    "replacement": "▁",
+                    "add_prefix_space": true
+                },
+                "model": {
+                    "type": "Unigram",
+                    "unk_id": 1,
+                    "vocab": [
+                        ["</s>", 0.0],
+                        ["<unk>", 0.0],
+                        ["<pad>", 0.0],
+                        ["▁hello", -1.0],
+                        ["world", -1.0]
+                    ]
+                }
+            });
+
+            assert!(sanitize_broken_precompiled_normalizer(&mut tokenizer_json));
+            assert!(tokenizer_json["normalizer"].is_null());
+
+            let tokenizer = Tokenizer::from_bytes(serde_json::to_vec(&tokenizer_json).unwrap())
+                .expect("sanitized tokenizer should load");
+            let encoding = tokenizer
+                .encode("hello world", true)
+                .expect("sanitized tokenizer should encode");
+            assert!(!encoding.get_ids().is_empty());
         }
     }
 }

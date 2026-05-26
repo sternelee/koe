@@ -106,4 +106,12 @@ typedef NS_ENUM(NSInteger, SPModelVerifyMode) {
 /// Push audio to the translation pipeline (same format as normal sessions).
 - (void)pushTranslationAudioFrame:(const void *)buffer length:(uint32_t)length;
 
+// ─── Translation Test ──────────────────────────────────────────────
+
+/// Test MT with config JSON. Returns dict: { success, translated_text, elapsed_ms, message }
+- (NSDictionary *)testTranslationMT:(NSString *)configJSON text:(NSString *)text sourceLang:(NSString *)sourceLang targetLang:(NSString *)targetLang;
+
+/// Test TTS with config JSON. Returns dict: { success, audio_path, elapsed_ms, message }
+- (NSDictionary *)testTranslationTTS:(NSString *)configJSON text:(NSString *)text targetLang:(NSString *)targetLang;
+
 @end

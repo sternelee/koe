@@ -790,7 +790,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSButton *translationMtModelDeleteButton;
 @property (nonatomic, strong) NSProgressIndicator *translationMtModelProgressBar;
 @property (nonatomic, strong) NSTextField *translationMtModelProgressSizeLabel;
-
+@property (nonatomic, strong) NSTextField *translationMtTestTextField;
+@property (nonatomic, strong) NSButton *translationMtTestButton;
+@property (nonatomic, strong) NSTextField *translationMtTestResultLabel;
 
 @property (nonatomic, strong) NSSwitch *translationTtsEnabledSwitch;
 @property (nonatomic, strong) NSPopUpButton *translationTtsProviderPopup;
@@ -807,6 +809,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *translationTtsModelProgressSizeLabel;
 @property (nonatomic, strong) NSTextField *translationTtsBaseUrlField;
 @property (nonatomic, strong) NSPopUpButton *translationTtsSpeakerIdField;
+@property (nonatomic, strong) NSTextField *translationTtsTestTextField;
+@property (nonatomic, strong) NSButton *translationTtsTestButton;
+@property (nonatomic, strong) NSTextField *translationTtsTestResultLabel;
+@property (nonatomic, strong) NSSound *ttsTestSound;
 
 // ── Virtual Microphone (Translation pane) ──
 @property (nonatomic, strong) NSView *virtualMicStatusDot;
@@ -825,6 +831,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)updateModelStatusLabel;
 - (void)asrProviderChanged:(id)sender;
 - (void)testAsrConnection:(id)sender;
+- (void)testTranslationMt:(id)sender;
+- (void)testTranslationTts:(id)sender;
 - (void)asrAdvancedToggled:(id)sender;
 - (CGFloat)targetAsrPaneHeightForProvider:(NSString *)provider advancedExpanded:(BOOL)expanded;
 - (void)resizeAsrPaneToCurrentProvider;
@@ -3017,7 +3025,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat fieldX = labelW + 16.0;
     CGFloat fieldW = contentW - fieldX - 8.0;
 
-    CGFloat contentHeight = 660;
+    CGFloat contentHeight = 620;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
 
@@ -3311,6 +3319,24 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtLocalHintLabel.hidden = YES;
         [section addSubview:self.translationMtLocalHintLabel];
 
+        // MT Test section
+        sy -= MAX(rowH, mtLocalHintHeight) + 8.0;
+        NSTextField *mtTestLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.mt.testTextLabel") frame:NSMakeRect(0, sy, labelW, 22)];
+        [section addSubview:mtTestLabel];
+        self.translationMtTestTextField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 80, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.mt.testTextPlaceholder")];
+        self.translationMtTestTextField.stringValue = @"你好，很高兴认识你.";
+        [section addSubview:self.translationMtTestTextField];
+        self.translationMtTestButton = [NSButton buttonWithTitle:KoeLocalizedString(@"setupWizard.common.test") target:self action:@selector(testTranslationMt:)];
+        self.translationMtTestButton.bezelStyle = NSBezelStyleRounded;
+        self.translationMtTestButton.frame = NSMakeRect(fieldX + fieldW - 76, sy - 2, 76, 28);
+        [section addSubview:self.translationMtTestButton];
+        sy -= rowH;
+        self.translationMtTestResultLabel = [NSTextField wrappingLabelWithString:@""];
+        self.translationMtTestResultLabel.font = [NSFont systemFontOfSize:12];
+        self.translationMtTestResultLabel.selectable = YES;
+        self.translationMtTestResultLabel.frame = NSMakeRect(fieldX, sy + 4, fieldW, 20);
+        [section addSubview:self.translationMtTestResultLabel];
+
     }
     // TTS section
     {
@@ -3453,6 +3479,24 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationTtsBaseUrlField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"https://api.elevenlabs.io"];
         self.translationTtsBaseUrlField.tag = kTranslationTtsCloudOnlyTag;
         [section addSubview:self.translationTtsBaseUrlField];
+
+        // TTS Test section
+        sy -= 20;
+        NSTextField *ttsTestLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.tts.testTextLabel") frame:NSMakeRect(0, sy, labelW, 22)];
+        [section addSubview:ttsTestLabel];
+        self.translationTtsTestTextField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 80, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.tts.testTextPlaceholder")];
+        self.translationTtsTestTextField.stringValue = @"Hello, this is a text-to-speech test.";
+        [section addSubview:self.translationTtsTestTextField];
+        self.translationTtsTestButton = [NSButton buttonWithTitle:KoeLocalizedString(@"setupWizard.common.test") target:self action:@selector(testTranslationTts:)];
+        self.translationTtsTestButton.bezelStyle = NSBezelStyleRounded;
+        self.translationTtsTestButton.frame = NSMakeRect(fieldX + fieldW - 76, sy - 2, 76, 28);
+        [section addSubview:self.translationTtsTestButton];
+        sy -= rowH;
+        self.translationTtsTestResultLabel = [NSTextField wrappingLabelWithString:@""];
+        self.translationTtsTestResultLabel.font = [NSFont systemFontOfSize:12];
+        self.translationTtsTestResultLabel.selectable = YES;
+        self.translationTtsTestResultLabel.frame = NSMakeRect(fieldX, sy + 4, fieldW, 20);
+        [section addSubview:self.translationTtsTestResultLabel];
     }
 
     [self translationStepChanged:nil];
@@ -3560,6 +3604,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationTtsModelField.enabled = enabled && !usesLocalModel;
     self.translationTtsBaseUrlField.enabled = enabled;
     self.translationTtsSpeakerIdField.enabled = enabled && usesLocalModel;
+    self.translationTtsTestTextField.enabled = enabled;
+    self.translationTtsTestButton.enabled = enabled;
     if (usesLocalModel) {
         [self updateTranslationTtsModelStatusLabel];
         id selectedLocalModel = self.translationTtsLocalModelPopup.selectedItem.representedObject;
@@ -3646,6 +3692,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtModelProgressBar.hidden = YES;
         self.translationMtModelProgressSizeLabel.hidden = YES;
     }
+
+    self.translationMtTestTextField.enabled = enabled;
+    self.translationMtTestButton.enabled = enabled;
 }
 
 - (void)updateTranslationMtPlaceholders {
@@ -6784,6 +6833,165 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.asrTestResultLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.installed");
         self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
     }
+}
+
+- (void)testTranslationMt:(id)sender {
+    NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
+    NSString *mtModel = @"";
+    if ([provider isEqualToString:@"open_ai_compatible"]) {
+        if (self.translationMtBaseUrlField.stringValue.length == 0 || self.translationMtModelField.stringValue.length == 0) {
+            self.translationMtTestResultLabel.stringValue = @"Please fill in Base URL and Model first.";
+            self.translationMtTestResultLabel.textColor = [NSColor systemOrangeColor];
+            return;
+        }
+        mtModel = self.translationMtModelField.stringValue;
+    } else if ([provider isEqualToString:@"local"]) {
+        mtModel = self.translationMtLocalModelField.stringValue;
+        if (mtModel.length == 0) {
+            self.translationMtTestResultLabel.stringValue = @"Please enter a local model path first.";
+            self.translationMtTestResultLabel.textColor = [NSColor systemOrangeColor];
+            return;
+        }
+    }
+
+    NSString *sourceLang = self.translationSourceLangField.stringValue ?: @"auto";
+    NSString *targetLang = self.translationTargetLangField.stringValue ?: @"en";
+    if (targetLang.length == 0) targetLang = @"en";
+
+    NSDictionary *mtConfig = @{
+        @"enabled": @YES,
+        @"provider": provider,
+        @"base_url": self.translationMtBaseUrlField.stringValue ?: @"",
+        @"api_key": (self.translationMtApiKeyToggle.tag == 1 ? self.translationMtApiKeyField.stringValue : self.translationMtApiKeySecureField.stringValue) ?: @"",
+        @"model": mtModel,
+        @"system_prompt": self.translationMtSystemPromptField.stringValue ?: @"",
+        @"timeout_ms": @10000,
+    };
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:mtConfig options:0 error:nil];
+    NSString *configJson = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : nil;
+    if (configJson.length == 0) {
+        self.translationMtTestResultLabel.stringValue = @"Test failed: invalid config";
+        self.translationMtTestResultLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    self.translationMtTestButton.enabled = NO;
+    self.translationMtTestResultLabel.stringValue = @"Testing...";
+    self.translationMtTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSString *testText = self.translationMtTestTextField.stringValue ?: @"";
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSDictionary *result = [self.rustBridge testTranslationMT:configJson text:testText sourceLang:sourceLang targetLang:targetLang];
+        dispatch_async(dispatch_get_main_queue(), ^{
+
+            self.translationMtTestButton.enabled = YES;
+            if (!result) {
+                self.translationMtTestResultLabel.stringValue = @"Test failed: invalid response from core";
+                self.translationMtTestResultLabel.textColor = [NSColor systemRedColor];
+                return;
+            }
+            BOOL success = [result[@"success"] boolValue];
+            NSString *message = result[@"message"] ?: @"Unknown result";
+            NSNumber *elapsedMs = result[@"elapsed_ms"];
+            NSString *timeStr = elapsedMs ? [NSString stringWithFormat:@" (%.1fs)", elapsedMs.doubleValue / 1000.0] : @"";
+            if (success) {
+                NSString *translated = result[@"translated_text"] ?: @"";
+                self.translationMtTestResultLabel.stringValue = [NSString stringWithFormat:@"%@%@", translated, timeStr];
+                self.translationMtTestResultLabel.textColor = [NSColor systemGreenColor];
+            } else {
+                self.translationMtTestResultLabel.stringValue = [NSString stringWithFormat:@"%@%@", message, timeStr];
+                self.translationMtTestResultLabel.textColor = [NSColor systemRedColor];
+            }
+        });
+    });
+}
+
+- (void)testTranslationTts:(id)sender {
+    NSString *provider = self.translationTtsProviderPopup.selectedItem.representedObject ?: @"elevenlabs";
+    BOOL isLocal = [provider isEqualToString:@"kokoro_onnx"] || [provider isEqualToString:@"supertonic_onnx"];
+    NSString *ttsModel = @"";
+    NSString *ttsApiKey = @"";
+    NSString *ttsVoiceId = @"";
+
+    if (isLocal) {
+        ttsModel = self.translationTtsLocalModelPopup.selectedItem.representedObject ?: @"";
+        if (ttsModel.length == 0) ttsModel = self.translationTtsModelField.stringValue ?: @"";
+    } else {
+        ttsModel = self.translationTtsModelField.stringValue ?: @"";
+        ttsApiKey = (self.translationTtsApiKeyToggle.tag == 1 ? self.translationTtsApiKeyField.stringValue : self.translationTtsApiKeySecureField.stringValue) ?: @"";
+        ttsVoiceId = self.translationTtsVoiceIdField.stringValue ?: @"";
+        if (ttsApiKey.length == 0 || ttsVoiceId.length == 0) {
+            self.translationTtsTestResultLabel.stringValue = @"Please fill in API Key and Voice ID first.";
+            self.translationTtsTestResultLabel.textColor = [NSColor systemOrangeColor];
+            return;
+        }
+    }
+
+    NSString *targetLang = self.translationTargetLangField.stringValue ?: @"en";
+    if (targetLang.length == 0) targetLang = @"en";
+
+    NSString *speakerId = @"0";
+    if (isLocal && [provider isEqualToString:@"kokoro_onnx"]) {
+        id rep = self.translationTtsSpeakerIdField.selectedItem.representedObject;
+        if (rep) speakerId = [NSString stringWithFormat:@"%@", rep];
+    } else if (isLocal) {
+        speakerId = [NSString stringWithFormat:@"%ld", self.translationTtsSpeakerIdField.indexOfSelectedItem];
+    }
+
+    NSDictionary *ttsConfig = @{
+        @"enabled": @YES,
+        @"provider": provider,
+        @"api_key": ttsApiKey,
+        @"voice_id": ttsVoiceId,
+        @"model": ttsModel,
+        @"base_url": self.translationTtsBaseUrlField.stringValue ?: @"",
+        @"speed": @1.0,
+        @"preset_voice": self.translationTtsSpeakerIdField.selectedItem.representedObject ?: @"",
+        @"speaker_id": @([speakerId integerValue]),
+        @"timeout_ms": @30000,
+    };
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:ttsConfig options:0 error:nil];
+    NSString *configJson = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : nil;
+    if (configJson.length == 0) {
+        self.translationTtsTestResultLabel.stringValue = @"Test failed: invalid config";
+        self.translationTtsTestResultLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    self.translationTtsTestButton.enabled = NO;
+    self.translationTtsTestResultLabel.stringValue = @"Testing...";
+    self.translationTtsTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSString *testText = self.translationTtsTestTextField.stringValue ?: @"";
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSDictionary *result = [self.rustBridge testTranslationTTS:configJson text:testText targetLang:targetLang];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.translationTtsTestButton.enabled = YES;
+            if (!result) {
+                self.translationTtsTestResultLabel.stringValue = @"Test failed: invalid response from core";
+                self.translationTtsTestResultLabel.textColor = [NSColor systemRedColor];
+                return;
+            }
+            BOOL success = [result[@"success"] boolValue];
+            NSString *message = result[@"message"] ?: @"Unknown result";
+            NSNumber *elapsedMs = result[@"elapsed_ms"];
+            NSString *timeStr = elapsedMs ? [NSString stringWithFormat:@" (%.1fs)", elapsedMs.doubleValue / 1000.0] : @"";
+            if (success) {
+                NSString *audioPath = result[@"audio_path"] ?: @"";
+                if (audioPath.length > 0) {
+                    self.ttsTestSound = [[NSSound alloc] initWithContentsOfFile:audioPath byReference:YES];
+                    [self.ttsTestSound play];
+                }
+                self.translationTtsTestResultLabel.stringValue = [NSString stringWithFormat:@"Playing...%@", timeStr];
+                self.translationTtsTestResultLabel.textColor = [NSColor systemGreenColor];
+            } else {
+                self.translationTtsTestResultLabel.stringValue = [NSString stringWithFormat:@"%@%@", message, timeStr];
+                self.translationTtsTestResultLabel.textColor = [NSColor systemRedColor];
+            }
+        });
+    });
 }
 
 - (void)testDoubaoImeConnection {

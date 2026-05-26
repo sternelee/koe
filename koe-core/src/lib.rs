@@ -30,6 +30,8 @@ use crate::translation::engine::{AsrFactory, TranslationEngine, TranslationMode}
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, TranscriptAggregator};
 use reqwest::Client;
 
+use std::any::Any;
+
 use std::collections::HashSet;
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2060,6 +2062,311 @@ pub unsafe extern "C" fn sp_core_free_string(s: *mut c_char) {
     }
 }
 
+// ─── Translation Test Helpers ───────────────────────────────────────
+
+fn write_f32_pcm_to_wav(path: &str, samples: &[f32], sample_rate: u32) -> std::io::Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let mut file = File::create(path)?;
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 32;
+    let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
+    let block_align = num_channels * (bits_per_sample / 8);
+    let data_size = (samples.len() * std::mem::size_of::<f32>()) as u32;
+    let chunk_size = 36 + data_size;
+
+    file.write_all(b"RIFF")?;
+    file.write_all(&chunk_size.to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+
+    file.write_all(b"fmt ")?;
+    file.write_all(&16u32.to_le_bytes())?;
+    file.write_all(&3u16.to_le_bytes())?;
+    file.write_all(&num_channels.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&byte_rate.to_le_bytes())?;
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&bits_per_sample.to_le_bytes())?;
+
+    file.write_all(b"data")?;
+    file.write_all(&data_size.to_le_bytes())?;
+    for sample in samples {
+        file.write_all(&sample.to_le_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn json_response_ptr(value: serde_json::Value) -> *mut c_char {
+    CString::new(value.to_string())
+        .unwrap_or_default()
+        .into_raw()
+}
+
+fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_string(),
+            Err(_) => "panic without message".to_string(),
+        },
+    }
+}
+
+fn catch_ffi_json_response<F, G>(operation: &str, body: F, panic_value: G) -> *mut c_char
+where
+    F: FnOnce() -> *mut c_char,
+    G: FnOnce(String) -> serde_json::Value,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(ptr) => ptr,
+        Err(payload) => {
+            let message = panic_payload_message(payload);
+            log::error!("[ffi] {operation} panicked: {message}");
+            json_response_ptr(panic_value(message))
+        }
+    }
+}
+
+/// Test machine translation with the given configuration.
+///
+/// # Safety
+/// All pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn sp_translation_mt_test(
+    mt_config_json: *const c_char,
+    text: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+) -> *mut c_char {
+    catch_ffi_json_response(
+        "translation MT test",
+        || {
+            let json = match unsafe { cstr_to_str(mt_config_json) } {
+                Some(s) => s,
+                None => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": "Missing MT config JSON"
+                    }));
+                }
+            };
+            let config: crate::translation::config::MtConfig = match serde_json::from_str(json) {
+                Ok(c) => c,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Invalid MT config JSON: {e}")
+                    }));
+                }
+            };
+            let text = match unsafe { cstr_to_str(text) } {
+                Some(s) => s,
+                None => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": "Missing text"
+                    }));
+                }
+            };
+            let source_lang = unsafe { cstr_to_str(source_lang) }.unwrap_or("auto");
+            let target_lang = match unsafe { cstr_to_str(target_lang) } {
+                Some(s) => s,
+                None => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": "Missing target language"
+                    }));
+                }
+            };
+
+            let rt = match Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Failed to create runtime: {e}")
+                    }));
+                }
+            };
+
+            let client = match build_http_client(config.timeout_ms) {
+                Ok(c) => c,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "translated_text": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Failed to create HTTP client: {e}")
+                    }));
+                }
+            };
+
+            let mt = crate::translation::mt::MtClient::new(client, config, Some(source_lang));
+            let start = Instant::now();
+            let result = rt.block_on(mt.translate(text, source_lang, target_lang));
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+
+            let json = match result {
+                Ok(translated) => serde_json::json!({
+                    "success": true,
+                    "translated_text": translated,
+                    "elapsed_ms": elapsed_ms,
+                    "message": "Translation successful",
+                }),
+                Err(e) => serde_json::json!({
+                    "success": false,
+                    "translated_text": "",
+                    "elapsed_ms": elapsed_ms,
+                    "message": format!("{e}"),
+                }),
+            };
+
+            json_response_ptr(json)
+        },
+        |message| {
+            serde_json::json!({
+                "success": false,
+                "translated_text": "",
+                "elapsed_ms": 0,
+                "message": format!("Internal error while running MT test: {message}"),
+            })
+        },
+    )
+}
+
+/// Test text-to-speech with the given configuration.
+///
+/// # Safety
+/// All pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn sp_translation_tts_test(
+    tts_config_json: *const c_char,
+    text: *const c_char,
+    target_lang: *const c_char,
+) -> *mut c_char {
+    catch_ffi_json_response(
+        "translation TTS test",
+        || {
+            let json = match unsafe { cstr_to_str(tts_config_json) } {
+                Some(s) => s,
+                None => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "audio_path": "",
+                        "elapsed_ms": 0,
+                        "message": "Missing TTS config JSON"
+                    }));
+                }
+            };
+            let config: crate::translation::config::TtsConfig = match serde_json::from_str(json) {
+                Ok(c) => c,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "audio_path": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Invalid TTS config JSON: {e}")
+                    }));
+                }
+            };
+            let text = match unsafe { cstr_to_str(text) } {
+                Some(s) => s,
+                None => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "audio_path": "",
+                        "elapsed_ms": 0,
+                        "message": "Missing text"
+                    }));
+                }
+            };
+            let target_lang = unsafe { cstr_to_str(target_lang) }.unwrap_or("");
+
+            let rt = match Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "audio_path": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Failed to create runtime: {e}")
+                    }));
+                }
+            };
+
+            let client = match build_http_client(config.timeout_ms) {
+                Ok(c) => c,
+                Err(e) => {
+                    return json_response_ptr(serde_json::json!({
+                        "success": false,
+                        "audio_path": "",
+                        "elapsed_ms": 0,
+                        "message": format!("Failed to create HTTP client: {e}")
+                    }));
+                }
+            };
+
+            let tts = crate::translation::tts::TtsClient::new(client, config);
+            let start = Instant::now();
+            let result =
+                rt.block_on(tts.synthesize(text, Some(target_lang).filter(|s| !s.is_empty())));
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+
+            let json = match result {
+                Ok((samples, sample_rate)) => {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let path = format!("/tmp/koe_tts_test_{timestamp}.wav");
+                    match write_f32_pcm_to_wav(&path, &samples, sample_rate) {
+                        Ok(()) => serde_json::json!({
+                            "success": true,
+                            "audio_path": path,
+                            "elapsed_ms": elapsed_ms,
+                            "message": "TTS synthesis successful",
+                        }),
+                        Err(e) => serde_json::json!({
+                            "success": false,
+                            "audio_path": "",
+                            "elapsed_ms": elapsed_ms,
+                            "message": format!("Failed to write WAV: {e}"),
+                        }),
+                    }
+                }
+                Err(e) => serde_json::json!({
+                    "success": false,
+                    "audio_path": "",
+                    "elapsed_ms": elapsed_ms,
+                    "message": format!("{e}"),
+                }),
+            };
+
+            json_response_ptr(json)
+        },
+        |message| {
+            serde_json::json!({
+                "success": false,
+                "audio_path": "",
+                "elapsed_ms": 0,
+                "message": format!("Internal error while running TTS test: {message}"),
+            })
+        },
+    )
+}
+
 /// Model status check with configurable verification mode.
 /// mode: 0=Normal (cached sha256), 1=CacheOnly (no compute), 2=ForceVerify (always compute)
 /// Returns: 0=not installed, 1=incomplete, 2=installed
@@ -2630,5 +2937,28 @@ mod tests {
 
         let error = validate_prompt_templates(&templates).unwrap_err();
         assert!(error.contains("non-empty prompt"));
+    }
+
+    #[test]
+    fn catch_ffi_json_response_converts_panics_to_json_errors() {
+        let ptr = catch_ffi_json_response(
+            "unit test",
+            || panic!("boom"),
+            |message| {
+                serde_json::json!({
+                    "success": false,
+                    "message": format!("converted: {message}"),
+                })
+            },
+        );
+
+        let json = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { sp_core_free_string(ptr) };
+
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["success"], false);
+        assert_eq!(value["message"], "converted: boom");
     }
 }

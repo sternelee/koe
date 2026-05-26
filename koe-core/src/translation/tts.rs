@@ -524,13 +524,13 @@ fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsC
     let voices = require_file(dir, "voices.bin")?;
     let tokens = require_file(dir, "tokens.txt")?;
 
-    let data_dir = {
-        let d = dir.join("espeak-ng-data");
-        if d.exists() {
-            Some(d.to_string_lossy().into_owned())
-        } else {
-            None
-        }
+    let data_dir = kokoro_support_dir(dir, "espeak-ng-data");
+    let dict_dir = kokoro_support_dir(dir, "dict");
+    let lexicon = kokoro_lexicon(dir, dict_dir.is_some());
+    let lang = if lexicon.is_some() {
+        None
+    } else {
+        Some("en-us".to_string())
     };
 
     Ok(sherpa_onnx::OfflineTtsConfig {
@@ -540,6 +540,9 @@ fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsC
                 voices: Some(voices),
                 tokens: Some(tokens),
                 data_dir,
+                dict_dir,
+                lexicon,
+                lang,
                 ..Default::default()
             },
             num_threads: 2,
@@ -548,6 +551,32 @@ fn build_kokoro_config(dir: &std::path::Path) -> Result<sherpa_onnx::OfflineTtsC
         max_num_sentences: 1,
         ..Default::default()
     })
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn kokoro_support_dir(dir: &std::path::Path, name: &str) -> Option<String> {
+    let path = dir.join(name);
+    path.exists().then(|| path.to_string_lossy().into_owned())
+}
+
+#[cfg(feature = "sherpa-onnx")]
+fn kokoro_lexicon(dir: &std::path::Path, has_dict_dir: bool) -> Option<String> {
+    if !has_dict_dir {
+        return None;
+    }
+
+    let lexicons = ["lexicon-us-en.txt", "lexicon-zh.txt"]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .filter(|path| path.exists())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    if lexicons.is_empty() {
+        None
+    } else {
+        Some(lexicons.join(","))
+    }
 }
 
 #[cfg(feature = "sherpa-onnx")]
@@ -625,6 +654,7 @@ fn require_file(dir: &std::path::Path, name: &str) -> Result<String> {
 #[cfg(all(test, feature = "sherpa-onnx"))]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn kokoro_preset_voice_maps_to_expected_speaker_id() {
@@ -642,6 +672,70 @@ mod tests {
         config.preset_voice = "unknown_voice".into();
         config.speaker_id = 12;
         assert_eq!(TtsClient::kokoro_speaker_id(&config), 12);
+    }
+
+    #[test]
+    fn kokoro_config_falls_back_to_en_us_when_multilingual_assets_are_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-kokoro-config-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(tmp.join("espeak-ng-data")).unwrap();
+        fs::write(tmp.join("model.onnx"), b"x").unwrap();
+        fs::write(tmp.join("voices.bin"), b"x").unwrap();
+        fs::write(tmp.join("tokens.txt"), b"x").unwrap();
+
+        let config = build_kokoro_config(&tmp).unwrap();
+        assert_eq!(config.model.kokoro.lang.as_deref(), Some("en-us"));
+        assert!(config.model.kokoro.dict_dir.is_none());
+        assert!(config.model.kokoro.lexicon.is_none());
+        assert_eq!(
+            config.model.kokoro.data_dir.as_deref(),
+            Some(tmp.join("espeak-ng-data").to_string_lossy().as_ref())
+        );
+
+        fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn kokoro_config_uses_multilingual_assets_when_present() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-kokoro-multilingual-config-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(tmp.join("espeak-ng-data")).unwrap();
+        fs::create_dir_all(tmp.join("dict")).unwrap();
+        fs::write(tmp.join("model.onnx"), b"x").unwrap();
+        fs::write(tmp.join("voices.bin"), b"x").unwrap();
+        fs::write(tmp.join("tokens.txt"), b"x").unwrap();
+        fs::write(tmp.join("lexicon-us-en.txt"), b"x").unwrap();
+        fs::write(tmp.join("lexicon-zh.txt"), b"x").unwrap();
+
+        let config = build_kokoro_config(&tmp).unwrap();
+        assert!(config.model.kokoro.lang.is_none());
+        assert_eq!(
+            config.model.kokoro.dict_dir.as_deref(),
+            Some(tmp.join("dict").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            config.model.kokoro.lexicon.as_deref(),
+            Some(
+                format!(
+                    "{},{}",
+                    tmp.join("lexicon-us-en.txt").to_string_lossy(),
+                    tmp.join("lexicon-zh.txt").to_string_lossy()
+                )
+                .as_str()
+            )
+        );
+
+        fs::remove_dir_all(tmp).unwrap();
     }
 
     #[test]

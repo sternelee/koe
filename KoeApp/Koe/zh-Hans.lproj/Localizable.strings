@@ -144,6 +144,10 @@
 "setupWizard.translation.placeholder.voiceId" = "Voice ID";
 "setupWizard.translation.placeholder.voiceIdMinimax" = "例如：male-qn-qingse";
 "setupWizard.translation.placeholder.voiceIdElevenlabs" = "例如：21m00Tcm4TlvDq8ikWAM";
+"setupWizard.translation.mt.testTextLabel" = "测试文本";
+"setupWizard.translation.mt.testTextPlaceholder" = "输入要翻译的文本...";
+"setupWizard.translation.tts.testTextLabel" = "测试文本";
+"setupWizard.translation.tts.testTextPlaceholder" = "输入要合成的文本...";
 "setupWizard.llm.outputTranslation.title" = "输出翻译";
 "setupWizard.llm.outputTranslation.targetLanguage" = "目标语言";
 "setupWizard.llm.outputTranslation.targetLanguagePlaceholder" = "English";

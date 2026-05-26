@@ -144,6 +144,10 @@
 "setupWizard.translation.placeholder.voiceId" = "Voice identifier";
 "setupWizard.translation.placeholder.voiceIdMinimax" = "e.g. male-qn-qingse";
 "setupWizard.translation.placeholder.voiceIdElevenlabs" = "e.g. 21m00Tcm4TlvDq8ikWAM";
+"setupWizard.translation.mt.testTextLabel" = "Test Text";
+"setupWizard.translation.mt.testTextPlaceholder" = "Enter text to translate...";
+"setupWizard.translation.tts.testTextLabel" = "Test Text";
+"setupWizard.translation.tts.testTextPlaceholder" = "Enter text to synthesize...";
 "setupWizard.llm.outputTranslation.title" = "Output Translation";
 "setupWizard.llm.outputTranslation.targetLanguage" = "Target Language";
 "setupWizard.llm.outputTranslation.targetLanguagePlaceholder" = "English";

@@ -387,4 +387,22 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
     sp_core_translation_push_audio((const uint8_t *)buffer, length);
 }
 
+// ─── Translation Test ──────────────────────────────────────────────
+
+- (NSDictionary *)testTranslationMT:(NSString *)configJSON text:(NSString *)text sourceLang:(NSString *)sourceLang targetLang:(NSString *)targetLang {
+    char *raw = sp_translation_mt_test(configJSON.UTF8String, text.UTF8String, sourceLang.UTF8String, targetLang.UTF8String);
+    NSString *jsonStr = raw ? [NSString stringWithUTF8String:raw] : @"";
+    if (raw) sp_core_free_string(raw);
+    if (jsonStr.length == 0) return nil;
+    return [NSJSONSerialization JSONObjectWithData:[jsonStr dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+}
+
+- (NSDictionary *)testTranslationTTS:(NSString *)configJSON text:(NSString *)text targetLang:(NSString *)targetLang {
+    char *raw = sp_translation_tts_test(configJSON.UTF8String, text.UTF8String, targetLang.UTF8String);
+    NSString *jsonStr = raw ? [NSString stringWithUTF8String:raw] : @"";
+    if (raw) sp_core_free_string(raw);
+    if (jsonStr.length == 0) return nil;
+    return [NSJSONSerialization JSONObjectWithData:[jsonStr dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+}
+
 @end
