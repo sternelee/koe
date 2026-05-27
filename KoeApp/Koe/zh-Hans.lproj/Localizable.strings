@@ -124,6 +124,7 @@
 "setupWizard.translation.tts.provider.minimax" = "MiniMax";
 "setupWizard.translation.tts.provider.kokoroOnnx" = "Kokoro ONNX（本地）";
 "setupWizard.translation.tts.provider.supertonicOnnx" = "Supertonic ONNX（本地）";
+"setupWizard.translation.tts.provider.kittenOnnx" = "KittenTTS ONNX（本地）";
 "setupWizard.translation.virtualMic.hint" = "将翻译后的语音路由到系统麦克风，可用于 Zoom/Teams。需要管理员密码。";
 "setupWizard.translation.virtualMic.status.ready" = "驱动已就绪";
 "setupWizard.translation.virtualMic.status.missing" = "驱动未安装";

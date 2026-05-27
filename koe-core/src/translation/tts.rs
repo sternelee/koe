@@ -1,4 +1,7 @@
 use crate::errors::{KoeError, Result};
+#[cfg(feature = "kitten-onnx")]
+use crate::translation::kitten::KittenOnnxBackend;
+
 use crate::translation::config::{TtsConfig, TtsProvider};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -63,38 +66,46 @@ const KOKORO_PRESET_VOICES: &[(&str, i32)] = &[
     ("zm_yunyang", 52),
 ];
 
-#[cfg(feature = "sherpa-onnx")]
+#[cfg(any(feature = "sherpa-onnx", feature = "kitten-onnx"))]
 enum LocalTtsBackend {
+    #[cfg(feature = "sherpa-onnx")]
     Kokoro(KokoroOnnxBackend),
+    #[cfg(feature = "sherpa-onnx")]
     Supertonic(SupertonicOnnxBackend),
+    #[cfg(feature = "kitten-onnx")]
+    Kitten(KittenOnnxBackend),
 }
 
 /// Text-to-speech client that supports multiple cloud and local providers.
 pub struct TtsClient {
     client: Client,
     config: TtsConfig,
-    #[cfg(feature = "sherpa-onnx")]
+    #[cfg(any(feature = "sherpa-onnx", feature = "kitten-onnx"))]
     local_backend: Option<LocalTtsBackend>,
 }
 
 impl TtsClient {
     pub fn new(client: Client, config: TtsConfig) -> Self {
-        #[cfg(feature = "sherpa-onnx")]
+        #[cfg(any(feature = "sherpa-onnx", feature = "kitten-onnx"))]
         let local_backend = Self::build_local_backend(&config);
 
         Self {
             client,
             config,
-            #[cfg(feature = "sherpa-onnx")]
+            #[cfg(any(feature = "sherpa-onnx", feature = "kitten-onnx"))]
             local_backend,
         }
     }
 
-    #[cfg(feature = "sherpa-onnx")]
+    #[cfg(any(feature = "sherpa-onnx", feature = "kitten-onnx"))]
     fn build_local_backend(config: &TtsConfig) -> Option<LocalTtsBackend> {
         match config.provider {
+            #[cfg(feature = "sherpa-onnx")]
             TtsProvider::KokoroOnnx => Self::load_kokoro_backend(config),
+            #[cfg(feature = "sherpa-onnx")]
             TtsProvider::SupertonicOnnx => Self::load_supertonic_backend(config),
+            #[cfg(feature = "kitten-onnx")]
+            TtsProvider::KittenOnnx => Self::load_kitten_backend(config),
             _ => None,
         }
     }
@@ -147,6 +158,29 @@ impl TtsClient {
         }
     }
 
+    #[cfg(feature = "kitten-onnx")]
+    fn load_kitten_backend(config: &TtsConfig) -> Option<LocalTtsBackend> {
+        if config.model.is_empty() {
+            log::warn!("[tts] Kitten ONNX provider selected but model path is empty");
+            return None;
+        }
+
+        let model_dir = crate::config::resolve_model_dir(&config.model);
+        match KittenOnnxBackend::new(&model_dir, config) {
+            Ok(backend) => {
+                log::info!(
+                    "[tts] Kitten ONNX backend loaded from {}",
+                    model_dir.display()
+                );
+                Some(LocalTtsBackend::Kitten(backend))
+            }
+            Err(e) => {
+                log::warn!("[tts] Failed to load Kitten ONNX backend: {e}");
+                None
+            }
+        }
+    }
+
     /// Synthesize `text` into f32 PCM audio.
     ///
     /// Returns `(samples, sample_rate)`.
@@ -160,6 +194,7 @@ impl TtsClient {
             TtsProvider::MiniMax => self.minimax_synthesize(text).await,
             TtsProvider::KokoroOnnx => self.kokoro_synthesize(text).await,
             TtsProvider::SupertonicOnnx => self.supertonic_synthesize(text, language).await,
+            TtsProvider::KittenOnnx => self.kitten_synthesize(text, language).await,
         }
     }
 
@@ -346,6 +381,41 @@ impl TtsClient {
             ))
         }
     }
+
+    async fn kitten_synthesize(
+        &self,
+        _text: &str,
+        language: Option<&str>,
+    ) -> Result<(Vec<f32>, u32)> {
+        #[cfg(feature = "kitten-onnx")]
+        {
+            let _lang = language.and_then(kitten_language_code).ok_or_else(|| {
+                KoeError::Config(format!(
+                    "Kitten ONNX supports only English targets; got {:?}",
+                    language.unwrap_or("")
+                ))
+            })?;
+
+            if let Some(LocalTtsBackend::Kitten(ref kitten_backend)) = self.local_backend {
+                let text = _text.to_string();
+                let kitten_backend = kitten_backend.clone();
+                tokio::task::spawn_blocking(move || kitten_backend.synthesize(&text))
+                    .await
+                    .map_err(|e| KoeError::LlmFailed(format!("TTS task failed: {e}")))?
+            } else {
+                Err(KoeError::Config(
+                    "Kitten ONNX backend not initialized. Check model path.".to_string(),
+                ))
+            }
+        }
+        #[cfg(not(feature = "kitten-onnx"))]
+        {
+            let _ = language;
+            Err(KoeError::Config(
+                "Kitten ONNX TTS requires the kitten-onnx feature".to_string(),
+            ))
+        }
+    }
 }
 
 pub(crate) fn supertonic_language_code(language: &str) -> Option<&'static str> {
@@ -359,6 +429,10 @@ pub(crate) fn supertonic_language_code(language: &str) -> Option<&'static str> {
         "fr" => Some("fr"),
         _ => None,
     }
+}
+
+pub(crate) fn kitten_language_code(language: &str) -> Option<&'static str> {
+    crate::translation::kitten::kitten_language_code(language)
 }
 
 fn pcm_i16le_to_f32(bytes: &[u8]) -> Vec<f32> {
@@ -377,6 +451,7 @@ impl TtsConfig {
             TtsProvider::KokoroOnnx => 24_000,
             #[cfg(feature = "sherpa-onnx")]
             TtsProvider::SupertonicOnnx => 44_100,
+            TtsProvider::KittenOnnx => 24_000,
             _ => 24_000,
         }
     }

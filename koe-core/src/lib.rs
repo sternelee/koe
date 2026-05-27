@@ -1363,6 +1363,18 @@ fn translation_tts_ready(cfg: &crate::translation::config::TranslationConfig) ->
                 && config::resolve_model_dir(&cfg.tts.model).exists()
                 && crate::translation::tts::supertonic_language_code(target_language).is_some()
         }
+        crate::translation::config::TtsProvider::KittenOnnx => {
+            let target_language = if cfg.target_language.trim().is_empty() {
+                "en"
+            } else {
+                cfg.target_language.trim()
+            };
+            let model_dir = config::resolve_model_dir(&cfg.tts.model);
+            !cfg.tts.model.trim().is_empty()
+                && model_dir.exists()
+                && crate::translation::kitten::model_files_ready(&model_dir)
+                && crate::translation::tts::kitten_language_code(target_language).is_some()
+        }
     }
 }
 
@@ -2835,6 +2847,64 @@ mod tests {
         cfg.translation.target_language = "zh".into();
         cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
         cfg.translation.tts.provider = crate::translation::config::TtsProvider::SupertonicOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
+    }
+    #[test]
+    fn translation_runtime_uses_translate_with_kitten_and_english_target() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-kitten-ready-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(model_dir.join("voices.npz"), b"x").unwrap();
+        std::fs::write(model_dir.join("cmudict_data.json"), b"{}").unwrap();
+
+        std::fs::write(model_dir.join("kitten_tts_nano_v0_8.onnx"), b"x").unwrap();
+        assert!(crate::translation::kitten::model_files_ready(&model_dir));
+        assert!(crate::translation::tts::kitten_language_code("en-US").is_some());
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.target_language = "en-US".into();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::KittenOnnx;
+        cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
+
+        assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Translate);
+
+        let _ = std::fs::remove_dir_all(&model_dir);
+    }
+
+    #[test]
+    fn translation_runtime_falls_back_when_kitten_target_language_is_unsupported() {
+        let model_dir = std::env::temp_dir().join(format!(
+            "koe-kitten-unsupported-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(model_dir.join("voices.npz"), b"x").unwrap();
+        std::fs::write(model_dir.join("cmudict_data.json"), b"{}").unwrap();
+        std::fs::write(model_dir.join("kitten_tts_nano_v0_8.onnx"), b"x").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.asr.provider = "sherpa-onnx".into();
+        cfg.asr.sherpa_onnx.model = model_dir.to_string_lossy().to_string();
+        cfg.translation.target_language = "zh-CN".into();
+        cfg.translation.mt.provider = crate::translation::config::MtProvider::Apple;
+        cfg.translation.tts.provider = crate::translation::config::TtsProvider::KittenOnnx;
         cfg.translation.tts.model = model_dir.to_string_lossy().to_string();
 
         assert_eq!(translation_runtime_mode(&cfg), TranslationMode::Passthrough);

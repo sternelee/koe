@@ -1832,14 +1832,15 @@ translation:
     timeout_ms: 10000
   tts:
     enabled: true
-    provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx | supertonic_onnx
+    provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx | supertonic_onnx | kitten_onnx
     api_key: ""               # or use ${ELEVENLABS_API_KEY} (cloud providers only)
     voice_id: ""              # ElevenLabs voice ID (cloud providers only)
-    model: "eleven_multilingual_v2"  # For local sherpa-onnx TTS: model dir under ~/.koe/models/ (e.g. "kokoro/kokoro-en" or "supertonic/supertonic-2")
+    model: "eleven_multilingual_v2"  # For local TTS: model dir under ~/.koe/models/ (e.g. "kokoro/kokoro-en", "supertonic/supertonic-2", or "kitten/kitten-tts-mini-0.8")
     base_url: "https://api.elevenlabs.io"
     speed: 1.0
-    preset_voice: ""          # For kokoro_onnx: e.g. af_heart, zf_xiaoxiao
-    speaker_id: 0             # For supertonic_onnx: style index 0–9 for the bundled model
+    preset_voice: ""          # For kitten_onnx: e.g. Bella, Jasper; for kokoro_onnx: e.g. af_heart, zf_xiaoxiao
+    speaker_id: 0             # For supertonic_onnx: style index 0–9; for kitten_onnx: voice index 0–7
+
 
     timeout_ms: 30000
 
@@ -1877,6 +1878,10 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("sherpa-onnx/zh-xlarge"),
     manifest!("kokoro/kokoro-en"),
     manifest!("supertonic/supertonic-2"),
+    manifest!("kitten/kitten-tts-nano-0.8-int8"),
+    manifest!("kitten/kitten-tts-nano-0.8-fp32"),
+    manifest!("kitten/kitten-tts-micro-0.8"),
+    manifest!("kitten/kitten-tts-mini-0.8"),
     manifest!("whisper/base"),
     manifest!("whisper/small"),
     manifest!("whisper/turbo"),
@@ -2172,6 +2177,40 @@ mod tests {
             encoder.sha256,
             "92257f4246886bae8cc9c98dddb41224058a6bba11794d12c6c85dbdb7389d52"
         );
+    }
+    #[test]
+    fn bundled_kitten_manifest_points_to_expected_assets() {
+        for (path, expected_onnx) in [
+            (
+                "kitten/kitten-tts-nano-0.8-int8",
+                "kitten_tts_nano_v0_8.onnx",
+            ),
+            (
+                "kitten/kitten-tts-nano-0.8-fp32",
+                "kitten_tts_nano_v0_8.onnx",
+            ),
+            ("kitten/kitten-tts-micro-0.8", "kitten_tts_micro_v0_8.onnx"),
+            ("kitten/kitten-tts-mini-0.8", "kitten_tts_mini_v0_8.onnx"),
+        ] {
+            let manifest: crate::model_manager::ModelManifest = serde_json::from_str(match path {
+                "kitten/kitten-tts-nano-0.8-int8" => manifest!("kitten/kitten-tts-nano-0.8-int8").1,
+                "kitten/kitten-tts-nano-0.8-fp32" => manifest!("kitten/kitten-tts-nano-0.8-fp32").1,
+                "kitten/kitten-tts-micro-0.8" => manifest!("kitten/kitten-tts-micro-0.8").1,
+                "kitten/kitten-tts-mini-0.8" => manifest!("kitten/kitten-tts-mini-0.8").1,
+                _ => unreachable!(),
+            })
+            .unwrap();
+            assert_eq!(manifest.provider, "kitten-onnx");
+            assert_eq!(manifest.mode.as_deref(), Some("tts"));
+            assert_eq!(manifest.files.len(), 4);
+            assert!(manifest.files.iter().any(|file| file.name == "config.json"));
+            assert!(manifest
+                .files
+                .iter()
+                .any(|file| file.name == "cmudict_data.json"));
+            assert!(manifest.files.iter().any(|file| file.name == expected_onnx));
+            assert!(manifest.files.iter().any(|file| file.name == "voices.npz"));
+        }
     }
     #[test]
     fn config_accepts_legacy_minimax_tts_provider_value() {

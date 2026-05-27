@@ -1,0 +1,32 @@
+{
+  "provider": "kitten-onnx",
+  "mode": "tts",
+  "description": "KittenTTS Micro v0.8 English TTS (ONNX, 24kHz)",
+  "repo": "KittenML/kitten-tts-micro-0.8",
+  "files": [
+    {
+      "name": "config.json",
+      "size": 473,
+      "sha256": "1f0bd2208348f9211cb0da64fcd1536eb28228571cc6b09e767eb6e203a0a532",
+      "url": "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/config.json"
+    },
+    {
+      "name": "cmudict_data.json",
+      "size": 3748042,
+      "sha256": "f78ed3bfa40146b70b9de78a7c67ef3be6b6c11671bb2a050442f232252a3f01",
+      "url": "https://raw.githubusercontent.com/ayutaz/piper-plus/dev/src/rust/piper-plus-g2p/data/cmudict_data.json"
+    },
+    {
+      "name": "kitten_tts_micro_v0_8.onnx",
+      "size": 41384970,
+      "sha256": "95481626fee1ba70ce683e69c534fc7cb38433c46ce42d3abbeafb4b9f1a4123",
+      "url": "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/kitten_tts_micro_v0_8.onnx"
+    },
+    {
+      "name": "voices.npz",
+      "size": 3278902,
+      "sha256": "112710c1be8ad0e967c190fb0fd95cbe5848ec4791b93209f20b28b7da20dac1",
+      "url": "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/voices.npz"
+    }
+  ]
+}

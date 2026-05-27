@@ -1,0 +1,32 @@
+{
+  "provider": "kitten-onnx",
+  "mode": "tts",
+  "description": "KittenTTS Nano v0.8 int8 English TTS (ONNX, 24kHz)",
+  "repo": "KittenML/kitten-tts-nano-0.8-int8",
+  "files": [
+    {
+      "name": "config.json",
+      "size": 688,
+      "sha256": "b66006ccbeccd4de5fc3c9272059c47f5725df7215fd889785c03602652fab64",
+      "url": "https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/config.json"
+    },
+    {
+      "name": "cmudict_data.json",
+      "size": 3748042,
+      "sha256": "f78ed3bfa40146b70b9de78a7c67ef3be6b6c11671bb2a050442f232252a3f01",
+      "url": "https://raw.githubusercontent.com/ayutaz/piper-plus/dev/src/rust/piper-plus-g2p/data/cmudict_data.json"
+    },
+    {
+      "name": "kitten_tts_nano_v0_8.onnx",
+      "size": 24369971,
+      "sha256": "f7b0afcbee92870b32b8e0276d855b954dc25470c9f051b376ac7eee537c76fc",
+      "url": "https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/kitten_tts_nano_v0_8.onnx"
+    },
+    {
+      "name": "voices.npz",
+      "size": 3278902,
+      "sha256": "8aa7cee235abb0739cb51e6559685f65a4dacd95568833d05699b1633f519b3f",
+      "url": "https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/voices.npz"
+    }
+  ]
+}

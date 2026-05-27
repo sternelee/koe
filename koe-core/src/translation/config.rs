@@ -112,6 +112,8 @@ pub enum TtsProvider {
     KokoroOnnx,
     /// Supertonic ONNX local TTS via sherpa-onnx (CPU, no API key).
     SupertonicOnnx,
+    /// KittenTTS ONNX local TTS via ONNX Runtime (CPU, English only).
+    KittenOnnx,
 }
 
 impl Default for TtsProvider {
@@ -131,16 +133,18 @@ pub struct TtsConfig {
     /// Voice ID (cloud providers only).
     pub voice_id: String,
     /// Model directory or ID (provider-specific).
-    /// For local sherpa-onnx TTS: relative path under ~/.koe/models/ or absolute path.
+    /// For local TTS providers: relative path under ~/.koe/models/ or absolute path.
     pub model: String,
     /// TTS endpoint base URL (for MiniMax or self-hosted).
     pub base_url: String,
     /// Playback speed multiplier.
     pub speed: f32,
-    /// Human-friendly preset voice id for multi-speaker models such as Kokoro.
+    /// Human-friendly preset voice id for multi-speaker backends.
+    /// For kitten_onnx this is the display alias (e.g. Bella, Jasper).
     pub preset_voice: String,
     /// Numeric speaker ID fallback for multi-speaker backends.
-    /// For Supertonic ONNX this is the style index (currently 0–9 for the bundled model).
+    /// For supertonic_onnx this is the style index (currently 0–9 for the bundled model).
+    /// For kitten_onnx this is the voice index (0–7 for the bundled Nano v0.8 model).
     pub speaker_id: i32,
     /// Request timeout in milliseconds.
     pub timeout_ms: u64,
