@@ -173,6 +173,28 @@ static NSInteger kittenSpeakerIdForPresetVoice(NSString *presetVoice) {
     }
     return NSNotFound;
 }
+static NSString *formattedModelCatalogSize(uint64_t totalSizeBytes) {
+    if (totalSizeBytes == 0) {
+        return @"";
+    }
+
+    double totalSizeMB = (double)totalSizeBytes / 1048576.0;
+    NSString *formattedSize = totalSizeMB >= 100.0
+        ? [NSString stringWithFormat:@"%.0f MB", totalSizeMB]
+        : [NSString stringWithFormat:@"%.1f MB", totalSizeMB];
+    return formattedSize;
+}
+
+static NSString *modelCatalogTitle(NSDictionary<NSString *, id> *model) {
+    NSString *path = [model[@"path"] isKindOfClass:[NSString class]] ? model[@"path"] : @"";
+    NSString *baseTitle = [model[@"description"] isKindOfClass:[NSString class]] ? model[@"description"] : path;
+    NSString *formattedSize = formattedModelCatalogSize([model[@"total_size"] unsignedLongLongValue]);
+    if (formattedSize.length == 0) {
+        return baseTitle;
+    }
+    return [NSString stringWithFormat:@"%@ (%@)", baseTitle, formattedSize];
+}
+
 
 
 static NSString *whisperLanguageForAsrPopupValue(NSString *popupValue) {
@@ -3774,7 +3796,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         if (![modelMode isEqualToString:@"mt"]) continue;
 
         NSString *path = model[@"path"];
-        NSString *title = model[@"description"] ?: path;
+        NSString *title = modelCatalogTitle(model);
         [self.translationMtLocalModelPopup addItemWithTitle:title];
         self.translationMtLocalModelPopup.lastItem.representedObject = path;
     }
@@ -4183,7 +4205,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
         NSString *path = model[@"path"];
         if (![path isKindOfClass:[NSString class]] || ![path hasPrefix:requiredPrefix]) continue;
-        NSString *title = model[@"description"] ?: path;
+        NSString *title = modelCatalogTitle(model);
         [self.translationTtsLocalModelPopup addItemWithTitle:title];
         [self.translationTtsLocalModelPopup lastItem].representedObject = path;
     }
@@ -5513,7 +5535,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
 
         NSString *path = model[@"path"];
-        NSString *title = model[@"description"] ?: path;
+        NSString *title = modelCatalogTitle(model);
 
         [self.localModelPopup addItemWithTitle:title];
         [self.localModelPopup lastItem].representedObject = path;
@@ -6727,7 +6749,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         if (![modelMode isEqualToString:@"llm"]) continue;
 
         NSString *path = model[@"path"];
-        NSString *title = model[@"description"] ?: path;
+        NSString *title = modelCatalogTitle(model);
 
         [self.llmLocalModelPopup addItemWithTitle:title];
         [self.llmLocalModelPopup lastItem].representedObject = path;
