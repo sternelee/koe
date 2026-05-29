@@ -163,7 +163,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.clipboardManager = [[SPClipboardManager alloc] init];
     self.pasteManager = [[SPPasteManager alloc] init];
     self.audioCaptureManager = [[SPAudioCaptureManager alloc] init];
-    self.translationAudioCaptureManager = [[SPAudioCaptureManager alloc] init];
+    self.translationAudioSource = [[SPAudioCaptureManager alloc] init];
     self.audioDeviceManager = [[SPAudioDeviceManager alloc] init];
     self.audioDeviceManager.delegate = self;
     [self.audioDeviceManager startListening];
@@ -249,7 +249,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.quitting = YES;
     [self cancelPendingSessionEnd];
     [self.audioCaptureManager stopCapture];
-    [self.translationAudioCaptureManager stopCapture];
+    [self.translationAudioSource stopTranslationCapture];
     if (self.configWatcher) {
         dispatch_source_cancel(self.configWatcher);
         self.configWatcher = nil;
@@ -724,7 +724,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
     if (![self startTranslationCapture]) {
         NSLog(@"[Koe] Failed to start translation audio capture");
-        [self.translationAudioCaptureManager stopCapture];
+        [self.translationAudioSource stopTranslationCapture];
         [self.rustBridge stopTranslation];
         [self setTranslationModeEnabled:NO];
     }
@@ -733,7 +733,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 - (void)stopTranslationMode {
     NSLog(@"[Koe] Translation mode disabled");
     NSLog(@"[Koe] About to stop translation audio capture");
-    [self.translationAudioCaptureManager stopCapture];
+    [self.translationAudioSource stopTranslationCapture];
     NSLog(@"[Koe] Translation audio capture stopped");
     NSLog(@"[Koe] About to stop translation engine");
     [self.rustBridge stopTranslation];
@@ -781,8 +781,8 @@ static BOOL configFlagEnabled(const char *keyPath) {
 }
 
 - (BOOL)startTranslationCapture {
-    [self.translationAudioCaptureManager setInputDeviceID:[self.audioDeviceManager resolvedDeviceID]];
-    return [self.translationAudioCaptureManager startCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
+    [self.translationAudioSource prepareTranslationCaptureWithDeviceID:[self.audioDeviceManager resolvedDeviceID]];
+    return [self.translationAudioSource startTranslationCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
         [self.rustBridge pushTranslationAudioFrame:buffer length:length];
     }];
 }

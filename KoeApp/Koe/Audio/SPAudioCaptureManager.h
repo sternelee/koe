@@ -7,7 +7,20 @@
 /// timestamp: host time in nanoseconds
 typedef void (^SPAudioFrameCallback)(const void *buffer, uint32_t length, uint64_t timestamp);
 
-@interface SPAudioCaptureManager : NSObject
+/// Translation-mode capture abstraction. The current implementation is
+/// microphone-backed, but future system-playback capture can conform here
+/// without AppDelegate depending on a concrete capture manager.
+@protocol SPTranslationAudioSource <NSObject>
+
+- (void)prepareTranslationCaptureWithDeviceID:(AudioDeviceID)deviceID;
+- (BOOL)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback;
+- (void)stopTranslationCapture;
+
+@property (nonatomic, readonly) BOOL isCapturing;
+
+@end
+
+@interface SPAudioCaptureManager : NSObject <SPTranslationAudioSource>
 
 /// Set the input device for the next capture session.
 /// Must be called BEFORE startCaptureWithAudioCallback:.

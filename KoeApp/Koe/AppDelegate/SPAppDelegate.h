@@ -17,6 +17,7 @@
 @class SPOverlayPanel;
 @class SPSetupWizardWindowController;
 @class SPUpdateManager;
+@protocol SPTranslationAudioSource;
 
 @interface SPAppDelegate : NSObject <NSApplicationDelegate, SPRustBridgeDelegate, SPStatusBarDelegate, SPHotkeyMonitorDelegate, SPSetupWizardDelegate>
 
@@ -28,7 +29,7 @@
 @property (nonatomic, strong) SPPermissionManager *permissionManager;
 @property (nonatomic, strong) SPHotkeyMonitor *hotkeyMonitor;
 @property (nonatomic, strong) SPAudioCaptureManager *audioCaptureManager;
-@property (nonatomic, strong) SPAudioCaptureManager *translationAudioCaptureManager;
+@property (nonatomic, strong) id<SPTranslationAudioSource> translationAudioSource;
 @property (nonatomic, strong) SPAudioDeviceManager *audioDeviceManager;
 @property (nonatomic, assign) BOOL translationEnabled;
 @property (nonatomic, strong) SPRustBridge *rustBridge;

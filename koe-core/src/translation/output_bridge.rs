@@ -7,9 +7,10 @@ use std::sync::Mutex;
 
 use memmap2::MmapMut;
 
+include!(concat!(env!("OUT_DIR"), "/shared_buffer_contract.rs"));
+
 pub const SHARED_BUFFER_MAGIC: u32 = 0x4B4F_4556; // "KOEV" in le
 pub const SHARED_BUFFER_VERSION: u32 = 1;
-pub const SHARED_BUFFER_FILE_PATH: &str = "/tmp/koe/virtual_mic_output.bin";
 
 // Layout: 6 x u32 + 3 x u64 = 48 bytes
 const HEADER_SIZE: usize = 48;

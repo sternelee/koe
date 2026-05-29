@@ -166,6 +166,18 @@ static void queueInputCallback(void *userData,
     return YES;
 }
 
+- (void)prepareTranslationCaptureWithDeviceID:(AudioDeviceID)deviceID {
+    [self setInputDeviceID:deviceID];
+}
+
+- (BOOL)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback {
+    return [self startCaptureWithAudioCallback:callback];
+}
+
+- (void)stopTranslationCapture {
+    [self stopCapture];
+}
+
 - (void)stopCapture {
     NSLog(@"[Koe] stopCapture called");
     if (!self.isCapturing) {
