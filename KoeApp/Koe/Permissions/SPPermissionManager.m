@@ -169,6 +169,10 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
             title = KoeLocalizedString(@"permission.speechRecognition.title");
             message = KoeLocalizedString(@"permission.speechRecognition.message");
             break;
+        case SPPermissionTypeScreenRecording:
+            title = KoeLocalizedString(@"permission.screenRecording.title");
+            message = KoeLocalizedString(@"permission.screenRecording.message");
+            break;
     }
 
     [NSApp activateIgnoringOtherApps:YES];
@@ -197,6 +201,20 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
     }
 
     return YES;
+}
+
+- (BOOL)isScreenRecordingGranted {
+    if (@available(macOS 10.15, *)) {
+        return CGPreflightScreenCaptureAccess();
+    }
+    return NO;
+}
+
+- (BOOL)requestScreenRecordingPermission {
+    if (@available(macOS 10.15, *)) {
+        return CGRequestScreenCaptureAccess();
+    }
+    return NO;
 }
 
 @end

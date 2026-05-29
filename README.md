@@ -68,10 +68,10 @@ The feed file lives at `docs/update-feed.json` and should contain at least:
 
 ```json
 {
-  "version": "1.0.14",
-  "build": 15,
+  "version": "1.0.16",
+  "build": 17,
   "minimum_system_version": "14.0",
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.14/Koe-macOS-arm64.zip"
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.16/Koe-macOS-arm64.zip"
 }
 ```
 
@@ -123,8 +123,10 @@ open ~/Library/Developer/Xcode/DerivedData/Koe-*/Build/Products/Release/Koe.app
 ### Permissions
 
 Koe requires **three core macOS permissions** to function, plus one provider-specific
-permission when you use Apple Speech. You'll be prompted to grant them on first launch.
-Without any of the three core permissions, Koe cannot complete its main workflow.
+permission when you use Apple Speech and one mode-specific permission when you use
+real-time translation with **System Audio** as the input source. You'll be prompted
+to grant them on first launch or first use as needed. Without any of the three core
+permissions, Koe cannot complete its main workflow.
 
 | Permission | Why it's needed | What happens without it |
 |---|---|---|
@@ -132,6 +134,7 @@ Without any of the three core permissions, Koe cannot complete its main workflow
 | **Accessibility** | Simulates a `Cmd+V` keystroke to paste the corrected text into the active input field of any app. | Koe will still copy the text to your clipboard, but cannot auto-paste. You'll need to paste manually. |
 | **Input Monitoring** | Listens for the trigger key (default: **Fn**, configurable) globally so Koe can detect when you press/release it, regardless of which app is in the foreground. | Koe cannot detect the hotkey. You won't be able to trigger recording. |
 | **Speech Recognition** | Required only when using the Apple Speech provider (macOS 26+). Allows on-device speech recognition. | Other providers (cloud, MLX, sherpa-onnx) work without this permission. |
+| **Screen Recording** | Required only when **Translation Mode** uses **System Audio** as the input source. Koe uses ScreenCaptureKit to capture macOS playback audio for live translation. | System-audio translation input will not start. Use a microphone input source instead, or grant Screen Recording. |
 
 To grant permissions: **System Settings → Privacy & Security** → enable Koe under the relevant categories above.
 
@@ -142,11 +145,12 @@ for warning/error notifications and update-related diagnostics.
 
 All config files live in `~/.koe/` and are auto-generated on first launch. You
 can edit them directly, or use the built-in settings window (Setup Wizard) from
-the menu bar. The settings window includes tabs for ASR, LLM, Controls, Dictionary,
-System Prompt, Templates, and About. The System Prompt tab edits `system_prompt.txt`;
-the Templates tab manages prompt-template visibility, ordering, and prompts; advanced
-knobs such as `user_prompt.txt`, ASR custom `headers`, and advanced profile fields such as
-`no_reasoning_control` remain file-based settings. When a local ASR provider is selected, the ASR tab shows
+the menu bar. The settings window includes tabs for ASR, LLM, **Translation**,
+Controls, Dictionary, System Prompt, Templates, and About. The System Prompt tab
+edits `system_prompt.txt`; the Templates tab manages prompt-template visibility,
+ordering, and prompts; advanced knobs such as `user_prompt.txt`, ASR custom
+`headers`, and advanced profile fields such as `no_reasoning_control` remain
+file-based settings. When a local ASR provider is selected, the ASR tab shows
 provider-specific controls: model picker with download/delete for MLX and
 Sherpa-ONNX, or language picker with asset status and download for Apple Speech.
 The LLM tab supports multiple profiles for OpenAI-compatible APIs, APFEL, and
@@ -443,6 +447,32 @@ Available template placeholders in `user_prompt.txt`:
 The default prompts are tuned for software developers working in mixed Chinese-English, but you can adapt them for any language or domain.
 If either prompt file is missing or empty, Koe falls back to the built-in defaults
 compiled into `koe-core`.
+
+### Real-time Translation Mode
+
+Koe can also run a live translation pipeline:
+
+1. capture speech/audio
+2. transcribe it with ASR
+3. translate it with MT
+4. synthesize translated speech with TTS
+5. send the result to Koe's virtual microphone for apps like Zoom or Teams
+
+To use it:
+
+1. Open **Setup Wizard → Translation**.
+2. In **Virtual Microphone**, install the bundled virtual mic driver if it is not already installed.
+3. In **Device**, set **Input Source** to either a microphone or **System Audio**.
+4. If you choose **System Audio**, Koe captures macOS playback instead of the microphone. The first start will prompt for **Screen Recording** permission.
+5. Configure **Enabled**, **Source Language**, **Target Language**, **Machine Translation**, and **Text-to-Speech** in the same Translation pane.
+6. Turn on **Translation Mode** from the menu bar to start the live pipeline.
+
+Notes:
+
+- Choosing **System Audio** in the Setup Wizard only selects the input source. It does **not** start live capture by itself.
+- Live capture starts only when **Translation Mode** is enabled from the menu bar.
+- To avoid feedback when using **System Audio**, use headphones or mute speakers that play the translated output audio.
+- Koe's translated audio still exits through the built-in **virtual microphone** path; changing the input source does not change the output path.
 
 ### Prompt Templates
 

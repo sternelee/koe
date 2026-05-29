@@ -32,6 +32,7 @@
 "statusBar.permission.inputMonitoring" = "  输入监控：%@";
 "statusBar.permission.notifications" = "  通知：%@";
 "statusBar.permission.speechRecognition" = "  语音识别：%@";
+"statusBar.permission.screenRecording" = "屏幕录制";
 
 "statusBar.menu.microphone" = "麦克风";
 "statusBar.menu.systemDefault" = "系统默认";
@@ -96,11 +97,11 @@
 "setupWizard.translation.step.tts" = "语音合成";
 "setupWizard.translation.description" = "配置实时翻译引擎（ASR → MT → TTS → 虚拟麦克风）。";
 "setupWizard.translation.section.virtualMic" = "虚拟麦克风";
-"setupWizard.translation.section.realMic" = "真实麦克风";
+"setupWizard.translation.section.realMic" = "输入源";
 "setupWizard.translation.section.general" = "通用";
 "setupWizard.translation.section.mt" = "机器翻译";
 "setupWizard.translation.section.tts" = "语音合成";
-"setupWizard.translation.label.inputDevice" = "输入设备";
+"setupWizard.translation.label.inputDevice" = "输入源";
 "setupWizard.translation.label.enabled" = "启用";
 "setupWizard.translation.label.targetLanguage" = "目标语言";
 "setupWizard.translation.label.sourceLanguage" = "源语言";
@@ -111,7 +112,9 @@
 "setupWizard.translation.label.systemPrompt" = "系统提示词";
 "setupWizard.translation.label.voiceId" = "Voice ID";
 "setupWizard.translation.label.speakerId" = "音色";
+"setupWizard.translation.source.systemAudio" = "系统音频";
 "setupWizard.translation.input.sharedHint" = "与主语音输入共享同一全局设置。";
+"setupWizard.translation.input.systemAudioHint" = "捕获 macOS 播放中的系统声音，而不是麦克风。为避免翻译语音被再次采集，请使用耳机或静音播放翻译语音的扬声器。";
 "setupWizard.translation.input.unavailableFormat" = "已选设备不可用：%@";
 "setupWizard.translation.general.sourceTip" = "提示：源语言留空或设为 auto 时，Koe 会优先使用系统首选语言；如需更稳定结果，也可以手动指定。";
 "setupWizard.translation.mt.provider.openai" = "OpenAI 兼容接口";

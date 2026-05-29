@@ -2,6 +2,7 @@
 #import "SPPermissionManager.h"
 #import "SPHotkeyMonitor.h"
 #import "SPAudioCaptureManager.h"
+#import "SPSystemAudioCaptureManager.h"
 #import "SPAudioDeviceManager.h"
 #import "SPRustBridge.h"
 #import "SPClipboardManager.h"
@@ -118,6 +119,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 }
 
 - (void)reloadConfigAndApplyHotkey {
+    [self refreshTranslationAudioSourceFromConfig];
     [self.rustBridge reloadConfig];
 
     struct SPHotkeyConfig newConfig = sp_core_get_hotkey_config();
@@ -163,7 +165,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.clipboardManager = [[SPClipboardManager alloc] init];
     self.pasteManager = [[SPPasteManager alloc] init];
     self.audioCaptureManager = [[SPAudioCaptureManager alloc] init];
-    self.translationAudioSource = [[SPAudioCaptureManager alloc] init];
+    [self refreshTranslationAudioSourceFromConfig];
     self.audioDeviceManager = [[SPAudioDeviceManager alloc] init];
     self.audioDeviceManager.delegate = self;
     [self.audioDeviceManager startListening];
@@ -247,9 +249,11 @@ static BOOL configFlagEnabled(const char *keyPath) {
 - (void)applicationWillTerminate:(NSNotification *)notification {
     NSLog(@"[Koe] Application terminating...");
     self.quitting = YES;
+    [self setTranslationModeEnabled:NO];
     [self cancelPendingSessionEnd];
     [self.audioCaptureManager stopCapture];
-    [self.translationAudioSource stopTranslationCapture];
+    [self waitForTranslationAudioSourceStopDuringTermination:self.translationAudioSource];
+    [self.rustBridge stopTranslation];
     if (self.configWatcher) {
         dispatch_source_cancel(self.configWatcher);
         self.configWatcher = nil;
@@ -715,30 +719,200 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.statusBarManager setTranslationModeEnabled:enabled];
 }
 
+- (NSString *)translationInputSourceValue {
+    NSString *value = [[NSUserDefaults standardUserDefaults] stringForKey:@"SPTranslationInputSource"];
+    if ([value isEqualToString:@"system_audio"]) {
+        return value;
+    }
+    return @"microphone";
+}
+
+- (BOOL)translationUsesSystemAudioInput {
+    return [[self translationInputSourceValue] isEqualToString:@"system_audio"];
+}
+
+- (id<SPTranslationAudioSource>)buildTranslationAudioSourceForCurrentConfig {
+    if (![self translationUsesSystemAudioInput]) {
+        return [[SPAudioCaptureManager alloc] init];
+    }
+
+    SPSystemAudioCaptureManager *manager = [[SPSystemAudioCaptureManager alloc] init];
+    __weak typeof(self) weakSelf = self;
+    __weak SPSystemAudioCaptureManager *weakManager = manager;
+    manager.interruptionHandler = ^(NSError *error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        SPSystemAudioCaptureManager *strongManager = weakManager;
+        if (!self || strongManager == nil || self.translationAudioSource != strongManager) {
+            return;
+        }
+
+        NSString *message = error.localizedDescription ?: @"unknown error";
+        NSLog(@"[Translation] System audio capture stopped unexpectedly: %@", message);
+        if (!self.translationEnabled || self.quitting) {
+            return;
+        }
+
+        [self stopTranslationMode];
+    };
+    return manager;
+}
+
+- (void)waitForTranslationAudioSourceStopDuringTermination:(id<SPTranslationAudioSource>)translationAudioSource {
+    if (!translationAudioSource) {
+        return;
+    }
+
+    __block BOOL stopFinished = NO;
+    [translationAudioSource stopTranslationCaptureWithCompletion:^{
+        stopFinished = YES;
+    }];
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+    while (!stopFinished && [deadline timeIntervalSinceNow] > 0) {
+        @autoreleasepool {
+            NSTimeInterval remaining = [deadline timeIntervalSinceNow];
+            NSDate *until = [NSDate dateWithTimeIntervalSinceNow:MIN(0.05, MAX(remaining, 0.0))];
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:until];
+        }
+    }
+
+    if (!stopFinished) {
+        NSLog(@"[Translation] Timed out waiting for translation capture to stop during termination");
+    }
+}
+
+- (void)refreshTranslationAudioSourceFromConfig {
+    Class desiredClass = [self translationUsesSystemAudioInput] ? [SPSystemAudioCaptureManager class] : [SPAudioCaptureManager class];
+    if (self.translationAudioSource != nil && [self.translationAudioSource isKindOfClass:desiredClass]) {
+        return;
+    }
+
+    id<SPTranslationAudioSource> previousSource = self.translationAudioSource;
+    id<SPTranslationAudioSource> nextSource = [self buildTranslationAudioSourceForCurrentConfig];
+    BOOL shouldRestartTranslation = (self.translationEnabled && previousSource != nil);
+    NSUInteger requestGeneration = self.translationModeRequestGeneration;
+    self.translationAudioSource = nextSource;
+
+    if (!shouldRestartTranslation) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t restartTranslation = ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self ||
+            self.quitting ||
+            !self.translationEnabled ||
+            requestGeneration != self.translationModeRequestGeneration ||
+            self.translationAudioSource != nextSource) {
+            return;
+        }
+
+        [self.rustBridge stopTranslation];
+        [self startTranslationModeIfReadyForGeneration:requestGeneration];
+    };
+
+    if (previousSource != nil && previousSource.isCapturing) {
+        [previousSource stopTranslationCaptureWithCompletion:^{
+            dispatch_async(dispatch_get_main_queue(), restartTranslation);
+        }];
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), restartTranslation);
+}
+
 - (void)startTranslationModeIfReady {
+    [self startTranslationModeIfReadyForGeneration:self.translationModeRequestGeneration];
+}
+
+- (void)startTranslationModeIfReadyForGeneration:(NSUInteger)requestGeneration {
+    if (!self.translationEnabled || requestGeneration != self.translationModeRequestGeneration) {
+        return;
+    }
+
+    [self refreshTranslationAudioSourceFromConfig];
+    id<SPTranslationAudioSource> translationAudioSource = self.translationAudioSource;
+    if ([self translationUsesSystemAudioInput]) {
+        BOOL granted = [self.permissionManager isScreenRecordingGranted];
+        if (!granted) {
+            granted = [self.permissionManager requestScreenRecordingPermission];
+        }
+        if (!granted) {
+            [self.permissionManager showPermissionAlertForType:SPPermissionTypeScreenRecording
+                                                   settingsURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]];
+            [self setTranslationModeEnabled:NO];
+            return;
+        }
+    }
+
     if (![self.rustBridge startTranslation]) {
-        NSLog(@"[Koe] Failed to start translation engine");
         [self setTranslationModeEnabled:NO];
         return;
     }
 
-    if (![self startTranslationCapture]) {
-        NSLog(@"[Koe] Failed to start translation audio capture");
-        [self.translationAudioSource stopTranslationCapture];
-        [self.rustBridge stopTranslation];
-        [self setTranslationModeEnabled:NO];
-    }
+    AudioDeviceID translationDeviceID = [self.audioDeviceManager resolvedDeviceID];
+    [translationAudioSource prepareTranslationCaptureWithDeviceID:translationDeviceID];
+
+    __weak typeof(self) weakSelf = self;
+    [translationAudioSource startTranslationCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        BOOL staleFrame = self.quitting ||
+                          !self.translationEnabled ||
+                          requestGeneration != self.translationModeRequestGeneration ||
+                          self.translationAudioSource != translationAudioSource;
+        if (staleFrame) {
+            return;
+        }
+        [self.rustBridge pushTranslationAudioFrame:buffer length:length];
+    } completion:^(BOOL started, NSError * _Nullable error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+
+        BOOL staleRequest = (self.quitting ||
+                             requestGeneration != self.translationModeRequestGeneration ||
+                             !self.translationEnabled ||
+                             self.translationAudioSource != translationAudioSource);
+        if (staleRequest) {
+            [translationAudioSource stopTranslationCaptureWithCompletion:nil];
+            return;
+        }
+
+        if (!started) {
+            if (error != nil) {
+                NSLog(@"[Translation] Failed to start audio capture: %@", error.localizedDescription);
+            }
+            [self.rustBridge stopTranslation];
+            [self setTranslationModeEnabled:NO];
+        }
+    }];
 }
 
 - (void)stopTranslationMode {
-    NSLog(@"[Koe] Translation mode disabled");
-    NSLog(@"[Koe] About to stop translation audio capture");
-    [self.translationAudioSource stopTranslationCapture];
-    NSLog(@"[Koe] Translation audio capture stopped");
-    NSLog(@"[Koe] About to stop translation engine");
-    [self.rustBridge stopTranslation];
-    NSLog(@"[Koe] Translation engine stopped");
     [self setTranslationModeEnabled:NO];
+    NSUInteger requestGeneration = self.translationModeRequestGeneration;
+    id<SPTranslationAudioSource> translationAudioSource = self.translationAudioSource;
+    if (!translationAudioSource) {
+        [self.rustBridge stopTranslation];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [translationAudioSource stopTranslationCaptureWithCompletion:^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        if (requestGeneration != self.translationModeRequestGeneration) {
+            return;
+        }
+        [self.rustBridge stopTranslation];
+    }];
 }
 
 - (void)statusBarDidToggleTranslationMode:(BOOL)enabled {
@@ -777,13 +951,6 @@ static BOOL configFlagEnabled(const char *keyPath) {
             return;
         }
         [self startTranslationModeIfReady];
-    }];
-}
-
-- (BOOL)startTranslationCapture {
-    [self.translationAudioSource prepareTranslationCaptureWithDeviceID:[self.audioDeviceManager resolvedDeviceID]];
-    return [self.translationAudioSource startTranslationCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
-        [self.rustBridge pushTranslationAudioFrame:buffer length:length];
     }];
 }
 - (void)statusBarDidSelectSetupWizard {

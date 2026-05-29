@@ -39,5 +39,7 @@
 	<string>NSApplication</string>
 	<key>SPUpdateFeedURL</key>
 	<string>$(APP_UPDATE_FEED_URL)</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Koe needs Screen and System Audio Recording access to capture system playback for live translation.</string>
 </dict>
 </plist>

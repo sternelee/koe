@@ -6,6 +6,8 @@
 /// length: byte length of the buffer
 /// timestamp: host time in nanoseconds
 typedef void (^SPAudioFrameCallback)(const void *buffer, uint32_t length, uint64_t timestamp);
+typedef void (^SPTranslationCaptureStartCompletion)(BOOL started, NSError *_Nullable error);
+typedef void (^SPTranslationCaptureStopCompletion)(void);
 
 /// Translation-mode capture abstraction. The current implementation is
 /// microphone-backed, but future system-playback capture can conform here
@@ -13,8 +15,9 @@ typedef void (^SPAudioFrameCallback)(const void *buffer, uint32_t length, uint64
 @protocol SPTranslationAudioSource <NSObject>
 
 - (void)prepareTranslationCaptureWithDeviceID:(AudioDeviceID)deviceID;
-- (BOOL)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback;
-- (void)stopTranslationCapture;
+- (void)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback
+                                      completion:(SPTranslationCaptureStartCompletion)completion;
+- (void)stopTranslationCaptureWithCompletion:(SPTranslationCaptureStopCompletion _Nullable)completion;
 
 @property (nonatomic, readonly) BOOL isCapturing;
 

@@ -2,6 +2,18 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.16 - 2026-05-30
+
+### Added
+
+- Added a Translation settings input-source selector that can use either a microphone or macOS **System Audio** for live translation input.
+- Added Screen Recording permission prompts and guidance for system-audio translation capture.
+
+### Fixed
+
+- Fixed translation mode teardown and restart races when switching translation input sources or quitting while system-audio capture was active.
+- Fixed stale translation callbacks and unexpected ScreenCaptureKit stop events so translation mode shuts down more cleanly.
+
 ## 1.0.14 - 2026-04-09
 
 ### Added

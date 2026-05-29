@@ -3653,59 +3653,63 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)reloadTranslationInputDevices {
     [self.translationInputDevicePopup removeAllItems];
 
-    [self.translationInputDevicePopup addItemWithTitle:KoeLocalizedString(@"statusBar.menu.systemDefault")];
-    [self.translationInputDevicePopup lastItem].representedObject = @"";
+    [self.translationInputDevicePopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.source.systemAudio")];
+    self.translationInputDevicePopup.lastItem.representedObject = @"__system_audio__";
+    [[self.translationInputDevicePopup menu] addItem:[NSMenuItem separatorItem]];
 
-    NSArray<SPAudioInputDevice *> *devices = [self.audioDeviceManager availableInputDevices];
-    for (SPAudioInputDevice *device in devices) {
-        [self.translationInputDevicePopup addItemWithTitle:device.name];
-        [self.translationInputDevicePopup lastItem].representedObject = device.uid;
-    }
+    NSString *configuredSource = [[NSUserDefaults standardUserDefaults] stringForKey:@"SPTranslationInputSource"] ?: @"microphone";
+    NSString *selectedDeviceUID = self.audioDeviceManager.selectedDeviceUID;
+    NSInteger selectedDeviceIndex = NSNotFound;
 
-    NSString *selectedUID = self.audioDeviceManager.selectedDeviceUID;
-    BOOL selected = NO;
-    if (selectedUID.length > 0) {
-        for (NSInteger i = 0; i < self.translationInputDevicePopup.numberOfItems; i++) {
-            NSString *uid = [self.translationInputDevicePopup itemAtIndex:i].representedObject;
-            if ([uid isEqualToString:selectedUID]) {
-                [self.translationInputDevicePopup selectItemAtIndex:i];
-                selected = YES;
-                break;
-            }
+    for (SPAudioInputDevice *device in [self.audioDeviceManager availableInputDevices]) {
+        NSString *name = device.name;
+        NSString *uid = device.uid;
+        if (name.length == 0 || uid.length == 0) {
+            continue;
+        }
+
+        [self.translationInputDevicePopup addItemWithTitle:name];
+        self.translationInputDevicePopup.lastItem.representedObject = uid;
+        if ([uid isEqualToString:selectedDeviceUID]) {
+            selectedDeviceIndex = self.translationInputDevicePopup.numberOfItems - 1;
         }
     }
-    if (!selected) {
+
+    if ([configuredSource isEqualToString:@"system_audio"]) {
         [self.translationInputDevicePopup selectItemAtIndex:0];
+        self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.systemAudioHint");
+        return;
     }
 
-    if (selectedUID.length > 0 && !selected) {
-        NSString *name = self.audioDeviceManager.selectedDeviceName ?: selectedUID;
-        self.translationInputDeviceHintLabel.stringValue = [NSString stringWithFormat:KoeLocalizedString(@"setupWizard.translation.input.unavailableFormat"), name];
-        self.translationInputDeviceHintLabel.textColor = [NSColor systemOrangeColor];
-    } else {
+    if (selectedDeviceIndex != NSNotFound) {
+        [self.translationInputDevicePopup selectItemAtIndex:selectedDeviceIndex];
         self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.sharedHint");
-        self.translationInputDeviceHintLabel.textColor = [NSColor secondaryLabelColor];
+        return;
     }
+
+    if (self.translationInputDevicePopup.numberOfItems > 2) {
+        [self.translationInputDevicePopup selectItemAtIndex:2];
+        self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.sharedHint");
+        return;
+    }
+
+    [self.translationInputDevicePopup selectItemAtIndex:0];
+    self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.systemAudioHint");
 }
 
 - (void)translationInputDeviceChanged:(id)sender {
-    NSString *uid = self.translationInputDevicePopup.selectedItem.representedObject;
-    if (uid.length == 0) {
-        uid = nil;
+    NSString *selection = self.translationInputDevicePopup.selectedItem.representedObject;
+    if ([selection isEqualToString:@"__system_audio__"]) {
+        [[NSUserDefaults standardUserDefaults] setObject:@"system_audio" forKey:@"SPTranslationInputSource"];
+        self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.systemAudioHint");
+        return;
     }
 
-    NSString *name = nil;
-    if (uid != nil) {
-        for (SPAudioInputDevice *device in [self.audioDeviceManager availableInputDevices]) {
-            if ([device.uid isEqualToString:uid]) {
-                name = device.name;
-                break;
-            }
-        }
+    [[NSUserDefaults standardUserDefaults] setObject:@"microphone" forKey:@"SPTranslationInputSource"];
+    if (selection.length > 0) {
+        self.audioDeviceManager.selectedDeviceUID = selection;
     }
-
-    [self.audioDeviceManager selectDevice:uid name:name];
-    [self reloadTranslationInputDevices];
+    self.translationInputDeviceHintLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.input.sharedHint");
 }
 
 - (void)updateTranslationEnabledAvailability {

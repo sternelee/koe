@@ -32,6 +32,7 @@
 "statusBar.permission.inputMonitoring" = "  Input Monitoring: %@";
 "statusBar.permission.notifications" = "  Notifications: %@";
 "statusBar.permission.speechRecognition" = "  Speech Recognition: %@";
+"statusBar.permission.screenRecording" = "Screen Recording";
 
 "statusBar.menu.microphone" = "Microphone";
 "statusBar.menu.systemDefault" = "System Default";
@@ -100,7 +101,7 @@
 "setupWizard.translation.section.general" = "General";
 "setupWizard.translation.section.mt" = "Machine Translation";
 "setupWizard.translation.section.tts" = "Text-to-Speech";
-"setupWizard.translation.label.inputDevice" = "Input Device";
+"setupWizard.translation.label.inputDevice" = "Input Source";
 "setupWizard.translation.label.enabled" = "Enabled";
 "setupWizard.translation.label.targetLanguage" = "Target Language";
 "setupWizard.translation.label.sourceLanguage" = "Source Language";
@@ -111,7 +112,9 @@
 "setupWizard.translation.label.systemPrompt" = "System Prompt";
 "setupWizard.translation.label.voiceId" = "Voice ID";
 "setupWizard.translation.label.speakerId" = "Voice";
+"setupWizard.translation.source.systemAudio" = "System Audio";
 "setupWizard.translation.input.sharedHint" = "Shared global setting with main voice input.";
+"setupWizard.translation.input.systemAudioHint" = "Captures macOS playback instead of a microphone. To avoid feedback, use headphones or mute speakers that play translated audio.";
 "setupWizard.translation.input.unavailableFormat" = "Selected device unavailable: %@";
 "setupWizard.translation.general.sourceTip" = "Tip: leave Source Language as auto to use your preferred system language, or set it explicitly for more predictable results.";
 "setupWizard.translation.mt.provider.openai" = "OpenAI-compatible";

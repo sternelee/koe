@@ -170,12 +170,23 @@ static void queueInputCallback(void *userData,
     [self setInputDeviceID:deviceID];
 }
 
-- (BOOL)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback {
-    return [self startCaptureWithAudioCallback:callback];
+- (void)startTranslationCaptureWithAudioCallback:(SPAudioFrameCallback)callback
+                                      completion:(SPTranslationCaptureStartCompletion)completion {
+    BOOL started = [self startCaptureWithAudioCallback:callback];
+    if (completion) {
+        completion(started, started ? nil : [NSError errorWithDomain:NSOSStatusErrorDomain
+                                                                code:unimpErr
+                                                            userInfo:@{
+            NSLocalizedDescriptionKey: @"Unable to start microphone translation capture.",
+        }]);
+    }
 }
 
-- (void)stopTranslationCapture {
+- (void)stopTranslationCaptureWithCompletion:(SPTranslationCaptureStopCompletion)completion {
     [self stopCapture];
+    if (completion) {
+        completion();
+    }
 }
 
 - (void)stopCapture {
