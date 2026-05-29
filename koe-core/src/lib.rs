@@ -72,7 +72,7 @@ struct Core {
     /// Translation engine stop flag.
     translation_stop: Option<Arc<AtomicBool>>,
     /// Translation engine audio sender.
-    translation_audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    translation_audio_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     /// Translation engine task handle (used for graceful shutdown).
     translation_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -822,6 +822,7 @@ async fn run_session(
         invoke_session_error(session_token, &e.to_string());
         invoke_state_changed(session_token, "failed");
         cleanup_session(&session_arc);
+        invoke_state_changed(session_token, "idle");
         return;
     }
 
@@ -952,7 +953,20 @@ async fn run_session(
         return;
     }
 
-    let asr_text = aggregator.best_text().to_string();
+    let Some(asr_text) = aggregator.best_confirmed_text().map(ToOwned::to_owned) else {
+        if aggregator.has_any_text() {
+            log::warn!(
+                "[{session_id}] discarding unconfirmed ASR text because no final/definite result arrived"
+            );
+        } else {
+            log::info!(
+                "[{session_id}] no ASR text available: treating silent recording as empty result"
+            );
+        }
+        cleanup_session(&session_arc);
+        invoke_state_changed(session_token, "idle");
+        return;
+    };
     if asr_text.is_empty() {
         // A silent recording is a valid no-op, not a user-visible failure.
         // Exit quietly so the app returns to idle without error sounds or alerts.
@@ -2564,7 +2578,7 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
         }
     }
 
-    let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1024);
+    let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let stop = Arc::new(AtomicBool::new(false));
     core.translation_stop = Some(stop.clone());
     core.translation_audio_tx = Some(audio_tx);
@@ -2646,8 +2660,8 @@ pub unsafe extern "C" fn sp_core_translation_push_audio(samples_ptr: *const u8, 
     };
 
     if let Some(ref tx) = core.translation_audio_tx {
-        if tx.try_send(vec).is_err() {
-            log::warn!("translation audio channel full, dropping frame");
+        if tx.send(vec).is_err() {
+            log::warn!("translation audio channel closed");
         }
     }
     0

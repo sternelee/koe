@@ -107,6 +107,18 @@ impl TranscriptAggregator {
         }
     }
 
+    /// Return only text that has been explicitly confirmed by the provider.
+    /// Interim hypotheses are excluded because they can still be revised away.
+    pub fn best_confirmed_text(&self) -> Option<&str> {
+        if self.has_final && !self.final_text.is_empty() {
+            Some(&self.final_text)
+        } else if self.has_definite && !self.definite_text.is_empty() {
+            Some(&self.definite_text)
+        } else {
+            None
+        }
+    }
+
     pub fn has_final_result(&self) -> bool {
         self.has_final
     }
@@ -149,4 +161,28 @@ fn longest_overlap(tail: &str, head: &str) -> usize {
         k -= 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranscriptAggregator;
+
+    #[test]
+    fn confirmed_text_prefers_final_then_definite() {
+        let mut agg = TranscriptAggregator::new();
+        agg.update_definite("stable");
+        assert_eq!(agg.best_confirmed_text(), Some("stable"));
+
+        agg.update_final("final");
+        assert_eq!(agg.best_confirmed_text(), Some("final"));
+    }
+
+    #[test]
+    fn confirmed_text_excludes_interim_only_results() {
+        let mut agg = TranscriptAggregator::new();
+        agg.update_interim("draft");
+
+        assert_eq!(agg.best_text(), "draft");
+        assert_eq!(agg.best_confirmed_text(), None);
+    }
 }

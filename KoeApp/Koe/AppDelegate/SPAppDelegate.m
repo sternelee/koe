@@ -26,6 +26,7 @@
 @property (nonatomic, assign) BOOL showingError;
 @property (nonatomic, copy) NSString *lastAsrText;
 @property (nonatomic, strong) id numberKeyMonitor;
+@property (nonatomic, assign) NSUInteger translationModeRequestGeneration;
 @end
 
 static BOOL sessionStateAllowsConfigReload(NSString *state) {
@@ -77,10 +78,19 @@ static BOOL configFlagEnabled(const char *keyPath) {
     NSLog(@"[Koe] Prompt templates visible: %lu / %lu", (unsigned long)visibleTemplates.count, (unsigned long)templates.count);
     if (visibleTemplates.count > 0 && self.lastAsrText.length > 0) {
         [self.overlayPanel showTemplateButtons:visibleTemplates];
-        [self startNumberKeyMonitoring];
     } else {
         [self.overlayPanel lingerAndDismiss];
     }
+}
+
+- (void)finishFinalTextDeliveryForToken:(uint64_t)token {
+    if (self.quitting) return;
+    if (token != self.rustBridge.currentSessionToken) return;
+
+    self.sessionState = @"idle";
+    [self.statusBarManager updateState:@"idle"];
+    [self showPromptTemplateButtonsIfNeededOrDismiss];
+    [self applyDeferredConfigReloadIfNeeded];
 }
 
 - (void)applyHotkeyConfig:(struct SPHotkeyConfig)hotkeyConfig restartMonitorIfNeeded:(BOOL)restartIfNeeded {
@@ -356,8 +366,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
     // then stop mic and end session.  Use a cancellable block so a rapid
     // re-press can prevent the stale endSession from killing the new session.
     [self cancelPendingSessionEnd];
+    uint64_t token = self.rustBridge.currentSessionToken;
     dispatch_block_t block = dispatch_block_create(0, ^{
         self.pendingSessionEndBlock = nil;
+        if (token != self.rustBridge.currentSessionToken) return;
         [self.audioCaptureManager stopCapture];
         [self.rustBridge endSession];
     });
@@ -396,8 +408,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
     // Keep recording for 300ms after tap-end to capture trailing speech,
     // then stop mic and end session.  Use a cancellable block (same as hold).
     [self cancelPendingSessionEnd];
+    uint64_t token = self.rustBridge.currentSessionToken;
     dispatch_block_t block = dispatch_block_create(0, ^{
         self.pendingSessionEndBlock = nil;
+        if (token != self.rustBridge.currentSessionToken) return;
         [self.audioCaptureManager stopCapture];
         [self.rustBridge endSession];
     });
@@ -444,7 +458,6 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
 - (void)rustBridgeDidReceiveFinalText:(NSString *)text {
     if (self.quitting) return;
-    self.sessionState = @"idle";
     NSLog(@"[Koe] Final text received (%lu chars)", (unsigned long)text.length);
 
     // Record history
@@ -458,12 +471,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
     // Show corrected text in overlay before pasting
     [self.overlayPanel updateDisplayText:text];
 
+    self.sessionState = @"pasting";
     [self.statusBarManager updateState:@"pasting"];
     [self.overlayPanel updateState:@"pasting"];
-
-    // Backup clipboard, write text, paste, restore
-    [self.clipboardManager backup];
-    [self.clipboardManager writeText:text];
+    [self.clipboardManager cancelPendingRestore];
 
     uint64_t token = self.rustBridge.currentSessionToken;
 
@@ -474,24 +485,27 @@ static BOOL configFlagEnabled(const char *keyPath) {
     if (accessOK) {
         void (^completion)(void) = ^{
             NSLog(@"[Koe] Final text delivery completion callback fired");
-            [self.clipboardManager scheduleRestoreAfterDelay:1500];
-            if (token != self.rustBridge.currentSessionToken) return;
-            [self.statusBarManager updateState:@"idle"];
-            [self showPromptTemplateButtonsIfNeededOrDismiss];
+            [self finishFinalTextDeliveryForToken:token];
         };
 
         if (shouldPaste) {
-            [self.pasteManager simulatePasteWithCompletion:completion];
+            [self.clipboardManager backup];
+            [self.clipboardManager writeText:text];
+            void (^pasteCompletion)(void) = ^{
+                if (token != self.rustBridge.currentSessionToken) return;
+                [self.clipboardManager scheduleRestoreAfterDelay:1500];
+                completion();
+            };
+            [self.pasteManager simulatePasteWithCompletion:pasteCompletion];
         } else {
             [self.pasteManager simulateTypingText:text completion:completion];
         }
     } else {
         NSLog(@"[Koe] Accessibility not granted — text copied to clipboard only");
-        [self.statusBarManager updateState:@"idle"];
-        [self showPromptTemplateButtonsIfNeededOrDismiss];
+        [self.clipboardManager cancelPendingRestore];
+        [self.clipboardManager writeText:text];
+        [self finishFinalTextDeliveryForToken:token];
     }
-
-    [self applyDeferredConfigReloadIfNeeded];
 }
 
 - (void)rustBridgeDidEncounterError:(NSString *)message {
@@ -728,6 +742,9 @@ static BOOL configFlagEnabled(const char *keyPath) {
 }
 
 - (void)statusBarDidToggleTranslationMode:(BOOL)enabled {
+    self.translationModeRequestGeneration += 1;
+    NSUInteger requestGeneration = self.translationModeRequestGeneration;
+
     if (!enabled) {
         [self stopTranslationMode];
         return;
@@ -748,6 +765,9 @@ static BOOL configFlagEnabled(const char *keyPath) {
     }
 
     [SPVirtualMicInstaller installWithCompletion:^(NSError * _Nullable error) {
+        if (requestGeneration != self.translationModeRequestGeneration) {
+            return;
+        }
         if (error != nil) {
             NSLog(@"[Koe] Failed to install KoeVirtualMic.driver: %@", error.localizedDescription);
             [self setTranslationModeEnabled:NO];

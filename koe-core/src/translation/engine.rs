@@ -9,7 +9,7 @@ use reqwest::Client;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, Instant};
 
 /// Factory closure that creates a fresh `(AsrConfig, Box<dyn AsrProvider>)` pair.
 /// A new provider is needed for every utterance because ASR sessions are
@@ -56,7 +56,7 @@ impl TranslationEngine {
     /// (the same format the normal Koe audio pipeline uses).
     pub async fn run(
         &self,
-        mut audio_rx: mpsc::Receiver<Vec<u8>>,
+        mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         stop: Arc<AtomicBool>,
     ) -> Result<()> {
         let output_buffer = Arc::new(SharedOutputBuffer::new(
@@ -103,7 +103,7 @@ impl TranslationEngine {
         let output_sample_rate = self.config.output_sample_rate;
         let output_channels = self.config.output_channels;
 
-        let (segment_tx, mut segment_rx) = mpsc::channel::<SpeechSegment>(4);
+        let (segment_tx, mut segment_rx) = mpsc::unbounded_channel::<SpeechSegment>();
 
         let processor_handle = tokio::spawn(async move {
             while let Some(segment) = segment_rx.recv().await {
@@ -124,24 +124,34 @@ impl TranslationEngine {
             }
             log::info!("[translation] segment processor stopped");
         });
+        let mut last_audio_at = None;
 
         while !stop.load(Ordering::SeqCst) {
             tokio::select! {
                 Some(bytes) = audio_rx.recv() => {
+                    last_audio_at = Some(Instant::now());
                     let samples: Vec<i16> = bytes
                         .chunks_exact(2)
                         .map(|c| i16::from_le_bytes([c[0], c[1]]))
                         .collect();
                     for segment in vad.push_samples(&samples) {
-                        if segment_tx.try_send(segment).is_err() {
-                            log::warn!("[translation] segment queue full, dropping segment");
+                        if segment_tx.send(segment).is_err() {
+                            log::warn!("[translation] segment processor stopped before utterance handoff");
+                            break;
                         }
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    if let Some(segment) = vad.flush() {
-                        if segment_tx.try_send(segment).is_err() {
-                            log::warn!("[translation] segment queue full, dropping segment");
+                    if let Some(idle_for) = last_audio_at.map(|last| last.elapsed()) {
+                        let idle_ms = idle_for.as_millis().min(u128::from(u64::MAX)) as u64;
+                        if idle_ms >= self.config.silence_ms {
+                            last_audio_at = None;
+                            if let Some(segment) = vad.flush_if_inactive(idle_ms) {
+                                if segment_tx.send(segment).is_err() {
+                                    log::warn!("[translation] segment processor stopped before idle flush");
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -149,8 +159,8 @@ impl TranslationEngine {
         }
 
         if let Some(segment) = vad.flush() {
-            if segment_tx.try_send(segment).is_err() {
-                log::warn!("[translation] final segment dropped because queue is full");
+            if segment_tx.send(segment).is_err() {
+                log::warn!("[translation] segment processor stopped before final flush");
             }
         }
         drop(segment_tx);
@@ -163,7 +173,7 @@ impl TranslationEngine {
 }
 
 async fn run_passthrough_loop(
-    audio_rx: &mut mpsc::Receiver<Vec<u8>>,
+    audio_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
     output_buffer: Arc<SharedOutputBuffer>,
     output_sample_rate: u32,

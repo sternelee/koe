@@ -116,28 +116,19 @@ impl EnergyVad {
     /// speech was detected).
     pub fn flush(&mut self) -> Option<SpeechSegment> {
         if self.total_samples == 0 || self.state == VadState::Idle {
-            self.buffer.clear();
-            self.total_samples = 0;
-            self.silent_frames = 0;
-            self.energy_history.clear();
-            self.state = VadState::Idle;
+            self.reset();
             return None;
         }
-        let duration_ms = (self.total_samples as u64 * 1000) / (self.sample_rate as u64);
-        let samples = std::mem::take(&mut self.buffer);
-        self.total_samples = 0;
-        self.silent_frames = 0;
-        self.energy_history.clear();
-        self.state = VadState::Idle;
+        self.take_segment()
+    }
 
-        if duration_ms >= self.min_speech_ms {
-            Some(SpeechSegment {
-                samples,
-                duration_ms,
-            })
-        } else {
-            None
+    /// Finalize a pending utterance only after the input stream has gone quiet
+    /// for at least the configured silence window.
+    pub fn flush_if_inactive(&mut self, inactive_ms: u64) -> Option<SpeechSegment> {
+        if inactive_ms < self.silence_ms {
+            return None;
         }
+        self.flush()
     }
 
     fn process_frame(&mut self) -> Option<SpeechSegment> {
@@ -188,12 +179,13 @@ impl EnergyVad {
     }
 
     fn finalise_segment(&mut self) -> Option<SpeechSegment> {
+        self.take_segment()
+    }
+
+    fn take_segment(&mut self) -> Option<SpeechSegment> {
         let duration_ms = (self.total_samples as u64 * 1000) / (self.sample_rate as u64);
         let samples = std::mem::take(&mut self.buffer);
-        self.total_samples = 0;
-        self.silent_frames = 0;
-        self.energy_history.clear();
-        self.state = VadState::Idle;
+        self.reset();
 
         if duration_ms >= self.min_speech_ms {
             Some(SpeechSegment {
@@ -203,6 +195,14 @@ impl EnergyVad {
         } else {
             None
         }
+    }
+
+    fn reset(&mut self) {
+        self.buffer.clear();
+        self.total_samples = 0;
+        self.silent_frames = 0;
+        self.energy_history.clear();
+        self.state = VadState::Idle;
     }
 }
 
@@ -266,5 +266,35 @@ mod tests {
 
         let seg = vad.flush();
         assert!(seg.is_none(), "quiet audio should not produce segment");
+    }
+
+    #[test]
+    fn inactivity_flush_waits_for_silence_window() {
+        let mut vad = EnergyVad::new(0.01, 200, 500, 10_000, 16_000);
+
+        let speech = generate_tone(16_000, 1000, 0.5);
+        assert!(vad.push_samples(&speech).is_empty());
+
+        assert!(
+            vad.flush_if_inactive(100).is_none(),
+            "short callback jitter should not end the utterance"
+        );
+
+        let seg = vad
+            .flush_if_inactive(500)
+            .expect("expected segment after full silence window");
+        assert!(
+            seg.duration_ms >= 1000,
+            "segment should preserve the speech"
+        );
+    }
+
+    #[test]
+    fn inactivity_flush_discards_unconfirmed_noise() {
+        let mut vad = EnergyVad::new(0.1, 200, 500, 10_000, 16_000);
+
+        let quiet = generate_tone(16_000, 500, 0.01);
+        assert!(vad.push_samples(&quiet).is_empty());
+        assert!(vad.flush_if_inactive(500).is_none());
     }
 }
