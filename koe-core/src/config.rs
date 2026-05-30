@@ -2020,10 +2020,17 @@ mod tests {
         assert!(!active.is_ready());
     }
 
-    // config_set tests are combined into one function because they mutate
-    // the HOME env var, which is process-global and races with parallel tests.
+    // HOME is process-global, so the tests below that point it at a temp config
+    // dir must not run concurrently — otherwise one reads another's HOME and
+    // sees the wrong (or deliberately corrupted) config. cargo runs tests in
+    // parallel by default, so being in the same module is not enough; they share
+    // this lock for their full duration. Poison-tolerant so one failing test
+    // doesn't cascade into the others.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn config_set_error_and_success() {
+        let _home_guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let orig_home = std::env::var("HOME").unwrap();
 
         // --- corrupted YAML should fail ---
@@ -2125,11 +2132,10 @@ mod tests {
         unsafe { std::env::remove_var("KOE_TEST_PORT") };
     }
 
-    // This test must be serial (mutates HOME) — kept in the same module so
-    // Rust's test runner serialises it with the other HOME-mutating test above
-    // when run with --test-threads=1; run individually it is always safe.
+    // Mutates HOME; serialised against the other HOME test via HOME_LOCK.
     #[test]
     fn config_bool_round_trip_and_isolation() {
+        let _home_guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let orig_home = std::env::var("HOME").unwrap();
 
         let tmp = std::env::temp_dir().join(format!(
