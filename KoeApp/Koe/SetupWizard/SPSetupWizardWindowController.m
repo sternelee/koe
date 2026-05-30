@@ -3225,7 +3225,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
         self.translationInputDeviceHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.input.sharedHint")];
         CGFloat micHintHeight = [self fittingHeightForWrappingLabel:self.translationInputDeviceHintLabel width:fieldW];
-        self.translationInputDeviceHintLabel.frame = NSMakeRect(fieldX, sy + 8, fieldW, micHintHeight);
+        self.translationInputDeviceHintLabel.frame = NSMakeRect(fieldX, NSMinY(self.translationInputDevicePopup.frame) - micHintHeight, fieldW, micHintHeight);
         [section addSubview:self.translationInputDeviceHintLabel];
     }
 
@@ -3258,7 +3258,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
         NSTextField *note = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.general.sourceTip")];
         CGFloat noteH = [self fittingHeightForWrappingLabel:note width:fieldW];
-        note.frame = NSMakeRect(fieldX, sy + 8, fieldW, noteH);
+        note.frame = NSMakeRect(fieldX, NSMinY(self.translationSourceLangField.frame) - noteH - 10, fieldW, noteH);
         [section addSubview:note];
     }
 
