@@ -3,12 +3,17 @@
 @interface SPPasteManager : NSObject
 
 /// Simulate Cmd+V paste via CGEvent injection.
-/// The completion block is called after a short delay to allow the paste to take effect.
-- (void)simulatePasteWithCompletion:(void (^)(void))completion;
+/// `isValid` is evaluated immediately before each delayed injection step; if it
+/// returns NO (e.g. a newer session has superseded this one) the injection is
+/// skipped. Pass nil to always inject. The completion block is called after a
+/// short delay to allow the paste to take effect.
+- (void)simulatePasteWithValidator:(BOOL (^)(void))isValid completion:(void (^)(void))completion;
 
 /// Type text into the current focused input using Unicode keyboard events.
-/// The completion block is called after a short delay to allow the target app to process input.
-- (void)simulateTypingText:(NSString *)text completion:(void (^)(void))completion;
+/// `isValid` is evaluated immediately before injection; if it returns NO the
+/// injection is skipped. Pass nil to always inject. The completion block is
+/// called after a short delay to allow the target app to process input.
+- (void)simulateTypingText:(NSString *)text validator:(BOOL (^)(void))isValid completion:(void (^)(void))completion;
 
 /// Simulate Cmd+Z undo, then Cmd+V paste. Used to replace previously pasted text.
 /// The completion block is called after the paste takes effect.

@@ -12,6 +12,9 @@ include!(concat!(env!("OUT_DIR"), "/shared_buffer_contract.rs"));
 pub const SHARED_BUFFER_MAGIC: u32 = 0x4B4F_4556; // "KOEV" in le
 pub const SHARED_BUFFER_VERSION: u32 = 1;
 
+/// Bounded retry budget for seqlock-consistent reads from the shared buffer.
+const MAX_SEQLOCK_RETRIES: usize = 16;
+
 // Layout: 6 x u32 + 3 x u64 = 48 bytes
 const HEADER_SIZE: usize = 48;
 const MAGIC_OFFSET: usize = 0;
@@ -113,10 +116,26 @@ impl SharedOutputBuffer {
             })?;
         }
 
+        // `capacity_frames` is persisted in the header as a u32 for the HAL
+        // plug-in; reject sizes that would silently truncate, and use checked
+        // arithmetic so an absurd capacity can never produce a smaller-than-
+        // expected mmap that the writer would then index out of bounds.
+        if capacity_frames > u32::MAX as usize {
+            return Err(crate::errors::KoeError::Config(
+                "shared output buffer capacity exceeds u32 frame limit".into(),
+            ));
+        }
+
         let channel_count = usize::from(channels);
-        let capacity_samples = capacity_frames.saturating_mul(channel_count);
-        let file_size =
-            HEADER_SIZE.saturating_add(capacity_samples.saturating_mul(std::mem::size_of::<f32>()));
+        let capacity_samples = capacity_frames.checked_mul(channel_count).ok_or_else(|| {
+            crate::errors::KoeError::Config("shared output buffer sample count overflow".into())
+        })?;
+        let file_size = capacity_samples
+            .checked_mul(std::mem::size_of::<f32>())
+            .and_then(|b| b.checked_add(HEADER_SIZE))
+            .ok_or_else(|| {
+                crate::errors::KoeError::Config("shared output buffer file size overflow".into())
+            })?;
 
         let file = open_shared_file(&file_path, file_size).map_err(|e| {
             crate::errors::KoeError::Config(format!("open shared buffer file: {e}"))
@@ -237,38 +256,56 @@ impl SharedOutputBuffer {
         }
 
         let capacity_frames = self.capacity_samples / expected_channels;
-        let write_index = atomic_u64_at(mmap, WRITE_INDEX_OFFSET).load(Ordering::Acquire);
         let read_index = atomic_u64_at(mmap, READ_INDEX_OFFSET).load(Ordering::Acquire);
-
-        let available_frames = cmp::min(
-            capacity_frames,
-            write_index.saturating_sub(read_index) as usize,
-        );
         let requested_frames = out_samples.len() / expected_channels;
-        let frames_to_read = cmp::min(available_frames, requested_frames);
         let start_frame = (read_index as usize) % capacity_frames;
 
-        for frame_index in 0..frames_to_read {
-            for channel_index in 0..expected_channels {
-                let src_frame = (start_frame + frame_index) % capacity_frames;
-                let src_index = src_frame.saturating_mul(expected_channels) + channel_index;
-                let byte_offset =
-                    HEADER_SIZE.saturating_add(src_index * std::mem::size_of::<f32>());
-                let bytes = [
-                    mmap[byte_offset],
-                    mmap[byte_offset + 1],
-                    mmap[byte_offset + 2],
-                    mmap[byte_offset + 3],
-                ];
-                let dst_index = frame_index.saturating_mul(expected_channels) + channel_index;
-                out_samples[dst_index] = f32::from_le_bytes(bytes);
+        // Seqlock-consistent read: copy into a scratch buffer while the writer's
+        // sequence is even (not mid-write) and unchanged across the copy. The
+        // read index is only advanced after a stable read so torn frames are
+        // never consumed.
+        let seq_field = atomic_u32_at(mmap, SEQUENCE_OFFSET);
+        let mut scratch: Vec<f32> = Vec::new();
+        let mut frames_to_read = 0usize;
+        for _ in 0..MAX_SEQLOCK_RETRIES {
+            let seq_before = seq_field.load(Ordering::Acquire);
+            if seq_before & 1 != 0 {
+                std::hint::spin_loop();
+                continue;
             }
+            let write_index = atomic_u64_at(mmap, WRITE_INDEX_OFFSET).load(Ordering::Acquire);
+            let available_frames = cmp::min(
+                capacity_frames,
+                write_index.saturating_sub(read_index) as usize,
+            );
+            frames_to_read = cmp::min(available_frames, requested_frames);
+
+            scratch.clear();
+            scratch.reserve(frames_to_read * expected_channels);
+            for frame_index in 0..frames_to_read {
+                for channel_index in 0..expected_channels {
+                    let src_frame = (start_frame + frame_index) % capacity_frames;
+                    let src_index = src_frame.saturating_mul(expected_channels) + channel_index;
+                    let byte_offset =
+                        HEADER_SIZE.saturating_add(src_index * std::mem::size_of::<f32>());
+                    let bytes = [
+                        mmap[byte_offset],
+                        mmap[byte_offset + 1],
+                        mmap[byte_offset + 2],
+                        mmap[byte_offset + 3],
+                    ];
+                    scratch.push(f32::from_le_bytes(bytes));
+                }
+            }
+
+            if seq_field.load(Ordering::Acquire) == seq_before {
+                break;
+            }
+            std::hint::spin_loop();
         }
 
-        for slot in out_samples
-            .iter_mut()
-            .skip(frames_to_read.saturating_mul(expected_channels))
-        {
+        out_samples[..scratch.len()].copy_from_slice(&scratch);
+        for slot in out_samples.iter_mut().skip(scratch.len()) {
             *slot = 0.0;
         }
 
@@ -281,18 +318,33 @@ impl SharedOutputBuffer {
 
     pub fn snapshot(&self) -> SharedBufferSnapshot {
         let mmap = unsafe { &*self.mmap.get() };
-        let header = self.read_header_from(mmap);
+        let seq_field = atomic_u32_at(mmap, SEQUENCE_OFFSET);
         let sample_count = self.capacity_samples;
+        let mut header = self.read_header_from(mmap);
         let mut samples = vec![0.0f32; sample_count];
-        for i in 0..sample_count {
-            let byte_offset = HEADER_SIZE.saturating_add(i * std::mem::size_of::<f32>());
-            let bytes = [
-                mmap[byte_offset],
-                mmap[byte_offset + 1],
-                mmap[byte_offset + 2],
-                mmap[byte_offset + 3],
-            ];
-            samples[i] = f32::from_le_bytes(bytes);
+        // Seqlock-consistent snapshot: re-read header + samples until the
+        // writer's sequence is even and stable across the whole copy.
+        for _ in 0..MAX_SEQLOCK_RETRIES {
+            let seq_before = seq_field.load(Ordering::Acquire);
+            if seq_before & 1 != 0 {
+                std::hint::spin_loop();
+                continue;
+            }
+            header = self.read_header_from(mmap);
+            for (i, slot) in samples.iter_mut().enumerate() {
+                let byte_offset = HEADER_SIZE.saturating_add(i * std::mem::size_of::<f32>());
+                let bytes = [
+                    mmap[byte_offset],
+                    mmap[byte_offset + 1],
+                    mmap[byte_offset + 2],
+                    mmap[byte_offset + 3],
+                ];
+                *slot = f32::from_le_bytes(bytes);
+            }
+            if seq_field.load(Ordering::Acquire) == seq_before {
+                break;
+            }
+            std::hint::spin_loop();
         }
         SharedBufferSnapshot {
             header,

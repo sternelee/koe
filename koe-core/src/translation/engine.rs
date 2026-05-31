@@ -103,7 +103,12 @@ impl TranslationEngine {
         let output_sample_rate = self.config.output_sample_rate;
         let output_channels = self.config.output_channels;
 
-        let (segment_tx, mut segment_rx) = mpsc::unbounded_channel::<SpeechSegment>();
+        // Bounded so a slow MT/TTS stage applies backpressure instead of letting
+        // unbounded audio segments accumulate. Live segments are dropped (with a
+        // warning) when the backlog is full — for a real-time translator a stale
+        // backlog is useless — while the final flush below uses a blocking send so
+        // the last utterance is never lost on shutdown.
+        let (segment_tx, mut segment_rx) = mpsc::channel::<SpeechSegment>(8);
 
         let processor_handle = tokio::spawn(async move {
             while let Some(segment) = segment_rx.recv().await {
@@ -135,9 +140,15 @@ impl TranslationEngine {
                         .map(|c| i16::from_le_bytes([c[0], c[1]]))
                         .collect();
                     for segment in vad.push_samples(&samples) {
-                        if segment_tx.send(segment).is_err() {
-                            log::warn!("[translation] segment processor stopped before utterance handoff");
-                            break;
+                        match segment_tx.try_send(segment) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                log::warn!("[translation] segment backlog full; dropping utterance to bound memory");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                log::warn!("[translation] segment processor stopped before utterance handoff");
+                                break;
+                            }
                         }
                     }
                 }
@@ -147,9 +158,15 @@ impl TranslationEngine {
                         if idle_ms >= self.config.silence_ms {
                             last_audio_at = None;
                             if let Some(segment) = vad.flush_if_inactive(idle_ms) {
-                                if segment_tx.send(segment).is_err() {
-                                    log::warn!("[translation] segment processor stopped before idle flush");
-                                    break;
+                                match segment_tx.try_send(segment) {
+                                    Ok(()) => {}
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        log::warn!("[translation] segment backlog full; dropping idle-flush utterance");
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        log::warn!("[translation] segment processor stopped before idle flush");
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -159,7 +176,7 @@ impl TranslationEngine {
         }
 
         if let Some(segment) = vad.flush() {
-            if segment_tx.send(segment).is_err() {
+            if segment_tx.send(segment).await.is_err() {
                 log::warn!("[translation] segment processor stopped before final flush");
             }
         }

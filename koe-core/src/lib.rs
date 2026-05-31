@@ -907,6 +907,12 @@ async fn run_session(
     if cancelled.load(Ordering::SeqCst) {
         log::info!("[{session_id}] session cancelled by user");
         let _ = asr.close().await;
+        {
+            let mut s = session_arc.lock().unwrap();
+            if let Some(ref mut session) = *s {
+                let _ = session.transition(SessionState::Cancelled);
+            }
+        }
         invoke_state_changed(session_token, "cancelled");
         cleanup_session(&session_arc);
         invoke_state_changed(session_token, "idle");
@@ -1002,6 +1008,12 @@ async fn run_session(
     // aborted old session exits quickly when a new session has started.
     if cancelled.load(Ordering::SeqCst) {
         log::info!("[{session_id}] session cancelled before LLM correction");
+        {
+            let mut s = session_arc.lock().unwrap();
+            if let Some(ref mut session) = *s {
+                let _ = session.transition(SessionState::Cancelled);
+            }
+        }
         invoke_state_changed(session_token, "cancelled");
         cleanup_session(&session_arc);
         invoke_state_changed(session_token, "idle");
@@ -1131,6 +1143,12 @@ async fn run_session(
     // pasting stale text from an aborted session into the new session's window.
     if cancelled.load(Ordering::SeqCst) {
         log::info!("[{session_id}] session cancelled after LLM correction");
+        {
+            let mut s = session_arc.lock().unwrap();
+            if let Some(ref mut session) = *s {
+                let _ = session.transition(SessionState::Cancelled);
+            }
+        }
         invoke_state_changed(session_token, "cancelled");
         cleanup_session(&session_arc);
         invoke_state_changed(session_token, "idle");

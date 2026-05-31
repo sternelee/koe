@@ -4,14 +4,13 @@ use std::collections::VecDeque;
 ///
 /// Operates on i16 PCM 16 kHz mono samples.  States:
 ///   * `Idle`      – waiting for speech.
-///   * `Speaking`  – speech detected, accumulating samples.
-///   * `Trailing`  – silence gap after speech; if it exceeds `silence_ms` the
-///     segment is finalised.
+///   * `Speaking`  – speech detected, accumulating samples. Trailing silence is
+///     tracked via `silent_frames`; once it exceeds `silence_ms` the segment is
+///     finalised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VadState {
     Idle,
     Speaking,
-    Trailing,
 }
 
 /// A completed speech segment returned by the VAD.
@@ -168,11 +167,6 @@ impl EnergyVad {
                 if duration_ms >= self.max_speech_ms {
                     return self.finalise_segment();
                 }
-                None
-            }
-            VadState::Trailing => {
-                // Should not happen; treat as idle.
-                self.state = VadState::Idle;
                 None
             }
         }

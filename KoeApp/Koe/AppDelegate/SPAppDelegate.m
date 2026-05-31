@@ -464,6 +464,19 @@ static BOOL configFlagEnabled(const char *keyPath) {
     if (self.quitting) return;
     NSLog(@"[Koe] Final text received (%lu chars)", (unsigned long)text.length);
 
+    uint64_t token = self.rustBridge.currentSessionToken;
+
+    // Empty / whitespace-only final text: nothing to deliver. Skip paste/type so
+    // we never inject an empty Cmd+V (which would clear the target's selection)
+    // or type nothing, and don't record a meaningless history entry.
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        NSLog(@"[Koe] Final text empty — skipping delivery");
+        self.recordingStartTime = nil;
+        [self finishFinalTextDeliveryForToken:token];
+        return;
+    }
+
     // Record history
     NSInteger durationMs = 0;
     if (self.recordingStartTime) {
@@ -480,13 +493,23 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.overlayPanel updateState:@"pasting"];
     [self.clipboardManager cancelPendingRestore];
 
-    uint64_t token = self.rustBridge.currentSessionToken;
-
     BOOL accessOK = [self.permissionManager isAccessibilityGranted];
     BOOL shouldPaste = (sp_core_should_paste_final_text() == 1);
     NSLog(@"[Koe] Accessibility granted: %@, delivery=%@", accessOK ? @"YES" : @"NO", shouldPaste ? @"paste" : @"type");
 
     if (accessOK) {
+        // Validity gate for the *delayed* synthetic key injection. The bridge
+        // already filters callbacks by token before this method runs, but the
+        // actual Cmd+V / typing fires tens of ms later via dispatch_after; if a
+        // new session has started by then we must not inject stale text into the
+        // (now different) target context. Captured per delivery — never stored on
+        // the paste manager — so a later session can't satisfy an earlier gate.
+        __weak typeof(self) weakSelf = self;
+        BOOL (^isValid)(void) = ^BOOL{
+            typeof(self) strongSelf = weakSelf;
+            return strongSelf != nil && token == strongSelf.rustBridge.currentSessionToken;
+        };
+
         void (^completion)(void) = ^{
             NSLog(@"[Koe] Final text delivery completion callback fired");
             [self finishFinalTextDeliveryForToken:token];
@@ -500,9 +523,9 @@ static BOOL configFlagEnabled(const char *keyPath) {
                 [self.clipboardManager scheduleRestoreAfterDelay:1500];
                 completion();
             };
-            [self.pasteManager simulatePasteWithCompletion:pasteCompletion];
+            [self.pasteManager simulatePasteWithValidator:isValid completion:pasteCompletion];
         } else {
-            [self.pasteManager simulateTypingText:text completion:completion];
+            [self.pasteManager simulateTypingText:text validator:isValid completion:completion];
         }
     } else {
         NSLog(@"[Koe] Accessibility not granted — text copied to clipboard only");

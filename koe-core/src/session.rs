@@ -6,7 +6,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
     Idle,
-    HotkeyDecisionPending,
     ConnectingAsr,
     RecordingHold,
     RecordingToggle,
@@ -16,6 +15,7 @@ pub enum SessionState {
     Pasting,
     RestoringClipboard,
     Completed,
+    Cancelled,
     Failed,
 }
 
@@ -23,7 +23,6 @@ impl fmt::Display for SessionState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             SessionState::Idle => "idle",
-            SessionState::HotkeyDecisionPending => "hotkey_decision_pending",
             SessionState::ConnectingAsr => "connecting_asr",
             SessionState::RecordingHold => "recording_hold",
             SessionState::RecordingToggle => "recording_toggle",
@@ -33,6 +32,7 @@ impl fmt::Display for SessionState {
             SessionState::Pasting => "pasting",
             SessionState::RestoringClipboard => "restoring_clipboard",
             SessionState::Completed => "completed",
+            SessionState::Cancelled => "cancelled",
             SessionState::Failed => "failed",
         };
         write!(f, "{s}")
@@ -87,14 +87,19 @@ impl Session {
             (self.state, to),
             (ConnectingAsr, RecordingHold)
                 | (ConnectingAsr, RecordingToggle)
+                | (ConnectingAsr, Cancelled)
                 | (ConnectingAsr, Failed)
                 | (RecordingHold, FinalizingAsr)
+                | (RecordingHold, Cancelled)
                 | (RecordingHold, Failed)
                 | (RecordingToggle, FinalizingAsr)
+                | (RecordingToggle, Cancelled)
                 | (RecordingToggle, Failed)
                 | (FinalizingAsr, Correcting)
+                | (FinalizingAsr, Cancelled)
                 | (FinalizingAsr, Failed)
                 | (Correcting, PreparingPaste)
+                | (Correcting, Cancelled)
                 | (Correcting, Failed)
                 | (PreparingPaste, Pasting)
                 | (PreparingPaste, Completed)
@@ -105,6 +110,7 @@ impl Session {
                 | (RestoringClipboard, Completed)
                 | (RestoringClipboard, Failed)
                 | (Completed, Idle)
+                | (Cancelled, Idle)
                 | (Failed, Idle)
         )
     }
@@ -140,6 +146,24 @@ mod tests {
     #[test]
     fn completed_can_transition_to_idle() {
         let mut s = session_at(SessionState::Completed);
+        assert!(s.transition(SessionState::Idle).is_ok());
+    }
+
+    #[test]
+    fn recording_can_transition_to_cancelled() {
+        let mut s = session_at(SessionState::RecordingHold);
+        assert!(s.transition(SessionState::Cancelled).is_ok());
+    }
+
+    #[test]
+    fn correcting_can_transition_to_cancelled() {
+        let mut s = session_at(SessionState::Correcting);
+        assert!(s.transition(SessionState::Cancelled).is_ok());
+    }
+
+    #[test]
+    fn cancelled_can_transition_to_idle() {
+        let mut s = session_at(SessionState::Cancelled);
         assert!(s.transition(SessionState::Idle).is_ok());
     }
 }

@@ -28,25 +28,26 @@ static CGEventSourceRef createPrivateEventSource(void) {
     return source;
 }
 
-- (void)simulatePasteWithCompletion:(void (^)(void))completion {
+- (void)simulatePasteWithValidator:(BOOL (^)(void))isValid completion:(void (^)(void))completion {
     // NOTE: `cancelled` is sticky. Once -cancel is called (at quit) it stays
     // YES for the lifetime of this manager, so any subsequent simulate* calls
     // become no-ops. This is intentional: during quit, in-flight Rust
     // callbacks can still land on the main queue after `quitting=YES` is set
     // on the app delegate, and we must never fire a synthetic paste after
-    // cancel.
-    if (self.cancelled) return;
+    // cancel. `isValid` adds per-session gating so a paste scheduled for a
+    // superseded session never injects into a newer session's target context.
+    if (self.cancelled || (isValid && !isValid())) return;
     // Small delay after clipboard write to ensure it's ready
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
-        if (self.cancelled) return;
+        if (self.cancelled || (isValid && !isValid())) return;
         [self performPaste];
 
         // Delay after paste to let the target app process it
         if (completion) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)),
                            dispatch_get_main_queue(), ^{
-                if (self.cancelled) return;
+                if (self.cancelled || (isValid && !isValid())) return;
                 completion();
             });
         }
@@ -89,17 +90,17 @@ static CGEventSourceRef createPrivateEventSource(void) {
     NSLog(@"[Koe] Cmd+V simulated");
 }
 
-- (void)simulateTypingText:(NSString *)text completion:(void (^)(void))completion {
-    if (self.cancelled) return;
+- (void)simulateTypingText:(NSString *)text validator:(BOOL (^)(void))isValid completion:(void (^)(void))completion {
+    if (self.cancelled || (isValid && !isValid())) return;
     NSString *textToType = text ?: @"";
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
-        if (self.cancelled) return;
+        if (self.cancelled || (isValid && !isValid())) return;
         [self performTypingText:textToType];
         if (completion) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)),
                            dispatch_get_main_queue(), ^{
-                if (self.cancelled) return;
+                if (self.cancelled || (isValid && !isValid())) return;
                 completion();
             });
         }
