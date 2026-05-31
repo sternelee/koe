@@ -138,6 +138,20 @@ pub fn looks_like_degenerate_rewrite(
         }
     }
 
+    // --- Translation: a CJK-dominant input that comes back with almost no CJK
+    // is a script flip — the model translated instead of rewriting, erasing the
+    // user's language (observed on the 0.6B for English-dense mixed input).
+    // Mixed CN+English dictation keeps most of its CJK, so it passes.
+    let cjk_count = |s: &str| {
+        s.chars()
+            .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c))
+            .count()
+    };
+    let asr_cjk = cjk_count(asr_text);
+    if asr_cjk >= 4 && cjk_count(output) * 4 < asr_cjk {
+        return true;
+    }
+
     // Whitespace-stripped, lowercased forms so CJK/latin spacing and trailing
     // sentence punctuation don't skew the length/substring comparison.
     let strip = |s: &str| -> String {
@@ -256,6 +270,36 @@ mod tests {
         // the verbatim-fragment + heavy-drop check must catch it.
         let asr = "我刚才说的那个 PPT master 的功能其实挺好用的";
         assert!(looks_like_degenerate_rewrite("PPT master", asr, &dict()));
+    }
+
+    #[test]
+    fn detects_translation_to_english() {
+        // Observed 0.6B failure: Chinese input comes back fully translated.
+        let asr = "我想测试这个功能是否正常工作";
+        assert!(looks_like_degenerate_rewrite(
+            "I want to test whether this feature works normally",
+            asr,
+            &dict()
+        ));
+    }
+
+    #[test]
+    fn passes_english_dense_mixed_dictation() {
+        // Heavy CN+English mix must survive — it keeps most of its CJK.
+        let asr = "我们用 Claude Code 配合 Cursor 写 Rust 然后 deploy 到 Vercel";
+        let out = "我们用 Claude Code 配合 Cursor 写 Rust，然后 deploy 到 Vercel。";
+        assert!(!looks_like_degenerate_rewrite(out, asr, &dict()));
+    }
+
+    #[test]
+    fn passes_pure_english_input() {
+        // Pure English in, English out is correct — no CJK to lose.
+        let asr = "let me check whether claude code still works fine here";
+        assert!(!looks_like_degenerate_rewrite(
+            "Let me check whether Claude Code still works fine here.",
+            asr,
+            &dict()
+        ));
     }
 
     #[test]
