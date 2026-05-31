@@ -43,6 +43,7 @@
 "statusBar.menu.checkUpdates" = "检查更新...";
 "statusBar.menu.launchAtLogin" = "开机启动";
 "statusBar.menu.quit" = "退出 Koe";
+"statusBar.menu.translationMode" = "翻译模式";
 
 /* ─── 更新管理 ─── */
 "update.unavailable.title" = "无法检查更新";
@@ -64,6 +65,10 @@
 "update.button.later" = "稍后";
 "update.button.skip" = "跳过此版本";
 "update.button.ok" = "好";
+"update.error.emptyFeed" = "更新源为空。";
+"update.error.notJSONObject" = "更新源必须是 JSON 对象。";
+"update.error.missingFields" = "更新源必须包含 version 和 download_url。";
+"update.error.invalidURL" = "更新源的 download_url 无效。";
 
 /* ─── 通知 ─── */
 "notification.error.title" = "Koe 出错";
@@ -78,11 +83,24 @@
 "permission.inputMonitoring.message" = "Koe 需要输入监控权限来全局检测触发快捷键。\n\n未授权时，按下快捷键无法触发录音。\n\n请前往 系统设置 → 隐私与安全性 → 输入监控 中授权。";
 "permission.speechRecognition.title" = "需要语音识别权限";
 "permission.speechRecognition.message" = "Koe 需要语音识别权限来使用设备端语音识别（Apple Speech）。\n\n请在弹窗中授权，或前往 系统设置 → 隐私与安全性 → 语音识别 中开启。";
+"permission.screenRecording.title" = "需要屏幕录制权限";
+"permission.screenRecording.message" = "Koe 需要屏幕录制权限来采集系统音频用于翻译流程。\n\n请前往 系统设置 → 隐私与安全性 → 屏幕录制 中授权。";
 "permission.button.openSettings" = "打开设置";
 "permission.button.dismiss" = "关闭";
 "permission.button.dontRemind" = "不再提醒";
 
 /* ─── 语言设置 ─── */
+"settings.window.title" = "Koe 设置";
+"settings.toolbar.asr" = "语音识别";
+"settings.toolbar.llm" = "语言模型";
+"settings.toolbar.overlay" = "悬浮层";
+"settings.toolbar.controls" = "控制";
+"settings.toolbar.dictionary" = "词典";
+"settings.toolbar.prompt" = "提示词";
+"settings.toolbar.templates" = "模板";
+"settings.toolbar.translation" = "翻译";
+"settings.toolbar.about" = "关于";
+
 "settings.language.title" = "界面语言";
 "settings.language.followSystem" = "跟随系统";
 "settings.language.restartRequired" = "部分界面元素需要重启 Koe 才能完全应用语言更改。";
@@ -139,6 +157,10 @@
 "setupWizard.translation.virtualMic.uninstall.message" = "这将删除 /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver 并重载 Core Audio。之后可随时重新安装。";
 "setupWizard.translation.virtualMic.error.unknown" = "未知错误";
 "setupWizard.translation.virtualMic.error.bundleMissing" = "当前构建未打包 KoeVirtualMic.driver。请执行 `make build` 后重试。";
+"virtualMic.error.bundleNotFound" = "在 Koe.app 中未找到 KoeVirtualMic.driver。请尝试重新构建应用。";
+"virtualMic.error.appleScriptCreationFailed" = "构建用于提升权限的 AppleScript 失败。";
+"virtualMic.error.launchctlFailed" = "启动 launchctl 失败。";
+"virtualMic.error.unknown" = "虚拟麦克风安装器错误";
 "setupWizard.common.show" = "显示";
 "setupWizard.common.hide" = "隐藏";
 "setupWizard.common.cancel" = "取消";
@@ -270,3 +292,11 @@
 "error.asr.auth" = "语音识别认证失败";
 "error.audio" = "麦克风无法使用";
 "error.asr.unknown" = "语音识别出错";
+
+"rustBridge.error.noResponse" = "核心无响应";
+"rustBridge.error.invalidEncoding" = "模型列表响应编码无效";
+"rustBridge.error.invalidPayload" = "模型列表响应内容无效";
+"rustBridge.error.alreadyDownloading" = "已有下载任务进行中";
+"rustBridge.error.startDownloadFailed" = "启动下载失败";
+
+"keyboard.key.unknown" = "按键 %d";

@@ -1031,7 +1031,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
                     backing:NSBackingStoreBuffered
                       defer:YES];
-    window.title = @"Koe Settings";
+    window.title = KoeLocalizedString(@"settings.window.title");
     window.toolbarStyle = NSWindowToolbarStylePreference;
 
     self = [super initWithWindow:window];
@@ -1086,31 +1086,31 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     item.action = @selector(toolbarItemClicked:);
 
     if ([itemIdentifier isEqualToString:kToolbarASR]) {
-        item.label = @"ASR";
+        item.label = KoeLocalizedString(@"settings.toolbar.asr");
         item.image = [NSImage imageWithSystemSymbolName:@"mic.fill" accessibilityDescription:@"ASR"];
     } else if ([itemIdentifier isEqualToString:kToolbarLLM]) {
-        item.label = @"LLM";
+        item.label = KoeLocalizedString(@"settings.toolbar.llm");
         item.image = [NSImage imageWithSystemSymbolName:@"cpu" accessibilityDescription:@"LLM"];
     } else if ([itemIdentifier isEqualToString:kToolbarOverlay]) {
-        item.label = @"Overlay";
+        item.label = KoeLocalizedString(@"settings.toolbar.overlay");
         item.image = [NSImage imageWithSystemSymbolName:@"captions.bubble" accessibilityDescription:@"Overlay"];
     } else if ([itemIdentifier isEqualToString:kToolbarHotkey]) {
-        item.label = @"Controls";
+        item.label = KoeLocalizedString(@"settings.toolbar.controls");
         item.image = [NSImage imageWithSystemSymbolName:@"slider.horizontal.3" accessibilityDescription:@"Controls"];
     } else if ([itemIdentifier isEqualToString:kToolbarDictionary]) {
-        item.label = @"Dictionary";
+        item.label = KoeLocalizedString(@"settings.toolbar.dictionary");
         item.image = [NSImage imageWithSystemSymbolName:@"book" accessibilityDescription:@"Dictionary"];
     } else if ([itemIdentifier isEqualToString:kToolbarSystemPrompt]) {
-        item.label = @"Prompt";
+        item.label = KoeLocalizedString(@"settings.toolbar.prompt");
         item.image = [NSImage imageWithSystemSymbolName:@"text.bubble" accessibilityDescription:@"System Prompt"];
     } else if ([itemIdentifier isEqualToString:kToolbarTemplates]) {
-        item.label = @"Templates";
+        item.label = KoeLocalizedString(@"settings.toolbar.templates");
         item.image = [NSImage imageWithSystemSymbolName:@"sparkles" accessibilityDescription:@"Templates"];
     } else if ([itemIdentifier isEqualToString:kToolbarTranslation]) {
-        item.label = @"Translation";
+        item.label = KoeLocalizedString(@"settings.toolbar.translation");
         item.image = [NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Translation"];
     } else if ([itemIdentifier isEqualToString:kToolbarAbout]) {
-        item.label = @"About";
+        item.label = KoeLocalizedString(@"settings.toolbar.about");
         item.image = [NSImage imageWithSystemSymbolName:@"info.circle" accessibilityDescription:@"About"];
     }
 

@@ -203,7 +203,7 @@ static NSTimeInterval const kSPInitialAutomaticCheckDelay = 8.0;
         if (error) {
             *error = [NSError errorWithDomain:@"SPUpdateManager"
                                          code:1
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The update feed was empty."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: KoeLocalizedString(@"update.error.emptyFeed")}];
         }
         return nil;
     }
@@ -213,7 +213,7 @@ static NSTimeInterval const kSPInitialAutomaticCheckDelay = 8.0;
         if (error && !*error) {
             *error = [NSError errorWithDomain:@"SPUpdateManager"
                                          code:2
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The update feed must be a JSON object."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: KoeLocalizedString(@"update.error.notJSONObject")}];
         }
         return nil;
     }
@@ -225,7 +225,7 @@ static NSTimeInterval const kSPInitialAutomaticCheckDelay = 8.0;
         if (error) {
             *error = [NSError errorWithDomain:@"SPUpdateManager"
                                          code:3
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The update feed must include version and download_url."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: KoeLocalizedString(@"update.error.missingFields")}];
         }
         return nil;
     }
@@ -235,7 +235,7 @@ static NSTimeInterval const kSPInitialAutomaticCheckDelay = 8.0;
         if (error) {
             *error = [NSError errorWithDomain:@"SPUpdateManager"
                                          code:4
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The update feed download_url is invalid."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: KoeLocalizedString(@"update.error.invalidURL")}];
         }
         return nil;
     }

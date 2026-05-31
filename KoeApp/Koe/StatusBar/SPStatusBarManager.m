@@ -101,14 +101,14 @@ static NSString *displayNameForKeycode(int keycode) {
                     if (result.length > 0) {
                         return result.uppercaseString;
                     }
-                    return [NSString stringWithFormat:@"Key %d", keycode];
+                    return [NSString stringWithFormat:KoeLocalizedString(@"keyboard.key.unknown"), keycode];
                 }
             }
         }
         CFRelease(inputSource);
     }
 
-    return [NSString stringWithFormat:@"Key %d", keycode];
+    return [NSString stringWithFormat:KoeLocalizedString(@"keyboard.key.unknown"), keycode];
 }
 
 static BOOL isNumericHotkeyValue(NSString *value) {
@@ -350,7 +350,7 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    self.translationModeItem = [[NSMenuItem alloc] initWithTitle:@"Translation Mode"
+    self.translationModeItem = [[NSMenuItem alloc] initWithTitle:KoeLocalizedString(@"statusBar.menu.translationMode")
                                                           action:@selector(toggleTranslationMode:)
                                                    keyEquivalent:@""];
     self.translationModeItem.target = self;

@@ -1,5 +1,6 @@
 #import "SPVirtualMicInstaller.h"
 
+#import "SPLocalization.h"
 #import <AppKit/AppKit.h>
 
 static NSString *const kVirtualMicHalDir = @"/Library/Audio/Plug-Ins/HAL";
@@ -37,7 +38,7 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
     NSString *sourcePath = [self findBundlePath];
     if (sourcePath == nil) {
         [self callCompletion:completion withError:[self errorWithCode:SPVirtualMicInstallerErrorBundleNotFound
-                                                              message:@"KoeVirtualMic.driver not found inside Koe.app. Try rebuilding the app."]];
+                                                              message:KoeLocalizedString(@"virtualMic.error.bundleNotFound")]];
         return;
     }
 
@@ -103,7 +104,7 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
         NSAppleScript *script = [[NSAppleScript alloc] initWithSource:source];
         if (script == nil) {
             completion([self errorWithCode:SPVirtualMicInstallerErrorAppleScriptCreationFailed
-                                   message:@"Failed to construct AppleScript for privilege elevation."]);
+                                   message:KoeLocalizedString(@"virtualMic.error.appleScriptCreationFailed")]);
             return;
         }
         NSDictionary *errorInfo = nil;
@@ -128,7 +129,7 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
         NSError *launchError = nil;
         if (![task launchAndReturnError:&launchError]) {
             [self callCompletion:completion withError:launchError ?: [self errorWithCode:SPVirtualMicInstallerErrorReloadFailed
-                                                                                  message:@"Failed to launch launchctl."]];
+                                                                                  message:KoeLocalizedString(@"virtualMic.error.launchctlFailed")]];
             return;
         }
         [task waitUntilExit];
@@ -146,7 +147,7 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
 + (NSError *)errorWithCode:(SPVirtualMicInstallerErrorCode)code message:(NSString *)message {
     return [NSError errorWithDomain:kVirtualMicErrorDomain
                                code:code
-                           userInfo:@{NSLocalizedDescriptionKey: message ?: @"Virtual mic installer error"}];
+                           userInfo:@{NSLocalizedDescriptionKey: message ?: KoeLocalizedString(@"virtualMic.error.unknown")}];
 }
 
 + (void)callCompletion:(void (^)(NSError * _Nullable))completion withError:(NSError * _Nullable)error {

@@ -43,6 +43,7 @@
 "statusBar.menu.checkUpdates" = "Check for Updates...";
 "statusBar.menu.launchAtLogin" = "Launch at Login";
 "statusBar.menu.quit" = "Quit Koe";
+"statusBar.menu.translationMode" = "Translation Mode";
 
 /* ─── Update Manager ─── */
 "update.unavailable.title" = "Updates Unavailable";
@@ -64,6 +65,10 @@
 "update.button.later" = "Later";
 "update.button.skip" = "Skip This Version";
 "update.button.ok" = "OK";
+"update.error.emptyFeed" = "The update feed was empty.";
+"update.error.notJSONObject" = "The update feed must be a JSON object.";
+"update.error.missingFields" = "The update feed must include version and download_url.";
+"update.error.invalidURL" = "The update feed download_url is invalid.";
 
 /* ─── Notifications ─── */
 "notification.error.title" = "Koe Error";
@@ -78,11 +83,24 @@
 "permission.inputMonitoring.message" = "Koe needs Input Monitoring permission to detect the trigger hotkey globally.\n\nWithout this, Koe cannot start recording when you press the hotkey.\n\nPlease grant access in System Settings → Privacy & Security → Input Monitoring.";
 "permission.speechRecognition.title" = "Speech Recognition Access Required";
 "permission.speechRecognition.message" = "Koe needs Speech Recognition permission to use on-device speech recognition (Apple Speech).\n\nPlease grant access when prompted, or enable it in System Settings → Privacy & Security → Speech Recognition.";
+"permission.screenRecording.title" = "Screen Recording Access Required";
+"permission.screenRecording.message" = "Koe needs Screen Recording permission to capture system audio for the translation pipeline.\n\nPlease grant access in System Settings → Privacy & Security → Screen Recording.";
 "permission.button.openSettings" = "Open Settings";
 "permission.button.dismiss" = "Dismiss";
 "permission.button.dontRemind" = "Don't Remind Again";
 
 /* ─── Language Settings ─── */
+"settings.window.title" = "Koe Settings";
+"settings.toolbar.asr" = "ASR";
+"settings.toolbar.llm" = "LLM";
+"settings.toolbar.overlay" = "Overlay";
+"settings.toolbar.controls" = "Controls";
+"settings.toolbar.dictionary" = "Dictionary";
+"settings.toolbar.prompt" = "Prompt";
+"settings.toolbar.templates" = "Templates";
+"settings.toolbar.translation" = "Translation";
+"settings.toolbar.about" = "About";
+
 "settings.language.title" = "Interface Language";
 "settings.language.followSystem" = "Follow System";
 "settings.language.restartRequired" = "Some UI elements require restarting Koe to fully apply the language change.";
@@ -139,6 +157,10 @@
 "setupWizard.translation.virtualMic.uninstall.message" = "This will delete /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver and reload Core Audio. You can reinstall it at any time.";
 "setupWizard.translation.virtualMic.error.unknown" = "Unknown error";
 "setupWizard.translation.virtualMic.error.bundleMissing" = "KoeVirtualMic.driver was not bundled with this build. Run `make build` and try again.";
+"virtualMic.error.bundleNotFound" = "KoeVirtualMic.driver not found inside Koe.app. Try rebuilding the app.";
+"virtualMic.error.appleScriptCreationFailed" = "Failed to construct AppleScript for privilege elevation.";
+"virtualMic.error.launchctlFailed" = "Failed to launch launchctl.";
+"virtualMic.error.unknown" = "Virtual mic installer error";
 "setupWizard.common.show" = "Show";
 "setupWizard.common.hide" = "Hide";
 "setupWizard.common.cancel" = "Cancel";
@@ -270,3 +292,11 @@
 "error.asr.auth" = "ASR authentication failed";
 "error.audio" = "Microphone unavailable";
 "error.asr.unknown" = "ASR error";
+
+"rustBridge.error.noResponse" = "No response from core";
+"rustBridge.error.invalidEncoding" = "Invalid model list response encoding";
+"rustBridge.error.invalidPayload" = "Invalid model list response payload";
+"rustBridge.error.alreadyDownloading" = "Already downloading";
+"rustBridge.error.startDownloadFailed" = "Failed to start download";
+
+"keyboard.key.unknown" = "Key %d";
