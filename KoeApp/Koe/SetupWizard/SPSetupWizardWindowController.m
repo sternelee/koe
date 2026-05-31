@@ -5001,6 +5001,16 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     self.asrAccelerateCheckbox.state = [accelerate isEqualToString:@"true"]
                                            ? NSControlStateValueOn
                                            : NSControlStateValueOff;
+    // Restore the advanced-expanded state. The advanced VALUES persist in
+    // config, but the disclosure checkbox defaults to collapsed — so reopening
+    // Settings hid the section and the settings looked lost (they weren't).
+    // If any Doubao advanced value is non-default, pre-check the disclosure so
+    // the asrProviderChanged call below unhides the container and resizes.
+    BOOL hasAdvancedValues = (self.asrEndWindowField.stringValue.length > 0) ||
+                             (outputVariant.length > 0) ||
+                             [accelerate isEqualToString:@"true"];
+    self.asrAdvancedDisclosure.state =
+        hasAdvancedValues ? NSControlStateValueOn : NSControlStateValueOff;
     // Load Qwen fields
     NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
     self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
