@@ -882,12 +882,25 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
 
         match llm.correct(&request).await {
             Ok(result) => {
-                log::info!(
-                    "rewrite: template '{}' produced {} chars",
-                    template.name,
-                    result.len()
-                );
-                invoke_rewrite_text_ready(session_token, &result);
+                if prompt::looks_like_dictionary_artifact(
+                    &result,
+                    &request.asr_text,
+                    &request.dictionary_entries,
+                ) {
+                    log::warn!(
+                        "rewrite: template '{}' output looks like a dictionary artifact ({} chars); falling back to ASR text",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &asr_text);
+                } else {
+                    log::info!(
+                        "rewrite: template '{}' produced {} chars",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &result);
+                }
             }
             Err(e) => {
                 log::error!("rewrite: template '{}' failed: {e}", template.name);
@@ -1254,8 +1267,20 @@ async fn run_session(
         match llm.correct(&request).await {
             Ok(corrected) => {
                 mark_llm_connection_touched(&llm_warmup_state);
-                log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
-                corrected
+                if prompt::looks_like_dictionary_artifact(
+                    &corrected,
+                    &request.asr_text,
+                    &request.dictionary_entries,
+                ) {
+                    log::warn!(
+                        "[{session_id}] LLM output looks like a dictionary artifact ({} chars); falling back to raw ASR text",
+                        corrected.len()
+                    );
+                    asr_text
+                } else {
+                    log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
+                    corrected
+                }
             }
             Err(e) => {
                 log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
