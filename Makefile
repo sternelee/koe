@@ -27,7 +27,14 @@ install-cli:
 	APP_DIR="$$APP_ROOT/Contents/MacOS"; \
 	cp target/$(ARCH)/release/koe "$$APP_DIR/koe-cli"; \
 	chmod +x "$$APP_DIR/koe-cli"; \
-	codesign --force --deep --sign - "$$APP_ROOT"; \
+	ENT="KoeApp/Koe/Koe.entitlements"; \
+	if security find-identity -p codesigning -v 2>/dev/null | grep -q "Koe Dev"; then \
+		echo "Signing with stable identity 'Koe Dev' (Hardened Runtime — TCC permissions survive upgrades)"; \
+		codesign --force --deep --sign "Koe Dev" --options runtime --entitlements "$$ENT" --timestamp=none "$$APP_ROOT"; \
+	else \
+		echo "No 'Koe Dev' identity in keychain — ad-hoc signing (TCC re-prompts every build; run scripts/setup-codesign-identity.sh once to fix)"; \
+		codesign --force --deep --sign - "$$APP_ROOT"; \
+	fi; \
 	codesign --verify --deep --strict --verbose=2 "$$APP_ROOT"; \
 	echo "Installed koe-cli into $$APP_DIR and re-signed $$APP_ROOT"
 
