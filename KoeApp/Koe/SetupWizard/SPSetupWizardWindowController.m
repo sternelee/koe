@@ -705,19 +705,25 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 // ASR fields
 @property (nonatomic, strong) NSPopUpButton *asrProviderPopup;
 @property (nonatomic, strong) NSTextField *asrAppKeyField;
-@property (nonatomic, strong) NSSegmentedControl *asrAuthModeControl;
-@property (nonatomic, strong) NSTextField *asrApiKeyField;
-@property (nonatomic, strong) NSSecureTextField *asrApiKeySecureField;
-@property (nonatomic, strong) NSButton *asrApiKeyToggle;
 @property (nonatomic, strong) NSTextField *asrAccessKeyField;
 @property (nonatomic, strong) NSSecureTextField *asrAccessKeySecureField;
 @property (nonatomic, strong) NSButton *asrAccessKeyToggle;
 @property (nonatomic, strong) NSSecureTextField *asrQwenApiKeySecureField;
 @property (nonatomic, strong) NSTextField *asrQwenApiKeyField;
 @property (nonatomic, strong) NSButton *asrQwenApiKeyToggle;
+@property (nonatomic, strong) NSSecureTextField *asrGlmApiKeySecureField;
+@property (nonatomic, strong) NSTextField *asrGlmApiKeyField;
+@property (nonatomic, strong) NSButton *asrGlmApiKeyToggle;
 @property (nonatomic, strong) NSButton *asrTestButton;
 @property (nonatomic, strong) NSTextField *asrTestResultLabel;
+// Doubao auth mode + new console API key
+@property (nonatomic, strong) NSSegmentedControl *asrAuthModeControl;
+@property (nonatomic, strong) NSSecureTextField *asrApiKeySecureField;
+@property (nonatomic, strong) NSTextField *asrApiKeyField;
+@property (nonatomic, strong) NSButton *asrApiKeyToggle;
+// Doubao language selection
 @property (nonatomic, strong) NSPopUpButton *asrLanguagePopup;
+// Doubao advanced settings
 @property (nonatomic, strong) NSButton *asrAdvancedDisclosure;
 @property (nonatomic, strong) NSView *asrAdvancedContainer;
 @property (nonatomic, strong) NSTextField *asrEndWindowField;
@@ -1235,6 +1241,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self.asrProviderPopup lastItem].representedObject = @"doubao";
     [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.qwen")];
     [self.asrProviderPopup lastItem].representedObject = @"qwen";
+    [self.asrProviderPopup addItemWithTitle:@"GLM (Zhipu)"];
+    [self.asrProviderPopup lastItem].representedObject = @"glm";
     NSArray<NSString *> *supportedLocalProviders = [self.rustBridge supportedLocalProviders];
     // Add Apple Speech (macOS 26+, no model download required; also requires the
     // apple-speech feature to be compiled into the Rust core — excluded on x86_64)
@@ -1425,6 +1433,31 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     qwenKeyLabel.tag = 1003;
     qwenKeyLabel.hidden = YES;
     [pane addSubview:qwenKeyLabel];
+
+  // GLM API Key — fixed at row 1 (same position as Qwen, toggled by provider)
+  CGFloat glmY = formStartY - rowH - rowH;
+  self.asrGlmApiKeySecureField = [[NSSecureTextField alloc]
+      initWithFrame:NSMakeRect(fieldX, glmY, secFieldW, 22)];
+  self.asrGlmApiKeySecureField.placeholderString =
+      @"API Key from bigmodel.cn";
+  self.asrGlmApiKeySecureField.font = [NSFont systemFontOfSize:13];
+  self.asrGlmApiKeySecureField.hidden = YES;
+  [pane addSubview:self.asrGlmApiKeySecureField];
+  self.asrGlmApiKeyField =
+      [self formTextField:NSMakeRect(fieldX, glmY, secFieldW, 22)
+              placeholder:@"API Key from bigmodel.cn"];
+  self.asrGlmApiKeyField.hidden = YES;
+  [pane addSubview:self.asrGlmApiKeyField];
+  self.asrGlmApiKeyToggle = [self
+      eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, glmY - 1, eyeW, 24)
+                  action:@selector(toggleGlmApiKeyVisibility:)];
+  self.asrGlmApiKeyToggle.hidden = YES;
+  [pane addSubview:self.asrGlmApiKeyToggle];
+  NSTextField *glmKeyLabel =
+      [self formLabel:@"API Key" frame:NSMakeRect(16, glmY, labelW, 22)];
+  glmKeyLabel.tag = 1010;
+  glmKeyLabel.hidden = YES;
+  [pane addSubview:glmKeyLabel];
 
   // Test result label — positioned right after credential rows, before
   // language.
@@ -5073,6 +5106,28 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   }
 }
 
+- (void)toggleGlmApiKeyVisibility:(NSButton *)sender {
+  if (sender.tag == 0) {
+    // Show plain text
+    self.asrGlmApiKeyField.stringValue =
+        self.asrGlmApiKeySecureField.stringValue;
+    self.asrGlmApiKeySecureField.hidden = YES;
+    self.asrGlmApiKeyField.hidden = NO;
+    sender.image = [NSImage imageWithSystemSymbolName:@"eye"
+                             accessibilityDescription:@"Hide"];
+    sender.tag = 1;
+  } else {
+    // Show secure
+    self.asrGlmApiKeySecureField.stringValue =
+        self.asrGlmApiKeyField.stringValue;
+    self.asrGlmApiKeyField.hidden = YES;
+    self.asrGlmApiKeySecureField.hidden = NO;
+    sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash"
+                             accessibilityDescription:@"Show"];
+    sender.tag = 0;
+  }
+}
+
 - (void)toggleAsrApiKeyVisibility:(NSButton *)sender {
   if (sender.tag == 0) {
     self.asrApiKeyField.stringValue = self.asrApiKeySecureField.stringValue;
@@ -5129,6 +5184,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     return 220.0;
   }
   if ([provider isEqualToString:@"qwen"]) {
+    return 340.0;
+  }
+  if ([provider isEqualToString:@"glm"]) {
     return 340.0;
   }
   if ([provider isEqualToString:@"apple-speech"]) {
@@ -5323,41 +5381,46 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL isDoubaoIme = [selectedProvider isEqualToString:@"doubaoime"];
     BOOL isDoubao = [selectedProvider isEqualToString:@"doubao"];
     BOOL isQwen = [selectedProvider isEqualToString:@"qwen"];
+    BOOL isGlm = [selectedProvider isEqualToString:@"glm"];
     BOOL isAppleSpeech = [selectedProvider isEqualToString:@"apple-speech"];
     BOOL isWhisper = [selectedProvider isEqualToString:@"whisper"];
-    BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isAppleSpeech;
+    BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isAppleSpeech && !isWhisper;
 
+    // Show/hide Doubao auth mode control and credential fields
     [self setHidden:!isDoubao
-        forViewsMatchingTags:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1001, 2)]
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1006]
                       inView:self.currentPaneView];
     self.asrAuthModeControl.hidden = !isDoubao;
     if (isDoubao) {
         [self asrAuthModeChanged:self.asrAuthModeControl];
     } else {
-        self.asrApiKeyField.hidden = YES;
-        self.asrApiKeySecureField.hidden = YES;
-        self.asrApiKeyToggle.hidden = YES;
+        [self setHidden:YES
+            forViewsMatchingTags:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1001, 2)]
+                          inView:self.currentPaneView];
         self.asrAppKeyField.hidden = YES;
         self.asrAccessKeyField.hidden = YES;
         self.asrAccessKeySecureField.hidden = YES;
         self.asrAccessKeyToggle.hidden = YES;
+        [self setHidden:YES
+            forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1007]
+                          inView:self.currentPaneView];
+        self.asrApiKeySecureField.hidden = YES;
+        self.asrApiKeyField.hidden = YES;
+        self.asrApiKeyToggle.hidden = YES;
     }
 
-    [self setHidden:!isQwen
-        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1003]
-                      inView:self.currentPaneView];
-    self.asrQwenApiKeyField.hidden = YES;
-    self.asrQwenApiKeySecureField.hidden = !isQwen;
-    self.asrQwenApiKeyToggle.hidden = !isQwen;
-
+    // Show/hide language popup and advanced settings
     BOOL showLanguage = isDoubao || isWhisper;
     [self setHidden:!showLanguage
         forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1008]
                       inView:self.currentPaneView];
     self.asrLanguagePopup.hidden = !showLanguage;
     self.asrAdvancedDisclosure.hidden = !isDoubao;
-    BOOL advancedExpanded = isDoubao && (self.asrAdvancedDisclosure.state == NSControlStateValueOn);
-    self.asrAdvancedContainer.hidden = !advancedExpanded;
+    if (!isDoubao) {
+        self.asrAdvancedContainer.hidden = YES;
+    } else {
+        self.asrAdvancedContainer.hidden = (self.asrAdvancedDisclosure.state == NSControlStateValueOff);
+    }
     if (showLanguage) {
         NSString *lang = isWhisper
             ? asrPopupValueForWhisperLanguage(configGet(@"asr.whisper.language"))
@@ -5374,6 +5437,20 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
             [self.asrLanguagePopup selectItemAtIndex:0];
         }
     }
+
+    [self setHidden:!isQwen
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1003]
+                      inView:self.currentPaneView];
+    self.asrQwenApiKeyField.hidden = YES;
+    self.asrQwenApiKeySecureField.hidden = !isQwen;
+    self.asrQwenApiKeyToggle.hidden = !isQwen;
+
+    [self setHidden:!isGlm
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1010]
+                      inView:self.currentPaneView];
+    self.asrGlmApiKeyField.hidden = YES;
+    self.asrGlmApiKeySecureField.hidden = !isGlm;
+    self.asrGlmApiKeyToggle.hidden = !isGlm;
 
     self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
     [self setHidden:!isAppleSpeech
@@ -5407,7 +5484,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self updateModelStatusLabel];
     }
 
-    BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen;
+    BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm;
     self.asrTestButton.hidden = isLocal;
     self.asrTestResultLabel.hidden = isLocal;
     self.asrTestResultLabel.stringValue = @"";
@@ -6109,6 +6186,86 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
                 break;
             }
         }
+        // Load Doubao fields
+        self.asrAppKeyField.stringValue = configGet(@"asr.doubao.app_key");
+        NSString *accessKey = configGet(@"asr.doubao.access_key");
+        self.asrAccessKeySecureField.stringValue = accessKey;
+        self.asrAccessKeyField.stringValue = accessKey;
+        NSString *apiKey = configGet(@"asr.doubao.api_key");
+        self.asrApiKeySecureField.stringValue = apiKey;
+        self.asrApiKeyField.stringValue = apiKey;
+        if (apiKey.length > 0) {
+            [self.asrAuthModeControl setSelectedSegment:0];
+        } else if (self.asrAppKeyField.stringValue.length > 0 || accessKey.length > 0) {
+            [self.asrAuthModeControl setSelectedSegment:1];
+        } else {
+            [self.asrAuthModeControl setSelectedSegment:0];
+        }
+        NSString *doubaoLang = configGet(@"asr.doubao.language");
+        if (doubaoLang.length > 0) {
+            BOOL found = NO;
+            for (NSInteger i = 0; i < self.asrLanguagePopup.numberOfItems; i++) {
+                if ([[self.asrLanguagePopup itemAtIndex:i].representedObject isEqualToString:doubaoLang]) {
+                    [self.asrLanguagePopup selectItemAtIndex:i];
+                    found = YES;
+                    break;
+                }
+            }
+            if (!found) {
+                [self.asrLanguagePopup selectItemAtIndex:0];
+            }
+        } else {
+            [self.asrLanguagePopup selectItemAtIndex:0];
+        }
+        self.asrEndWindowField.stringValue = configGet(@"asr.doubao.end_window_size");
+        NSString *outputVariant = configGet(@"asr.doubao.output_zh_variant");
+        if (outputVariant.length > 0) {
+            for (NSInteger i = 0; i < self.asrOutputVariantPopup.numberOfItems; i++) {
+                if ([[self.asrOutputVariantPopup itemAtIndex:i].representedObject isEqualToString:outputVariant]) {
+                    [self.asrOutputVariantPopup selectItemAtIndex:i];
+                    break;
+                }
+            }
+        } else {
+            [self.asrOutputVariantPopup selectItemAtIndex:0];
+        }
+        NSString *accelerate = configGet(@"asr.doubao.enable_accelerate_text");
+        self.asrAccelerateCheckbox.state = [accelerate isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
+        self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
+        self.asrQwenApiKeyField.stringValue = qwenApiKey;
+        NSString *glmApiKey = configGet(@"asr.glm.api_key");
+        self.asrGlmApiKeySecureField.stringValue = glmApiKey;
+        self.asrGlmApiKeyField.stringValue = glmApiKey;
+        [self asrProviderChanged:self.asrProviderPopup];
+        {
+            NSString *locale = configGet(@"asr.apple-speech.locale");
+            if (locale.length > 0) {
+                NSInteger exactIdx = -1, equivIdx = -1;
+                NSLocale *configLocale = [NSLocale localeWithLocaleIdentifier:locale];
+                for (NSInteger i = 0; i < self.appleSpeechLocalePopup.numberOfItems; i++) {
+                    NSString *itemId = [self.appleSpeechLocalePopup itemAtIndex:i].representedObject;
+                    if ([itemId isEqualToString:locale]) {
+                        exactIdx = i;
+                        break;
+                    }
+                    if (equivIdx < 0) {
+                        NSLocale *itemLocale = [NSLocale localeWithLocaleIdentifier:itemId];
+                        if ([configLocale.languageCode isEqualToString:itemLocale.languageCode] &&
+                            [configLocale.countryCode isEqualToString:itemLocale.countryCode]) {
+                            equivIdx = i;
+                        }
+                    }
+                }
+                NSInteger matchIdx = (exactIdx >= 0) ? exactIdx : equivIdx;
+                if (matchIdx >= 0) {
+                    [self.appleSpeechLocalePopup selectItemAtIndex:matchIdx];
+                    [self updateAppleSpeechAssetStatus];
+                }
+            }
+        }
+            }
+        }
 
         self.asrAppKeyField.stringValue = configGet(@"asr.doubao.app_key");
         NSString *accessKey = configGet(@"asr.doubao.access_key");
@@ -6408,6 +6565,29 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             }
         }
     }
+    // Check model-based local provider model status
+    BOOL isModelBasedLocal = ![provider isEqualToString:@"doubaoime"] &&
+                             ![provider isEqualToString:@"doubao"] &&
+                             ![provider isEqualToString:@"qwen"] &&
+                             ![provider isEqualToString:@"glm"] &&
+                             ![provider isEqualToString:@"apple-speech"];
+    if (isModelBasedLocal) {
+        NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+        if (modelPath) {
+            NSInteger status = [self.rustBridge modelStatus:modelPath mode:SPModelVerifyCacheOnly];
+            if (status != 2) { // not installed
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"Model Not Installed";
+                alert.informativeText = @"The selected model has not been downloaded yet. ASR will not work until the model is installed.";
+                [alert addButtonWithTitle:@"Save Anyway"];
+                [alert addButtonWithTitle:@"Cancel"];
+                alert.alertStyle = NSAlertStyleWarning;
+                if ([alert runModal] != NSAlertFirstButtonReturn) {
+                    return;
+                }
+            }
+        }
+    }
 
     NSString *dir = configDirPath();
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
@@ -6443,6 +6623,64 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             NSLog(@"[Koe] Failed to restore config snapshot: %@", rollbackError.localizedDescription);
         }
         [self.rustBridge reloadConfig];
+    };
+
+    shouldRollbackConfig = YES;
+    BOOL saveOk = YES;
+
+    if (self.asrAppKeyField) {
+        NSString *selectedProvider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
+        saveOk &= configSet(@"asr.provider", selectedProvider);
+        BOOL isNewConsoleMode = (self.asrAuthModeControl.selectedSegment == 0);
+        if (isNewConsoleMode) {
+            NSString *apiKey = self.asrApiKeyToggle.tag == 1 ? self.asrApiKeyField.stringValue : self.asrApiKeySecureField.stringValue;
+            saveOk &= configSet(@"asr.doubao.api_key", apiKey);
+            saveOk &= configSet(@"asr.doubao.app_key", @"");
+            saveOk &= configSet(@"asr.doubao.access_key", @"");
+        } else {
+            saveOk &= configSet(@"asr.doubao.api_key", @"");
+            saveOk &= configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
+            NSString *accessKey = self.asrAccessKeyToggle.tag == 1 ? self.asrAccessKeyField.stringValue : self.asrAccessKeySecureField.stringValue;
+            saveOk &= configSet(@"asr.doubao.access_key", accessKey);
+        }
+        if ([selectedProvider isEqualToString:@"doubao"]) {
+            NSString *langValue = self.asrLanguagePopup.selectedItem.representedObject ?: @"";
+            saveOk &= configSet(@"asr.doubao.language", langValue);
+        }
+        if ([selectedProvider isEqualToString:@"doubao"]) {
+            NSString *endWindowValue = self.asrEndWindowField.stringValue;
+            saveOk &= configSet(@"asr.doubao.end_window_size", endWindowValue.length > 0 ? endWindowValue : @"");
+            NSString *variantValue = self.asrOutputVariantPopup.selectedItem.representedObject ?: @"";
+            saveOk &= configSet(@"asr.doubao.output_zh_variant", variantValue);
+            NSString *accelerateValue = (self.asrAccelerateCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
+            saveOk &= configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+        }
+        NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1 ? self.asrQwenApiKeyField.stringValue : self.asrQwenApiKeySecureField.stringValue;
+        saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
+        NSString *glmApiKey = self.asrGlmApiKeyToggle.tag == 1 ? self.asrGlmApiKeyField.stringValue : self.asrGlmApiKeySecureField.stringValue;
+        saveOk &= configSet(@"asr.glm.api_key", glmApiKey);
+        if ([selectedProvider isEqualToString:@"apple-speech"]) {
+            NSString *locale = self.appleSpeechLocalePopup.selectedItem.representedObject;
+            saveOk &= configSet(@"asr.apple-speech.locale", locale);
+        }
+        if ([selectedProvider isEqualToString:@"mlx"]) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) saveOk &= configSet(@"asr.mlx.model", modelPath);
+        } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
+            NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+            if (modelPath) saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+        }
+    }
+
+    if (self.llmEnabledCheckbox) {
+        NSString *enabledStr = (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"llm.enabled", enabledStr);
+
+        [self syncActiveLlmProfileFromFields];
+        NSDictionary *payload = @{
+            @"active_profile" : self.activeLlmProfileId ?: @"openai",
+            @"profiles" : self.llmProfiles ?: @{},
+        };
     };
 
     shouldRollbackConfig = YES;
@@ -7188,6 +7426,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         [self testDoubaoConnection];
     } else if ([provider isEqualToString:@"qwen"]) {
         [self testQwenConnection];
+    } else if ([provider isEqualToString:@"glm"]) {
+        [self testGlmConnection];
     } else {
         self.asrTestResultLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.installed");
         self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
@@ -7637,6 +7877,126 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         strongSelf.asrTestResultLabel.stringValue = @"Connection timed out: please check your network";
         strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
     });
+}
+
+- (void)testGlmConnection {
+  // Get current key value (account for plain/secure toggle state)
+  NSString *apiKey = self.asrGlmApiKeyToggle.tag == 1
+                         ? self.asrGlmApiKeyField.stringValue
+                         : self.asrGlmApiKeySecureField.stringValue;
+
+  if (apiKey.length == 0) {
+    self.asrTestResultLabel.stringValue = @"Please fill in API Key first";
+    self.asrTestResultLabel.textColor = [NSColor systemOrangeColor];
+    return;
+  }
+
+  self.asrTestButton.enabled = NO;
+  self.asrTestResultLabel.stringValue = @"Testing...";
+  self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+  // GLM Realtime uses WebSocket, test by connecting to the WS endpoint
+  NSString *glmUrl = configGet(@"asr.glm.url");
+  if (glmUrl.length == 0)
+    glmUrl = @"wss://open.bigmodel.cn/api/paas/v4/realtime";
+  NSString *glmModel = configGet(@"asr.glm.model");
+  if (glmModel.length == 0)
+    glmModel = @"glm-realtime";
+
+  NSURL *url = [NSURL URLWithString:glmUrl];
+  NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+  request.timeoutInterval = 10;
+  [request setValue:[NSString stringWithFormat:@"Bearer %@", apiKey]
+      forHTTPHeaderField:@"Authorization"];
+
+  NSURLSessionConfiguration *config2 =
+      [NSURLSessionConfiguration defaultSessionConfiguration];
+  config2.timeoutIntervalForRequest = 10;
+  NSURLSession *session = [NSURLSession sessionWithConfiguration:config2];
+  NSURLSessionWebSocketTask *wsTask =
+      [session webSocketTaskWithRequest:request];
+
+  __weak typeof(self) weakSelf = self;
+  __weak NSURLSessionWebSocketTask *weakWsTask = wsTask;
+
+  // GLM Realtime returns a session.created message on connect
+  [wsTask receiveMessageWithCompletionHandler:^(
+              NSURLSessionWebSocketMessage *_Nullable message,
+              NSError *_Nullable error) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      __strong typeof(weakSelf) strongSelf = weakSelf;
+      if (!strongSelf)
+        return;
+
+      [weakWsTask
+          cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure
+                       reason:nil];
+
+      strongSelf.asrTestButton.enabled = YES;
+
+      if (error) {
+        NSString *errorMsg = error.localizedDescription;
+        NSInteger statusCode = 0;
+
+        if (error.userInfo[@"_kCFStreamErrorDomainKey"]) {
+          NSNumber *code = error.userInfo[@"_kCFStreamErrorDomainKey"];
+          if (code)
+            statusCode = code.integerValue;
+        }
+
+        if ([errorMsg containsString:@"401"] ||
+            [errorMsg containsString:@"403"] || statusCode == 401) {
+          strongSelf.asrTestResultLabel.stringValue =
+              @"Auth failed: please check your API Key";
+        } else if ([errorMsg containsString:@"time"] ||
+                   error.code == NSURLErrorTimedOut) {
+          strongSelf.asrTestResultLabel.stringValue =
+              @"Connection timed out: please check your network";
+        } else if ([errorMsg containsString:@"bad response"] ||
+                   [errorMsg containsString:@"Bad response"]) {
+          strongSelf.asrTestResultLabel.stringValue =
+              @"Auth failed: please check your API Key";
+        } else if ([errorMsg containsString:@"unable"] ||
+                   [errorMsg containsString:@"Unable"] ||
+                   [errorMsg containsString:@"Cannot connect"]) {
+          strongSelf.asrTestResultLabel.stringValue =
+              @"Network error: please check your network settings";
+        } else {
+          strongSelf.asrTestResultLabel.stringValue =
+              @"Connection failed: please check your configuration";
+        }
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+        return;
+      }
+
+      if (message) {
+        strongSelf.asrTestResultLabel.stringValue = @"Connected";
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
+      } else {
+        strongSelf.asrTestResultLabel.stringValue =
+            @"Connection failed: no response from server";
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+      }
+    });
+  }];
+
+  [wsTask resume];
+
+  // Timeout handler
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.asrTestButton.enabled)
+          return;
+
+        [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure
+                             reason:nil];
+        strongSelf.asrTestButton.enabled = YES;
+        strongSelf.asrTestResultLabel.stringValue =
+            @"Connection timed out: please check your network";
+        strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
+      });
 }
 
 - (void)showAlert:(NSString *)message info:(NSString *)info {
