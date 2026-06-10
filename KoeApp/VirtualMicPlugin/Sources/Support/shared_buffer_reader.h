@@ -16,6 +16,7 @@ public:
 
     const std::string &file_path() const;
     bool read_header(KoeSharedBufferHeader &header) const;
+    void reset_to_latest() const;
     std::size_t consume_mono_frames(
         float *out_samples,
         std::size_t max_frames,

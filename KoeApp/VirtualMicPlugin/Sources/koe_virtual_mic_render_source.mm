@@ -15,6 +15,10 @@ const SharedBufferReader &KoeVirtualMicRenderSource::reader() const {
     return reader_;
 }
 
+void KoeVirtualMicRenderSource::reset_to_latest() const {
+    reader_.reset_to_latest();
+}
+
 KoeVirtualMicRenderResult KoeVirtualMicRenderSource::render(float *out_samples, std::size_t max_frames) const {
     KoeVirtualMicRenderResult result {};
     result.frames_produced = 0;

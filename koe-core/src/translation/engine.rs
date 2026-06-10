@@ -231,6 +231,7 @@ fn write_passthrough_chunk(
     )
 }
 
+#[cfg(test)]
 fn write_passthrough_segment(
     segment: &SpeechSegment,
     output_buffer: &SharedOutputBuffer,
@@ -319,31 +320,11 @@ async fn run_segment_pipeline(
     let text = match run_asr(&segment, &asr_factory).await {
         Ok(t) if !t.trim().is_empty() => t,
         Ok(_) => {
-            log::warn!(
-                "[translation] ASR produced no text; falling back to passthrough for this segment"
-            );
-            if let Err(e) = write_passthrough_segment(
-                &segment,
-                &output_buffer,
-                output_sample_rate,
-                output_channels,
-            ) {
-                log::warn!("[translation] passthrough fallback write failed: {e}");
-            }
+            log::warn!("[translation] ASR produced no text; dropping untranslated segment");
             return;
         }
         Err(e) => {
-            log::warn!(
-                "[translation] ASR failed: {e}; falling back to passthrough for this segment"
-            );
-            if let Err(write_err) = write_passthrough_segment(
-                &segment,
-                &output_buffer,
-                output_sample_rate,
-                output_channels,
-            ) {
-                log::warn!("[translation] passthrough fallback write failed: {write_err}");
-            }
+            log::warn!("[translation] ASR failed: {e}; dropping untranslated segment");
             return;
         }
     };
@@ -351,14 +332,9 @@ async fn run_segment_pipeline(
 
     // 2. MT
     if !mt_enabled {
-        if let Err(e) = write_passthrough_segment(
-            &segment,
-            &output_buffer,
-            output_sample_rate,
-            output_channels,
-        ) {
-            log::warn!("[translation] passthrough fallback write failed: {e}");
-        }
+        log::warn!(
+            "[translation] MT disabled while translate mode is active; dropping untranslated segment"
+        );
         return;
     }
     let translated = match mt
@@ -367,63 +343,28 @@ async fn run_segment_pipeline(
     {
         Ok(t) => t,
         Err(e) => {
-            log::warn!(
-                "[translation] MT failed: {e}; falling back to passthrough for this segment"
-            );
-            if let Err(write_err) = write_passthrough_segment(
-                &segment,
-                &output_buffer,
-                output_sample_rate,
-                output_channels,
-            ) {
-                log::warn!("[translation] passthrough fallback write failed: {write_err}");
-            }
+            log::warn!("[translation] MT failed: {e}; dropping untranslated segment");
             return;
         }
     };
     log::info!("[translation] MT: {translated}");
 
     if translated.trim().is_empty() {
-        log::warn!(
-            "[translation] MT returned empty text; falling back to passthrough for this segment"
-        );
-        if let Err(e) = write_passthrough_segment(
-            &segment,
-            &output_buffer,
-            output_sample_rate,
-            output_channels,
-        ) {
-            log::warn!("[translation] passthrough fallback write failed: {e}");
-        }
+        log::warn!("[translation] MT returned empty text; dropping untranslated segment");
         return;
     }
 
     // 3. TTS
     if !tts_enabled {
-        if let Err(e) = write_passthrough_segment(
-            &segment,
-            &output_buffer,
-            output_sample_rate,
-            output_channels,
-        ) {
-            log::warn!("[translation] passthrough fallback write failed: {e}");
-        }
+        log::warn!(
+            "[translation] TTS disabled while translate mode is active; dropping untranslated segment"
+        );
         return;
     }
     let (samples, tts_rate) = match tts.synthesize(&translated, Some(&target_language)).await {
         Ok(r) => r,
         Err(e) => {
-            log::warn!(
-                "[translation] TTS failed: {e}; falling back to passthrough for this segment"
-            );
-            if let Err(write_err) = write_passthrough_segment(
-                &segment,
-                &output_buffer,
-                output_sample_rate,
-                output_channels,
-            ) {
-                log::warn!("[translation] passthrough fallback write failed: {write_err}");
-            }
+            log::warn!("[translation] TTS failed: {e}; dropping untranslated segment");
             return;
         }
     };

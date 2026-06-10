@@ -799,6 +799,7 @@ OSStatus KoeVirtualMicDriver::start_io(AudioObjectID device_object_id, UInt32 cl
     const UInt32 clients = io_client_count();
     os_log(OS_LOG_DEFAULT, "KoeVirtualMic: StartIO device=%u client=%u active_clients=%u", device_object_id, client_id, clients);
     if (!was_running && is_running()) {
+        render_source_.reset_to_latest();
         notify_io_state_changed();
     }
     return kAudioHardwareNoError;

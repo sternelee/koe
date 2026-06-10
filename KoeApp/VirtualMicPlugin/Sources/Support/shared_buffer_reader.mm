@@ -107,6 +107,20 @@ bool SharedBufferReader::read_header(KoeSharedBufferHeader &header) const {
     return header.magic == KOE_SHARED_BUFFER_MAGIC && header.version == KOE_SHARED_BUFFER_VERSION;
 }
 
+void SharedBufferReader::reset_to_latest() const {
+    KoeSharedBufferHeader header {};
+    if (!read_header(header)) {
+        std::lock_guard<std::mutex> lock(read_state_mutex_);
+        local_read_index_frames_ = 0;
+        has_local_read_index_ = false;
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(read_state_mutex_);
+    local_read_index_frames_ = header.write_index_frames;
+    has_local_read_index_ = true;
+}
+
 std::size_t SharedBufferReader::consume_mono_frames(
     float *out_samples,
     std::size_t max_frames,
@@ -186,8 +200,7 @@ std::size_t SharedBufferReader::consume_mono_frames(
     {
         std::lock_guard<std::mutex> lock(read_state_mutex_);
         if (!has_local_read_index_) {
-            const std::uint64_t initial_backfill = std::min<std::uint64_t>(write_index, max_frames);
-            local_read_index_frames_ = write_index - initial_backfill;
+            local_read_index_frames_ = write_index;
             has_local_read_index_ = true;
         }
         if (local_read_index_frames_ < earliest_frame) {

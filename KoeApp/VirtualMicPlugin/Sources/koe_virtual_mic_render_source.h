@@ -25,6 +25,7 @@ public:
         std::string file_path = KOE_SHARED_BUFFER_FILE_PATH);
 
     const SharedBufferReader &reader() const;
+    void reset_to_latest() const;
     KoeVirtualMicRenderResult render(float *out_samples, std::size_t max_frames) const;
     bool probe_format(KoeSharedBufferHeader &header) const;
 
