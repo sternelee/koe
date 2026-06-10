@@ -880,6 +880,18 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *translationTtsTestResultLabel;
 @property (nonatomic, strong) NSSound *ttsTestSound;
 
+// ── Gemini Live (Translation pane) ──
+@property (nonatomic, strong) NSView *translationGeminiSectionView;
+@property (nonatomic, strong) NSSwitch *translationGeminiEnabledSwitch;
+@property (nonatomic, strong) NSSecureTextField *translationGeminiApiKeySecureField;
+@property (nonatomic, strong) NSTextField *translationGeminiApiKeyField;
+@property (nonatomic, strong) NSButton *translationGeminiApiKeyToggle;
+@property (nonatomic, strong) NSTextField *translationGeminiModelField;
+@property (nonatomic, strong) NSTextField *translationGeminiTargetLangField;
+@property (nonatomic, strong) NSSwitch *translationGeminiEchoSwitch;
+@property (nonatomic, strong) NSSwitch *translationGeminiInputTranscriptionSwitch;
+@property (nonatomic, strong) NSSwitch *translationGeminiOutputTranscriptionSwitch;
+
 // ── Virtual Microphone (Translation pane) ──
 @property (nonatomic, strong) NSView *virtualMicStatusDot;
 @property (nonatomic, strong) NSTextField *virtualMicStatusLabel;
@@ -3163,13 +3175,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     y = NSMinY(desc.frame) - 16.0;
 
     self.translationStepSegmentedControl = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(contentX, y - 28, contentW, 28)];
-    self.translationStepSegmentedControl.segmentCount = 4;
+    self.translationStepSegmentedControl.segmentCount = 5;
     [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.device") forSegment:0];
     [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.general") forSegment:1];
     [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.mt") forSegment:2];
     [self.translationStepSegmentedControl setLabel:KoeLocalizedString(@"setupWizard.translation.step.tts") forSegment:3];
+    [self.translationStepSegmentedControl setLabel:@"Gemini Live" forSegment:4];
     NSInteger lastStep = [[NSUserDefaults standardUserDefaults] integerForKey:kTranslationLastStepKey];
-    if (lastStep < 0 || lastStep > 3) {
+    if (lastStep < 0 || lastStep > 4) {
         lastStep = 1; // default to General
     }
     self.translationStepSegmentedControl.selectedSegment = lastStep;
@@ -3186,10 +3199,12 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationGeneralSectionView = [[NSView alloc] initWithFrame:sectionFrame];
     self.translationMtSectionView = [[NSView alloc] initWithFrame:sectionFrame];
     self.translationTtsSectionView = [[NSView alloc] initWithFrame:sectionFrame];
+    self.translationGeminiSectionView = [[NSView alloc] initWithFrame:sectionFrame];
     [pane addSubview:self.translationDeviceSectionView];
     [pane addSubview:self.translationGeneralSectionView];
     [pane addSubview:self.translationMtSectionView];
     [pane addSubview:self.translationTtsSectionView];
+    [pane addSubview:self.translationGeminiSectionView];
 
     // Device section (Virtual Mic + Real Mic)
     {
@@ -3631,6 +3646,67 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [section addSubview:self.translationTtsTestResultLabel];
     }
 
+    // Gemini Live section
+    {
+        NSView *section = self.translationGeminiSectionView;
+        CGFloat sy = sectionHeight - 24.0;
+
+        NSTextField *geminiTitle = [self sectionTitleLabel:@"Gemini Live Translate" frame:NSMakeRect(0, sy, contentW, 20)];
+        [section addSubview:geminiTitle];
+        sy -= 32.0;
+
+        [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.enabled") frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiEnabledSwitch = [self settingsSwitchWithAction:nil];
+        self.translationGeminiEnabledSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationGeminiEnabledSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"API Key" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiApiKeySecureField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24)];
+        self.translationGeminiApiKeySecureField.placeholderString = @"or set GEMINI_API_KEY env";
+        self.translationGeminiApiKeySecureField.font = [NSFont systemFontOfSize:13];
+        [section addSubview:self.translationGeminiApiKeySecureField];
+        self.translationGeminiApiKeyField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 36, 24) placeholder:@"or set GEMINI_API_KEY env"];
+        self.translationGeminiApiKeyField.hidden = YES;
+        [section addSubview:self.translationGeminiApiKeyField];
+        self.translationGeminiApiKeyToggle = [self eyeButtonWithFrame:NSMakeRect(fieldX + fieldW - 32, sy - 2, 28, 24) action:@selector(toggleTranslationGeminiApiKeyVisibility:)];
+        [section addSubview:self.translationGeminiApiKeyToggle];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"Model" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"gemini-3.5-live-translate-preview"];
+        [section addSubview:self.translationGeminiModelField];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"Target Language" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiTargetLangField = [self formTextField:NSMakeRect(fieldX, sy - 2, 140, 24) placeholder:@"en"];
+        [section addSubview:self.translationGeminiTargetLangField];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"Echo Target" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiEchoSwitch = [self settingsSwitchWithAction:nil];
+        self.translationGeminiEchoSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationGeminiEchoSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"Input Transcription" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiInputTranscriptionSwitch = [self settingsSwitchWithAction:nil];
+        self.translationGeminiInputTranscriptionSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationGeminiInputTranscriptionSwitch];
+        sy -= rowH;
+
+        [section addSubview:[self formLabel:@"Output Transcription" frame:NSMakeRect(0, sy, labelW, 22)]];
+        self.translationGeminiOutputTranscriptionSwitch = [self settingsSwitchWithAction:nil];
+        self.translationGeminiOutputTranscriptionSwitch.frame = NSMakeRect(fieldX, sy - 2, 60, 26);
+        [section addSubview:self.translationGeminiOutputTranscriptionSwitch];
+        sy -= rowH;
+
+        NSTextField *geminiHint = [self descriptionLabel:@"When enabled, Gemini Live bypasses the ASR → MT → TTS pipeline and streams audio directly to Google for real-time speech-to-speech translation."];
+        CGFloat geminiHintH = [self fittingHeightForWrappingLabel:geminiHint width:fieldW];
+        geminiHint.frame = NSMakeRect(fieldX, sy - geminiHintH, fieldW, geminiHintH);
+        [section addSubview:geminiHint];
+    }
+
     [self translationStepChanged:nil];
     [self addButtonsToPane:pane atY:16 width:paneWidth];
 
@@ -3638,7 +3714,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         if (subview == self.translationDeviceSectionView ||
             subview == self.translationGeneralSectionView ||
             subview == self.translationMtSectionView ||
-            subview == self.translationTtsSectionView) {
+            subview == self.translationTtsSectionView ||
+            subview == self.translationGeminiSectionView) {
             subview.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         } else if (NSMinY(subview.frame) < 50.0) {
             subview.autoresizingMask = NSViewMaxYMargin;
@@ -3651,6 +3728,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
              self.translationGeneralSectionView,
              self.translationMtSectionView,
              self.translationTtsSectionView,
+             self.translationGeminiSectionView,
          ]) {
         for (NSView *subview in section.subviews) {
             subview.autoresizingMask = NSViewMinYMargin;
@@ -3667,7 +3745,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
 - (void)translationStepChanged:(id)sender {
     NSInteger selected = self.translationStepSegmentedControl.selectedSegment;
-    if (selected < 0 || selected > 3) {
+    if (selected < 0 || selected > 4) {
         selected = 1;
         self.translationStepSegmentedControl.selectedSegment = selected;
     }
@@ -3676,6 +3754,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.translationGeneralSectionView.hidden = (selected != 1);
     self.translationMtSectionView.hidden = (selected != 2);
     self.translationTtsSectionView.hidden = (selected != 3);
+    self.translationGeminiSectionView.hidden = (selected != 4);
     [self resizeTranslationPaneToCurrentStep];
 }
 
@@ -4097,6 +4176,22 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationTtsApiKeySecureField.stringValue = self.translationTtsApiKeyField.stringValue;
         self.translationTtsApiKeyField.hidden = YES;
         self.translationTtsApiKeySecureField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
+        sender.tag = 0;
+    }
+}
+
+- (void)toggleTranslationGeminiApiKeyVisibility:(NSButton *)sender {
+    if (sender.tag == 0) {
+        self.translationGeminiApiKeyField.stringValue = self.translationGeminiApiKeySecureField.stringValue;
+        self.translationGeminiApiKeySecureField.hidden = YES;
+        self.translationGeminiApiKeyField.hidden = NO;
+        sender.image = [NSImage imageWithSystemSymbolName:@"eye" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.hide")];
+        sender.tag = 1;
+    } else {
+        self.translationGeminiApiKeySecureField.stringValue = self.translationGeminiApiKeyField.stringValue;
+        self.translationGeminiApiKeyField.hidden = YES;
+        self.translationGeminiApiKeySecureField.hidden = NO;
         sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
         sender.tag = 0;
     }
@@ -5349,6 +5444,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     case 3:
       section = self.translationTtsSectionView;
       break;
+    case 4:
+      section = self.translationGeminiSectionView;
+      break;
     default:
       section = self.translationGeneralSectionView;
       break;
@@ -6432,6 +6530,20 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         [self updateTranslationTtsPlaceholders];
         [self updateTranslationTtsFieldsVisibility];
 
+        // Gemini Live
+        NSString *geminiEnabled = configGet(@"translation.gemini_live.enabled");
+        self.translationGeminiEnabledSwitch.state = [geminiEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        NSString *geminiApiKey = configGet(@"translation.gemini_live.api_key");
+        self.translationGeminiApiKeySecureField.stringValue = geminiApiKey;
+        self.translationGeminiApiKeyField.stringValue = geminiApiKey;
+        self.translationGeminiModelField.stringValue = configGet(@"translation.gemini_live.model");
+        self.translationGeminiTargetLangField.stringValue = configGet(@"translation.gemini_live.target_language_code");
+        NSString *geminiEcho = configGet(@"translation.gemini_live.echo_target_language");
+        self.translationGeminiEchoSwitch.state = [geminiEcho isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        NSString *geminiInputTrans = configGet(@"translation.gemini_live.input_audio_transcription");
+        self.translationGeminiInputTranscriptionSwitch.state = [geminiInputTrans isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
+        NSString *geminiOutputTrans = configGet(@"translation.gemini_live.output_audio_transcription");
+        self.translationGeminiOutputTranscriptionSwitch.state = [geminiOutputTrans isEqualToString:@"false"] ? NSControlStateValueOff : NSControlStateValueOn;
 
         [self updateTranslationMtFieldsEnabled];
         [self refreshVirtualMicStatus];
@@ -6712,6 +6824,20 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             saveOk &= configSet(@"translation.tts.preset_voice", @"");
             saveOk &= configSet(@"translation.tts.speaker_id", @"0");
         }
+
+        // Gemini Live
+        NSString *geminiEnabled = (self.translationGeminiEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.gemini_live.enabled", geminiEnabled);
+        NSString *geminiApiKey = self.translationGeminiApiKeyToggle.tag == 1 ? self.translationGeminiApiKeyField.stringValue : self.translationGeminiApiKeySecureField.stringValue;
+        saveOk &= configSet(@"translation.gemini_live.api_key", geminiApiKey);
+        saveOk &= configSet(@"translation.gemini_live.model", self.translationGeminiModelField.stringValue);
+        saveOk &= configSet(@"translation.gemini_live.target_language_code", self.translationGeminiTargetLangField.stringValue);
+        NSString *geminiEcho = (self.translationGeminiEchoSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.gemini_live.echo_target_language", geminiEcho);
+        NSString *geminiInputTrans = (self.translationGeminiInputTranscriptionSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.gemini_live.input_audio_transcription", geminiInputTrans);
+        NSString *geminiOutputTrans = (self.translationGeminiOutputTranscriptionSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+        saveOk &= configSet(@"translation.gemini_live.output_audio_transcription", geminiOutputTrans);
     }
 
     if (!saveOk) {

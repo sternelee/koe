@@ -1297,7 +1297,7 @@ fn effective_translation_source_language(cfg: &config::Config) -> Option<String>
 }
 
 fn translation_runtime_mode(cfg: &config::Config) -> TranslationMode {
-    if translation_pipeline_ready(cfg) {
+    if translation_gemini_live_ready(cfg) || translation_pipeline_ready(cfg) {
         TranslationMode::Translate
     } else {
         TranslationMode::Passthrough
@@ -1308,6 +1308,17 @@ fn translation_pipeline_ready(cfg: &config::Config) -> bool {
     translation_asr_ready(&cfg.asr)
         && translation_mt_ready(cfg)
         && translation_tts_ready(&cfg.translation)
+}
+
+fn translation_gemini_live_ready(cfg: &config::Config) -> bool {
+    let gl = &cfg.translation.gemini_live;
+    if !gl.enabled {
+        return false;
+    }
+    let has_api_key = !gl.api_key.trim().is_empty()
+        || std::env::var("GEMINI_API_KEY").map(|s| !s.is_empty()).unwrap_or(false);
+    let has_model = !gl.model.trim().is_empty();
+    has_api_key && has_model
 }
 
 fn translation_asr_ready(cfg: &config::AsrSection) -> bool {

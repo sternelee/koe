@@ -1,5 +1,6 @@
 use crate::errors::{KoeError, Result};
 use crate::translation::config::TranslationConfig;
+use crate::translation::gemini_live::GeminiLiveClient;
 use crate::translation::mt::MtClient;
 use crate::translation::output_bridge::{AudioFrame, SharedOutputBuffer};
 use crate::translation::tts::TtsClient;
@@ -75,6 +76,21 @@ impl TranslationEngine {
                 self.config.output_channels,
             )
             .await;
+        }
+
+        // Gemini Live Translate: bidirectional streaming, bypasses segment pipeline.
+        if self.config.gemini_live.enabled {
+            log::info!("[translation] using Gemini Live Translate");
+            let client = GeminiLiveClient::new(self.config.gemini_live.clone());
+            return client
+                .run(
+                    audio_rx,
+                    output_buffer,
+                    stop,
+                    self.config.output_sample_rate,
+                    self.config.output_channels,
+                )
+                .await;
         }
 
         let mut vad = EnergyVad::new(
@@ -280,7 +296,7 @@ fn write_passthrough_mono_samples(
     output_buffer.write_frame(&frame)
 }
 
-fn now_timestamp_ns() -> u64 {
+pub(crate) fn now_timestamp_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -459,7 +475,7 @@ async fn run_asr(segment: &SpeechSegment, asr_factory: &AsrFactory) -> Result<St
 
 /// Simple linear-interpolation resampler.
 /// Good enough for speech where quality is secondary to latency.
-fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+pub(crate) fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || input.is_empty() {
         return input.to_vec();
     }

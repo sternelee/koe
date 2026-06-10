@@ -1,5 +1,6 @@
 pub mod config;
 pub mod engine;
+pub mod gemini_live;
 pub mod kitten;
 pub mod local_mt;
 pub mod mt;

@@ -1284,6 +1284,7 @@ name = "koe-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "cbindgen",
  "env_logger",
  "futures-util",
@@ -1303,6 +1304,7 @@ dependencies = [
  "sherpa-onnx",
  "tokenizers",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "urlencoding",
  "uuid",

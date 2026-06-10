@@ -1886,9 +1886,20 @@ translation:
     speed: 1.0
     preset_voice: ""          # For kitten_onnx: e.g. Bella, Jasper; for kokoro_onnx: e.g. af_heart, zf_xiaoxiao
     speaker_id: 0             # For supertonic_onnx: style index 0–9; for kitten_onnx: voice index 0–7
-
-
     timeout_ms: 30000
+  # Gemini Live Translate — end-to-end real-time speech-to-speech translation via Google Gemini.
+  # When enabled, this bypasses the ASR → MT → TTS pipeline entirely.
+  gemini_live:
+    enabled: false
+    api_key: ""               # or use ${GEMINI_API_KEY}
+    model: "gemini-3.5-live-translate-preview"
+    target_language_code: ""  # BCP-47 code (e.g. en, zh, ja, es, pl). Empty = en.
+    echo_target_language: false  # echo back input that is already in target language
+    input_audio_transcription: true   # log source-language transcript
+    output_audio_transcription: true  # log translated transcript
+    gemini_output_sample_rate: 24000  # Hz; used for resampling to HAL rate
+    connect_timeout_ms: 10000
+    setup_timeout_ms: 10000
 
 prompt_templates:
   - name: "翻译英文"

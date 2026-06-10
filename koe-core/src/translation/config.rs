@@ -20,6 +20,8 @@ pub struct TranslationConfig {
     pub mt: MtConfig,
     /// TTS (text-to-speech) configuration.
     pub tts: TtsConfig,
+    /// Gemini Live Translate API configuration.
+    pub gemini_live: GeminiLiveConfig,
     /// Audio output sample rate (must match HAL plugin, typically 48000).
     pub output_sample_rate: u32,
     /// Audio output channels (must match HAL plugin, typically 1).
@@ -45,6 +47,51 @@ impl Default for TranslationConfig {
             // the reader (HAL plug-in) consumes it at real-time playback rate
             // without the writer lapping it and dropping the head of the audio.
             output_buffer_frames: 30 * 48_000,
+            gemini_live: GeminiLiveConfig::default(),
+        }
+    }
+}
+
+/// Gemini Live Translate API configuration.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GeminiLiveConfig {
+    pub enabled: bool,
+    /// Gemini API key. If empty, falls back to GEMINI_API_KEY env var.
+    pub api_key: String,
+    /// Model name for the Live API.
+    pub model: String,
+    /// Target language BCP-47 code (e.g. "en", "zh", "ja", "es").
+    /// Empty defaults to "en".
+    pub target_language_code: String,
+    /// Echo target-language input back to output.
+    pub echo_target_language: bool,
+    /// Enable input audio transcription logging.
+    pub input_audio_transcription: bool,
+    /// Enable output (translated) audio transcription logging.
+    pub output_audio_transcription: bool,
+    /// Expected sample rate of Gemini audio output (Hz).
+    /// Used for resampling to the HAL output rate.
+    pub gemini_output_sample_rate: u32,
+    /// WebSocket connect timeout in milliseconds.
+    pub connect_timeout_ms: u64,
+    /// Request timeout for setup response in milliseconds.
+    pub setup_timeout_ms: u64,
+}
+
+impl Default for GeminiLiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            model: "gemini-3.5-live-translate-preview".to_string(),
+            target_language_code: String::new(),
+            echo_target_language: false,
+            input_audio_transcription: true,
+            output_audio_transcription: true,
+            gemini_output_sample_rate: 24_000,
+            connect_timeout_ms: 10_000,
+            setup_timeout_ms: 10_000,
         }
     }
 }
