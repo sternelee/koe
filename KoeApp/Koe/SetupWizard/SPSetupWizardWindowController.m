@@ -899,6 +899,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSProgressIndicator *virtualMicProgressIndicator;
 @property (nonatomic, strong) NSTextField *virtualMicErrorLabel;
 @property (nonatomic, assign) BOOL virtualMicOperationInProgress;
+@property (nonatomic, assign) BOOL virtualMicOperationInstallsDriver;
 
 - (void)loadCurrentValues;
 - (void)loadValuesForPane:(NSString *)identifier;
@@ -3825,7 +3826,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (void)updateTranslationEnabledAvailability {
-    BOOL driverReady = [SPVirtualMicInstaller isInstalled];
+    BOOL driverReady = [SPVirtualMicInstaller isInstalledAndCurrent];
 
     if (!driverReady) {
         self.translationEnabledSwitch.state = NSControlStateValueOff;
@@ -4586,30 +4587,39 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     if (self.virtualMicStatusDot == nil) {
         return;
     }
-    BOOL installed = [SPVirtualMicInstaller isInstalled];
-    NSColor *dotColor = installed ? [NSColor systemGreenColor] : [NSColor systemRedColor];
+    BOOL current = [SPVirtualMicInstaller isInstalledAndCurrent];
+    BOOL outdated = [SPVirtualMicInstaller isInstalledButOutdated];
+    NSColor *dotColor = current ? [NSColor systemGreenColor] : (outdated ? [NSColor systemOrangeColor] : [NSColor systemRedColor]);
     self.virtualMicStatusDot.layer.backgroundColor = dotColor.CGColor;
-    self.virtualMicStatusLabel.stringValue = installed
-        ? KoeLocalizedString(@"setupWizard.translation.virtualMic.status.ready")
-        : KoeLocalizedString(@"setupWizard.translation.virtualMic.status.missing");
+    if (current) {
+        self.virtualMicStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.virtualMic.status.ready");
+    } else if (outdated) {
+        self.virtualMicStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.virtualMic.status.outdated");
+    } else {
+        self.virtualMicStatusLabel.stringValue = KoeLocalizedString(@"setupWizard.translation.virtualMic.status.missing");
+    }
 
     if (self.virtualMicOperationInProgress) {
-        self.virtualMicActionButton.title = installed
-            ? KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstalling")
-            : KoeLocalizedString(@"setupWizard.translation.virtualMic.action.installing");
+        self.virtualMicActionButton.title = self.virtualMicOperationInstallsDriver
+            ? (outdated
+                ? KoeLocalizedString(@"setupWizard.translation.virtualMic.action.updating")
+                : KoeLocalizedString(@"setupWizard.translation.virtualMic.action.installing"))
+            : KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstalling");
         self.virtualMicActionButton.enabled = NO;
         [self updateTranslationEnabledAvailability];
         return;
     }
 
-    if (installed) {
+    if (current) {
         self.virtualMicActionButton.title = KoeLocalizedString(@"setupWizard.translation.virtualMic.action.uninstall");
         self.virtualMicActionButton.action = @selector(uninstallVirtualMicDriver:);
         if (@available(macOS 11.0, *)) {
             self.virtualMicActionButton.bezelColor = [NSColor systemRedColor];
         }
     } else {
-        self.virtualMicActionButton.title = KoeLocalizedString(@"setupWizard.translation.virtualMic.action.install");
+        self.virtualMicActionButton.title = outdated
+            ? KoeLocalizedString(@"setupWizard.translation.virtualMic.action.update")
+            : KoeLocalizedString(@"setupWizard.translation.virtualMic.action.install");
         self.virtualMicActionButton.action = @selector(installVirtualMicDriver:);
         if (@available(macOS 11.0, *)) {
             self.virtualMicActionButton.bezelColor = [NSColor controlAccentColor];
@@ -4638,6 +4648,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
 - (void)endVirtualMicOperationWithError:(nullable NSError *)error {
     self.virtualMicOperationInProgress = NO;
+    self.virtualMicOperationInstallsDriver = NO;
     [self.virtualMicProgressIndicator stopAnimation:nil];
     if (error != nil) {
         [self setVirtualMicError:[NSString stringWithFormat:@"%@", error.localizedDescription ?: KoeLocalizedString(@"setupWizard.translation.virtualMic.error.unknown")]];
@@ -4655,6 +4666,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self setVirtualMicError:KoeLocalizedString(@"setupWizard.translation.virtualMic.error.bundleMissing")];
         return;
     }
+    self.virtualMicOperationInstallsDriver = YES;
     [self beginVirtualMicOperation];
     [SPVirtualMicInstaller installWithCompletion:^(NSError * _Nullable error) {
         [self endVirtualMicOperationWithError:error];
@@ -4674,6 +4686,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     if ([alert runModal] != NSAlertFirstButtonReturn) {
         return;
     }
+    self.virtualMicOperationInstallsDriver = NO;
     [self beginVirtualMicOperation];
     [SPVirtualMicInstaller uninstallWithCompletion:^(NSError * _Nullable error) {
         [self endVirtualMicOperationWithError:error];

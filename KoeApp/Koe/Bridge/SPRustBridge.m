@@ -385,7 +385,15 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
 }
 
 - (void)pushTranslationAudioFrame:(const void *)buffer length:(uint32_t)length {
-    sp_core_translation_push_audio((const uint8_t *)buffer, length);
+    int32_t result = sp_core_translation_push_audio((const uint8_t *)buffer, length);
+    if (result != 0) {
+        static CFTimeInterval lastLogAt = 0;
+        CFTimeInterval now = CFAbsoluteTimeGetCurrent();
+        if (lastLogAt == 0 || now - lastLogAt >= 2.0) {
+            NSLog(@"[Koe] sp_core_translation_push_audio failed: %d (len=%u)", result, length);
+            lastLogAt = now;
+        }
+    }
 }
 
 // ─── Translation Test ──────────────────────────────────────────────

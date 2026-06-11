@@ -18,6 +18,7 @@
 #import "koe_core.h"
 #import <os/log.h>
 #import <sys/stat.h>
+#import <stdint.h>
 #import <UserNotifications/UserNotifications.h>
 
 @interface SPAppDelegate () <SPAudioDeviceManagerDelegate, SPOverlayPanelDelegate>
@@ -28,7 +29,29 @@
 @property (nonatomic, copy) NSString *lastAsrText;
 @property (nonatomic, strong) id numberKeyMonitor;
 @property (nonatomic, assign) NSUInteger translationModeRequestGeneration;
+@property (nonatomic, assign) uint64_t translationAudioFrameCount;
+@property (nonatomic, assign) uint64_t translationAudioByteCount;
+@property (nonatomic, assign) NSTimeInterval translationAudioLastLogAt;
 @end
+
+static float SPTranslationPCM16PeakLevel(const void *buffer, uint32_t length) {
+    if (buffer == NULL || length < sizeof(int16_t)) {
+        return 0.0f;
+    }
+
+    const int16_t *samples = (const int16_t *)buffer;
+    NSUInteger sampleCount = length / sizeof(int16_t);
+    uint32_t peak = 0;
+    for (NSUInteger i = 0; i < sampleCount; i++) {
+        int32_t sample = samples[i];
+        uint32_t magnitude = (uint32_t)(sample < 0 ? -sample : sample);
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
+    }
+
+    return (float)MIN(peak, 32768U) / 32768.0f;
+}
 
 static BOOL sessionStateAllowsConfigReload(NSString *state) {
     if (state.length == 0) return YES;
@@ -849,6 +872,29 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self startTranslationModeIfReadyForGeneration:self.translationModeRequestGeneration];
 }
 
+- (void)resetTranslationAudioDiagnostics {
+    self.translationAudioFrameCount = 0;
+    self.translationAudioByteCount = 0;
+    self.translationAudioLastLogAt = 0;
+}
+
+- (void)logTranslationAudioFrameIfNeededWithBuffer:(const void *)buffer length:(uint32_t)length {
+    self.translationAudioFrameCount += 1;
+    self.translationAudioByteCount += length;
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (self.translationAudioLastLogAt > 0 && now - self.translationAudioLastLogAt < 2.0) {
+        return;
+    }
+
+    self.translationAudioLastLogAt = now;
+    NSLog(@"[Translation] captured audio frames=%llu bytes=%llu last_len=%u peak=%.4f",
+          self.translationAudioFrameCount,
+          self.translationAudioByteCount,
+          length,
+          SPTranslationPCM16PeakLevel(buffer, length));
+}
+
 - (void)startTranslationModeIfReadyForGeneration:(NSUInteger)requestGeneration {
     if (!self.translationEnabled || requestGeneration != self.translationModeRequestGeneration) {
         return;
@@ -876,6 +922,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
     AudioDeviceID translationDeviceID = [self.audioDeviceManager resolvedDeviceID];
     [translationAudioSource prepareTranslationCaptureWithDeviceID:translationDeviceID];
+    [self resetTranslationAudioDiagnostics];
 
     __weak typeof(self) weakSelf = self;
     [translationAudioSource startTranslationCaptureWithAudioCallback:^(const void *buffer, uint32_t length, uint64_t timestamp) {
@@ -890,6 +937,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
         if (staleFrame) {
             return;
         }
+        [self logTranslationAudioFrameIfNeededWithBuffer:buffer length:length];
         [self.rustBridge pushTranslationAudioFrame:buffer length:length];
     } completion:^(BOOL started, NSError * _Nullable error) {
         __strong typeof(weakSelf) self = weakSelf;
@@ -950,7 +998,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     NSLog(@"[Koe] Translation mode enabled");
     [self setTranslationModeEnabled:YES];
 
-    if ([SPVirtualMicInstaller isInstalled]) {
+    if ([SPVirtualMicInstaller isInstalledAndCurrent]) {
         [self startTranslationModeIfReady];
         return;
     }

@@ -75,6 +75,9 @@ struct Core {
     translation_audio_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     /// Translation engine task handle (used for graceful shutdown).
     translation_handle: Option<tokio::task::JoinHandle<()>>,
+    translation_audio_chunk_count: u64,
+    translation_audio_byte_count: u64,
+    translation_audio_last_log_at: Option<Instant>,
 }
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
@@ -158,6 +161,9 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         translation_stop: None,
         translation_audio_tx: None,
         translation_handle: None,
+        translation_audio_chunk_count: 0,
+        translation_audio_byte_count: 0,
+        translation_audio_last_log_at: None,
     };
 
     let mut global = CORE.lock().unwrap();
@@ -1316,7 +1322,9 @@ fn translation_gemini_live_ready(cfg: &config::Config) -> bool {
         return false;
     }
     let has_api_key = !gl.api_key.trim().is_empty()
-        || std::env::var("GEMINI_API_KEY").map(|s| !s.is_empty()).unwrap_or(false);
+        || std::env::var("GEMINI_API_KEY")
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
     let has_model = !gl.model.trim().is_empty();
     has_api_key && has_model
 }
@@ -2623,6 +2631,18 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
         translation_config.source_language = "auto".into();
     }
     let translation_mode = translation_runtime_mode(&cfg);
+    log::info!(
+        "[translation] start mode={translation_mode:?} source={} target={} asr={} mt_enabled={} mt_provider={:?} mt_model={} tts_enabled={} tts_provider={:?} tts_model={}",
+        translation_config.source_language,
+        translation_config.target_language,
+        cfg.asr.provider,
+        translation_config.mt.enabled,
+        translation_config.mt.provider,
+        translation_config.mt.model,
+        translation_config.tts.enabled,
+        translation_config.tts.provider,
+        translation_config.tts.model,
+    );
 
     let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
     let engine = TranslationEngine::new(translation_config, http_client, factory, translation_mode);
@@ -2634,6 +2654,9 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
         log::info!("[translation] engine stopped");
     });
     core.translation_handle = Some(handle);
+    core.translation_audio_chunk_count = 0;
+    core.translation_audio_byte_count = 0;
+    core.translation_audio_last_log_at = None;
 
     0
 }
@@ -2680,6 +2703,7 @@ pub unsafe extern "C" fn sp_core_translation_push_audio(samples_ptr: *const u8, 
         return 0;
     }
     let bytes = unsafe { std::slice::from_raw_parts(samples_ptr, len) };
+    let peak = pcm16_peak_from_bytes(bytes);
     let vec = bytes.to_vec();
 
     let mut global = CORE.lock().unwrap_or_else(|e| e.into_inner());
@@ -2691,9 +2715,42 @@ pub unsafe extern "C" fn sp_core_translation_push_audio(samples_ptr: *const u8, 
     if let Some(ref tx) = core.translation_audio_tx {
         if tx.send(vec).is_err() {
             log::warn!("translation audio channel closed");
+            return -3;
         }
+        core.translation_audio_chunk_count = core.translation_audio_chunk_count.saturating_add(1);
+        core.translation_audio_byte_count =
+            core.translation_audio_byte_count.saturating_add(len as u64);
+        let now = Instant::now();
+        let should_log = core
+            .translation_audio_last_log_at
+            .map(|last| now.duration_since(last) >= Duration::from_secs(2))
+            .unwrap_or(true);
+        if should_log {
+            log::info!(
+                "[translation] FFI received audio chunks={} bytes={} last_len={} peak={peak:.4}",
+                core.translation_audio_chunk_count,
+                core.translation_audio_byte_count,
+                len,
+            );
+            core.translation_audio_last_log_at = Some(now);
+        }
+    } else {
+        log::warn!("[translation] audio frame received before engine channel was ready");
+        return -2;
     }
     0
+}
+
+fn pcm16_peak_from_bytes(bytes: &[u8]) -> f32 {
+    let peak = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+            i32::from(sample).unsigned_abs().min(32768)
+        })
+        .max()
+        .unwrap_or(0);
+    peak as f32 / 32768.0
 }
 
 #[cfg(test)]

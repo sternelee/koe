@@ -65,6 +65,13 @@ impl TranslationEngine {
             self.config.output_channels,
             self.config.output_sample_rate,
         )?);
+        log::info!(
+            "[translation] output buffer ready frames={} rate={} channels={} mode={:?}",
+            self.config.output_buffer_frames,
+            self.config.output_sample_rate,
+            self.config.output_channels,
+            self.mode,
+        );
 
         if self.mode == TranslationMode::Passthrough {
             log::info!("[translation] backend incomplete; using passthrough virtual mic mode");
@@ -146,6 +153,9 @@ impl TranslationEngine {
             log::info!("[translation] segment processor stopped");
         });
         let mut last_audio_at = None;
+        let mut received_chunks = 0u64;
+        let mut received_bytes = 0u64;
+        let mut last_rx_log_at: Option<Instant> = None;
 
         while !stop.load(Ordering::SeqCst) {
             tokio::select! {
@@ -155,7 +165,26 @@ impl TranslationEngine {
                         .chunks_exact(2)
                         .map(|c| i16::from_le_bytes([c[0], c[1]]))
                         .collect();
+                    received_chunks = received_chunks.saturating_add(1);
+                    received_bytes = received_bytes.saturating_add(bytes.len() as u64);
+                    let now = Instant::now();
+                    let should_log = last_rx_log_at
+                        .map(|last| now.duration_since(last) >= Duration::from_secs(2))
+                        .unwrap_or(true);
+                    if should_log {
+                        log::info!(
+                            "[translation] engine received audio chunks={received_chunks} bytes={received_bytes} last_samples={} peak={:.4}",
+                            samples.len(),
+                            pcm16_peak(&samples),
+                        );
+                        last_rx_log_at = Some(now);
+                    }
                     for segment in vad.push_samples(&samples) {
+                        log::info!(
+                            "[translation] VAD segment duration={}ms samples={}",
+                            segment.duration_ms,
+                            segment.samples.len(),
+                        );
                         match segment_tx.try_send(segment) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -174,6 +203,11 @@ impl TranslationEngine {
                         if idle_ms >= self.config.silence_ms {
                             last_audio_at = None;
                             if let Some(segment) = vad.flush_if_inactive(idle_ms) {
+                                log::info!(
+                                    "[translation] VAD idle flush duration={}ms samples={}",
+                                    segment.duration_ms,
+                                    segment.samples.len(),
+                                );
                                 match segment_tx.try_send(segment) {
                                     Ok(()) => {}
                                     Err(mpsc::error::TrySendError::Full(_)) => {
@@ -192,6 +226,11 @@ impl TranslationEngine {
         }
 
         if let Some(segment) = vad.flush() {
+            log::info!(
+                "[translation] VAD final flush duration={}ms samples={}",
+                segment.duration_ms,
+                segment.samples.len(),
+            );
             if segment_tx.send(segment).await.is_err() {
                 log::warn!("[translation] segment processor stopped before final flush");
             }
@@ -332,6 +371,11 @@ async fn run_segment_pipeline(
     output_sample_rate: u32,
     output_channels: u16,
 ) {
+    log::info!(
+        "[translation] processing segment duration={}ms samples={}",
+        segment.duration_ms,
+        segment.samples.len(),
+    );
     // 1. ASR
     let text = match run_asr(&segment, &asr_factory).await {
         Ok(t) if !t.trim().is_empty() => t,
@@ -384,6 +428,10 @@ async fn run_segment_pipeline(
             return;
         }
     };
+    log::info!(
+        "[translation] TTS produced samples={} rate={tts_rate}",
+        samples.len(),
+    );
 
     // 4. Resample to output sample rate
     let output_samples = if tts_rate != output_sample_rate {
@@ -391,6 +439,8 @@ async fn run_segment_pipeline(
     } else {
         samples
     };
+    let output_sample_count = output_samples.len();
+    let output_frames = output_sample_count / usize::from(output_channels.max(1));
 
     // 5. Write to shared mmap buffer
     let frame = AudioFrame {
@@ -402,7 +452,20 @@ async fn run_segment_pipeline(
 
     if let Err(e) = output_buffer.write_frame(&frame) {
         log::warn!("[translation] output buffer write failed: {e}");
+    } else {
+        log::info!(
+            "[translation] output buffer wrote frames={output_frames} samples={output_sample_count} rate={output_sample_rate} channels={output_channels}",
+        );
     }
+}
+
+fn pcm16_peak(samples: &[i16]) -> f32 {
+    let peak = samples
+        .iter()
+        .map(|sample| i32::from(*sample).unsigned_abs().min(32768))
+        .max()
+        .unwrap_or(0);
+    peak as f32 / 32768.0
 }
 
 async fn run_asr(segment: &SpeechSegment, asr_factory: &AsrFactory) -> Result<String> {

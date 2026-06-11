@@ -148,9 +148,12 @@
 "setupWizard.translation.tts.provider.kittenOnnx" = "KittenTTS ONNX（本地）";
 "setupWizard.translation.virtualMic.hint" = "将翻译后的语音路由到系统麦克风，可用于 Zoom/Teams。需要管理员密码。";
 "setupWizard.translation.virtualMic.status.ready" = "驱动已就绪";
+"setupWizard.translation.virtualMic.status.outdated" = "驱动需要更新";
 "setupWizard.translation.virtualMic.status.missing" = "驱动未安装";
 "setupWizard.translation.virtualMic.action.install" = "安装驱动";
 "setupWizard.translation.virtualMic.action.installing" = "正在安装…";
+"setupWizard.translation.virtualMic.action.update" = "更新驱动";
+"setupWizard.translation.virtualMic.action.updating" = "正在更新…";
 "setupWizard.translation.virtualMic.action.uninstall" = "卸载";
 "setupWizard.translation.virtualMic.action.uninstalling" = "正在卸载…";
 "setupWizard.translation.virtualMic.uninstall.title" = "要移除虚拟麦克风驱动吗？";

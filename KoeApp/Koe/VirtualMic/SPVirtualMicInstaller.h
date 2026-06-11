@@ -10,6 +10,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// Returns YES when the driver bundle exists at the system HAL path.
 + (BOOL)isInstalled;
 
+/// Returns YES when the system HAL driver exists and matches the driver bundled
+/// with the running app. If the bundled driver cannot be found, this falls back
+/// to plain installation presence so stripped/debug builds keep working.
++ (BOOL)isInstalledAndCurrent;
+
+/// Returns YES when a system HAL driver exists but differs from the driver
+/// bundled with the running app.
++ (BOOL)isInstalledButOutdated;
+
 /// Locates the driver bundle to install from. Searches the host app's
 /// Resources directory first; returns nil if no bundle is found.
 + (nullable NSString *)findBundlePath;

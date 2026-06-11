@@ -5,6 +5,8 @@
 
 static NSString *const kVirtualMicHalDir = @"/Library/Audio/Plug-Ins/HAL";
 static NSString *const kVirtualMicBundleName = @"KoeVirtualMic.driver";
+static NSString *const kVirtualMicExecutableRelativePath = @"Contents/MacOS/KoeVirtualMic";
+static NSString *const kVirtualMicInfoPlistRelativePath = @"Contents/Info.plist";
 static NSString *const kVirtualMicErrorDomain = @"nz.owo.koe.virtual-mic-installer";
 
 typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
@@ -22,6 +24,32 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
 
 + (BOOL)isInstalled {
     return [[NSFileManager defaultManager] fileExistsAtPath:[self installedPath]];
+}
+
++ (BOOL)isInstalledAndCurrent {
+    if (![self isInstalled]) {
+        return NO;
+    }
+
+    NSString *sourcePath = [self findBundlePath];
+    if (sourcePath == nil) {
+        return YES;
+    }
+
+    return [self installedBundleAtPath:[self installedPath] matchesSourceBundleAtPath:sourcePath];
+}
+
++ (BOOL)isInstalledButOutdated {
+    if (![self isInstalled]) {
+        return NO;
+    }
+
+    NSString *sourcePath = [self findBundlePath];
+    if (sourcePath == nil) {
+        return NO;
+    }
+
+    return ![self installedBundleAtPath:[self installedPath] matchesSourceBundleAtPath:sourcePath];
 }
 
 + (nullable NSString *)findBundlePath {
@@ -97,6 +125,30 @@ typedef NS_ENUM(NSInteger, SPVirtualMicInstallerErrorCode) {
     // Wrap the whole path in single quotes and escape any contained quote.
     NSString *escaped = [path stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
     return [NSString stringWithFormat:@"'%@'", escaped];
+}
+
++ (BOOL)installedBundleAtPath:(NSString *)installedPath matchesSourceBundleAtPath:(NSString *)sourcePath {
+    return [self fileAtRelativePath:kVirtualMicExecutableRelativePath
+                       inBundlePath:installedPath
+              matchesFileInBundlePath:sourcePath] &&
+           [self fileAtRelativePath:kVirtualMicInfoPlistRelativePath
+                       inBundlePath:installedPath
+              matchesFileInBundlePath:sourcePath];
+}
+
++ (BOOL)fileAtRelativePath:(NSString *)relativePath
+              inBundlePath:(NSString *)installedBundlePath
+     matchesFileInBundlePath:(NSString *)sourceBundlePath {
+    NSString *installedFile = [installedBundlePath stringByAppendingPathComponent:relativePath];
+    NSString *sourceFile = [sourceBundlePath stringByAppendingPathComponent:relativePath];
+
+    NSData *installedData = [NSData dataWithContentsOfFile:installedFile];
+    NSData *sourceData = [NSData dataWithContentsOfFile:sourceFile];
+    if (installedData == nil || sourceData == nil) {
+        return NO;
+    }
+
+    return [installedData isEqualToData:sourceData];
 }
 
 + (void)runAppleScript:(NSString *)source completion:(void (^)(NSError * _Nullable))completion {

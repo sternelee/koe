@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::time::Instant;
 
 /// Metrics collected for each session.
@@ -72,6 +73,21 @@ impl SessionMetrics {
 }
 
 pub fn init_logging() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .try_init();
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    builder.format(|buf, record| {
+        let message = record.args().to_string();
+        crate::ffi::invoke_log_event(log_level_code(record.level()), &message);
+        writeln!(buf, "[{} {}] {}", record.level(), record.target(), message)
+    });
+    let _ = builder.try_init();
+}
+
+fn log_level_code(level: log::Level) -> i32 {
+    match level {
+        log::Level::Error => 0,
+        log::Level::Warn => 1,
+        log::Level::Info => 2,
+        log::Level::Debug | log::Level::Trace => 3,
+    }
 }
