@@ -714,6 +714,12 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSSecureTextField *asrGlmApiKeySecureField;
 @property (nonatomic, strong) NSTextField *asrGlmApiKeyField;
 @property (nonatomic, strong) NSButton *asrGlmApiKeyToggle;
+@property (nonatomic, strong) NSTextField *asrGlmApiKeyLabel;
+@property (nonatomic, strong) NSSecureTextField *asrMimoApiKeySecureField;
+@property (nonatomic, strong) NSTextField *asrMimoApiKeyField;
+@property (nonatomic, strong) NSButton *asrMimoApiKeyToggle;
+@property (nonatomic, strong) NSTextField *asrMimoApiKeyLabel;
+@property (nonatomic, strong) NSTextField *asrMimoPrivacyNotice;
 @property (nonatomic, strong) NSButton *asrTestButton;
 @property (nonatomic, strong) NSTextField *asrTestResultLabel;
 // Doubao auth mode + new console API key
@@ -723,6 +729,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSButton *asrApiKeyToggle;
 // Doubao language selection
 @property (nonatomic, strong) NSPopUpButton *asrLanguagePopup;
+@property (nonatomic, strong) NSTextField *asrLanguageLabel;
 // Doubao advanced settings
 @property (nonatomic, strong) NSButton *asrAdvancedDisclosure;
 @property (nonatomic, strong) NSView *asrAdvancedContainer;
@@ -914,6 +921,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)testTranslationTts:(id)sender;
 - (void)asrAdvancedToggled:(id)sender;
 - (CGFloat)targetAsrPaneHeightForProvider:(NSString *)provider advancedExpanded:(BOOL)expanded;
+- (void)layoutAsrRowsForCurrentProvider;
 - (void)resizeAsrPaneToCurrentProvider;
 - (CGFloat)minimumHeightForVisibleSubviewsInView:(NSView *)view bottomPadding:(CGFloat)bottomPadding ignoringViews:(NSArray<NSView *> *)ignoredViews;
 - (void)resizeCurrentPaneWindowToHeight:(CGFloat)targetHeight;
@@ -1256,6 +1264,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self.asrProviderPopup lastItem].representedObject = @"qwen";
     [self.asrProviderPopup addItemWithTitle:@"GLM (Zhipu)"];
     [self.asrProviderPopup lastItem].representedObject = @"glm";
+    [self.asrProviderPopup addItemWithTitle:@"MiMo (Xiaomi)"];
+    [self.asrProviderPopup lastItem].representedObject = @"mimo";
     NSArray<NSString *> *supportedLocalProviders = [self.rustBridge supportedLocalProviders];
     // Add Apple Speech (macOS 26+, no model download required; also requires the
     // apple-speech feature to be compiled into the Rust core — excluded on x86_64)
@@ -1448,7 +1458,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [pane addSubview:qwenKeyLabel];
 
   // GLM API Key — fixed at row 1 (same position as Qwen, toggled by provider)
-  CGFloat glmY = formStartY - rowH - rowH;
+  CGFloat glmY = qwenY;
   self.asrGlmApiKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, glmY, secFieldW, 22)];
   self.asrGlmApiKeySecureField.placeholderString =
@@ -1466,11 +1476,50 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
                   action:@selector(toggleGlmApiKeyVisibility:)];
   self.asrGlmApiKeyToggle.hidden = YES;
   [pane addSubview:self.asrGlmApiKeyToggle];
-  NSTextField *glmKeyLabel =
+  self.asrGlmApiKeyLabel =
       [self formLabel:@"API Key" frame:NSMakeRect(16, glmY, labelW, 22)];
-  glmKeyLabel.tag = 1010;
-  glmKeyLabel.hidden = YES;
-  [pane addSubview:glmKeyLabel];
+  self.asrGlmApiKeyLabel.tag = 1010;
+  self.asrGlmApiKeyLabel.hidden = YES;
+  [pane addSubview:self.asrGlmApiKeyLabel];
+
+  // MiMo API Key — fixed at row 1 (same position as Qwen/GLM, toggled by provider)
+  CGFloat mimoY = qwenY;
+  self.asrMimoApiKeySecureField = [[NSSecureTextField alloc]
+      initWithFrame:NSMakeRect(fieldX, mimoY, secFieldW, 22)];
+  self.asrMimoApiKeySecureField.placeholderString =
+      @"API Key from xiaomimimo.com";
+  self.asrMimoApiKeySecureField.font = [NSFont systemFontOfSize:13];
+  self.asrMimoApiKeySecureField.hidden = YES;
+  [pane addSubview:self.asrMimoApiKeySecureField];
+  self.asrMimoApiKeyField =
+      [self formTextField:NSMakeRect(fieldX, mimoY, secFieldW, 22)
+              placeholder:@"API Key from xiaomimimo.com"];
+  self.asrMimoApiKeyField.hidden = YES;
+  [pane addSubview:self.asrMimoApiKeyField];
+  self.asrMimoApiKeyToggle = [self
+      eyeButtonWithFrame:NSMakeRect(fieldX + secFieldW + 4, mimoY - 1, eyeW, 24)
+                  action:@selector(toggleMimoApiKeyVisibility:)];
+  self.asrMimoApiKeyToggle.hidden = YES;
+  [pane addSubview:self.asrMimoApiKeyToggle];
+  self.asrMimoApiKeyLabel =
+      [self formLabel:@"API Key" frame:NSMakeRect(16, mimoY, labelW, 22)];
+  self.asrMimoApiKeyLabel.tag = 1011;
+  self.asrMimoApiKeyLabel.hidden = YES;
+  [pane addSubview:self.asrMimoApiKeyLabel];
+  // Privacy notice — audio is sent to Xiaomi's servers, not ours.
+  self.asrMimoPrivacyNotice = [NSTextField wrappingLabelWithString:
+      @"By selecting MiMo, you consent to Xiaomi processing your personal "
+      @"information and voice data. Koe collects nothing and runs no servers. "
+      @"For questions, contact Xiaomi."];
+  // Sits below the API key field, clear of the bottom button row.
+  self.asrMimoPrivacyNotice.frame =
+      NSMakeRect(fieldX, mimoY - rowH * 3 - 16, paneWidth - fieldX - 32, 60);
+  self.asrMimoPrivacyNotice.font = [NSFont systemFontOfSize:11];
+  self.asrMimoPrivacyNotice.textColor = [NSColor systemOrangeColor];
+  self.asrMimoPrivacyNotice.maximumNumberOfLines = 3;
+  self.asrMimoPrivacyNotice.tag = 1011;
+  self.asrMimoPrivacyNotice.hidden = YES;
+  [pane addSubview:self.asrMimoPrivacyNotice];
 
   // Test result label — positioned right after credential rows, before
   // language.
@@ -1484,11 +1533,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
   // Language popup (Doubao + DoubaoIME)
   CGFloat langY = testResultY - rowH;
-  NSTextField *langLabel = [self formLabel:@"Language"
-                                     frame:NSMakeRect(16, langY, labelW, 22)];
-  langLabel.tag = 1008;
-  langLabel.hidden = YES;
-  [pane addSubview:langLabel];
+  self.asrLanguageLabel = [self formLabel:@"Language"
+                                    frame:NSMakeRect(16, langY, labelW, 22)];
+  self.asrLanguageLabel.tag = 1008;
+  self.asrLanguageLabel.hidden = YES;
+  [pane addSubview:self.asrLanguageLabel];
   self.asrLanguagePopup = [[NSPopUpButton alloc]
       initWithFrame:NSMakeRect(fieldX, langY - 2, 200, 26)
           pullsDown:NO];
@@ -5250,6 +5299,28 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   }
 }
 
+- (void)toggleMimoApiKeyVisibility:(NSButton *)sender {
+  if (sender.tag == 0) {
+    // Show plain text
+    self.asrMimoApiKeyField.stringValue =
+        self.asrMimoApiKeySecureField.stringValue;
+    self.asrMimoApiKeySecureField.hidden = YES;
+    self.asrMimoApiKeyField.hidden = NO;
+    sender.image = [NSImage imageWithSystemSymbolName:@"eye"
+                             accessibilityDescription:@"Hide"];
+    sender.tag = 1;
+  } else {
+    // Show secure
+    self.asrMimoApiKeySecureField.stringValue =
+        self.asrMimoApiKeyField.stringValue;
+    self.asrMimoApiKeyField.hidden = YES;
+    self.asrMimoApiKeySecureField.hidden = NO;
+    sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash"
+                             accessibilityDescription:@"Show"];
+    sender.tag = 0;
+  }
+}
+
 - (void)toggleAsrApiKeyVisibility:(NSButton *)sender {
   if (sender.tag == 0) {
     self.asrApiKeyField.stringValue = self.asrApiKeySecureField.stringValue;
@@ -5265,6 +5336,109 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     sender.image = [NSImage imageWithSystemSymbolName:@"eye.slash"
                              accessibilityDescription:@"Show"];
     sender.tag = 0;
+  }
+}
+
+- (void)setFrameY:(CGFloat)y forView:(NSView *)view {
+  if (!view) return;
+  NSRect frame = view.frame;
+  frame.origin.y = floor(y);
+  view.frame = frame;
+}
+
+- (void)setFrameY:(CGFloat)y forViewsMatchingTag:(NSInteger)tag {
+  [self enumerateSubviewsRecursivelyInView:self.currentPaneView
+                                usingBlock:^(NSView *subview) {
+    if (subview.tag == tag) {
+      [self setFrameY:y forView:subview];
+    }
+  }];
+}
+
+- (void)layoutAsrRowsForCurrentProvider {
+  if (!self.currentPaneView || !self.asrProviderPopup) return;
+
+  static const CGFloat rowH = 32.0;
+  CGFloat providerY = NSMinY(self.asrProviderPopup.frame);
+  CGFloat (^rowY)(NSInteger) = ^CGFloat(NSInteger row) {
+    return providerY - (rowH * row);
+  };
+
+  NSString *provider =
+      self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
+  BOOL isDoubao = [provider isEqualToString:@"doubao"];
+  BOOL isDoubaoLegacy =
+      isDoubao && self.asrAuthModeControl.selectedSegment == 1;
+  BOOL isQwen = [provider isEqualToString:@"qwen"];
+  BOOL isGlm = [provider isEqualToString:@"glm"];
+  BOOL isMimo = [provider isEqualToString:@"mimo"];
+  BOOL isWhisper = [provider isEqualToString:@"whisper"];
+
+  CGFloat primaryY = rowY(1);
+  CGFloat secondaryY = rowY(2);
+
+  // First configuration row: every provider's primary control starts here.
+  [self setFrameY:primaryY forView:self.asrAppKeyField];
+  [self setFrameY:primaryY forViewsMatchingTag:1001];
+  [self setFrameY:primaryY forView:self.asrApiKeySecureField];
+  [self setFrameY:primaryY forView:self.asrApiKeyField];
+  [self setFrameY:primaryY - 1.0 forView:self.asrApiKeyToggle];
+  [self setFrameY:primaryY forViewsMatchingTag:1007];
+  [self setFrameY:primaryY forView:self.asrQwenApiKeySecureField];
+  [self setFrameY:primaryY forView:self.asrQwenApiKeyField];
+  [self setFrameY:primaryY - 1.0 forView:self.asrQwenApiKeyToggle];
+  [self setFrameY:primaryY forViewsMatchingTag:1003];
+  [self setFrameY:primaryY forView:self.asrGlmApiKeySecureField];
+  [self setFrameY:primaryY forView:self.asrGlmApiKeyField];
+  [self setFrameY:primaryY - 1.0 forView:self.asrGlmApiKeyToggle];
+  [self setFrameY:primaryY forView:self.asrGlmApiKeyLabel];
+  [self setFrameY:primaryY forView:self.asrMimoApiKeySecureField];
+  [self setFrameY:primaryY forView:self.asrMimoApiKeyField];
+  [self setFrameY:primaryY - 1.0 forView:self.asrMimoApiKeyToggle];
+  [self setFrameY:primaryY forView:self.asrMimoApiKeyLabel];
+  [self setFrameY:primaryY forViewsMatchingTag:1005];
+  [self setFrameY:primaryY - 2.0 forView:self.appleSpeechLocalePopup];
+
+  [self setFrameY:primaryY forView:self.localModelLabel];
+  [self setFrameY:primaryY - 2.0 forView:self.localModelPopup];
+  [self setFrameY:primaryY + 1.0 forView:self.modelDownloadButton];
+
+  // Second row: secondary credentials or local model status.
+  [self setFrameY:secondaryY forViewsMatchingTag:1002];
+  [self setFrameY:secondaryY forView:self.asrAccessKeySecureField];
+  [self setFrameY:secondaryY forView:self.asrAccessKeyField];
+  [self setFrameY:secondaryY - 1.0 forView:self.asrAccessKeyToggle];
+  [self setFrameY:secondaryY + 2.0 forView:self.modelStatusLabel];
+  [self setFrameY:secondaryY + 1.0 forView:self.modelDeleteButton];
+
+  NSInteger progressRow = isWhisper ? 4 : 3;
+  [self setFrameY:rowY(progressRow) + 10.0 forView:self.modelProgressBar];
+  [self setFrameY:rowY(progressRow) + 2.0
+          forView:self.modelProgressSizeLabel];
+
+  NSInteger testRow = 2;
+  if (isDoubao && isDoubaoLegacy) {
+    testRow = 3;
+  } else if (![provider isEqualToString:@"doubaoime"] &&
+             !isDoubao && !isQwen && !isGlm && !isMimo) {
+    testRow = 3;
+  }
+  [self setFrameY:rowY(testRow) forView:self.asrTestResultLabel];
+
+  NSInteger languageRow = isWhisper ? 3 : testRow + 1;
+  [self setFrameY:rowY(languageRow) forView:self.asrLanguageLabel];
+  [self setFrameY:rowY(languageRow) - 2.0 forView:self.asrLanguagePopup];
+
+  NSInteger advancedRow = languageRow + 1;
+  [self setFrameY:rowY(advancedRow) forView:self.asrAdvancedDisclosure];
+  [self setFrameY:rowY(advancedRow) - (rowH * 3.0) - 4.0
+          forView:self.asrAdvancedContainer];
+
+  if (isMimo) {
+    CGFloat noticeY =
+        NSMinY(self.asrTestResultLabel.frame) -
+        NSHeight(self.asrMimoPrivacyNotice.frame) - 8.0;
+    [self setFrameY:noticeY forView:self.asrMimoPrivacyNotice];
   }
 }
 
@@ -5288,6 +5462,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   self.asrAccessKeyField.hidden = YES;
   self.asrAccessKeyToggle.hidden = isNewConsole;
   self.asrAccessKeyToggle.tag = 0;
+  [self layoutAsrRowsForCurrentProvider];
+  [self resizeAsrPaneToCurrentProvider];
 }
 
 - (void)asrAdvancedToggled:(NSButton *)sender {
@@ -5311,11 +5487,19 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   if ([provider isEqualToString:@"glm"]) {
     return 340.0;
   }
+  if ([provider isEqualToString:@"mimo"]) {
+    // Taller than GLM to fit the privacy notice under the API key row.
+    return 360.0;
+  }
   if ([provider isEqualToString:@"apple-speech"]) {
     return 280.0;
   }
   if ([provider isEqualToString:@"doubao"]) {
-    return expanded ? 500.0 : 410.0;
+    BOOL legacyMode = (self.asrAuthModeControl.selectedSegment == 1);
+    if (expanded) {
+      return legacyMode ? 500.0 : 470.0;
+    }
+    return legacyMode ? 410.0 : 380.0;
   }
   // mlx, sherpa-onnx — model row + status + progress
   return 340.0;
@@ -5330,6 +5514,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   BOOL advExpanded =
       ([provider isEqualToString:@"doubao"] &&
        self.asrAdvancedDisclosure.state == NSControlStateValueOn);
+  [self layoutAsrRowsForCurrentProvider];
   CGFloat targetHeight =
       [self targetAsrPaneHeightForProvider:provider
                           advancedExpanded:advExpanded];
@@ -5507,9 +5692,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     BOOL isDoubao = [selectedProvider isEqualToString:@"doubao"];
     BOOL isQwen = [selectedProvider isEqualToString:@"qwen"];
     BOOL isGlm = [selectedProvider isEqualToString:@"glm"];
+    BOOL isMimo = [selectedProvider isEqualToString:@"mimo"];
     BOOL isAppleSpeech = [selectedProvider isEqualToString:@"apple-speech"];
     BOOL isWhisper = [selectedProvider isEqualToString:@"whisper"];
-    BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isAppleSpeech && !isWhisper;
+    BOOL isModelBasedLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isMimo && !isAppleSpeech;
 
     // Show/hide Doubao auth mode control and credential fields
     [self setHidden:!isDoubao
@@ -5577,6 +5763,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.asrGlmApiKeySecureField.hidden = !isGlm;
     self.asrGlmApiKeyToggle.hidden = !isGlm;
 
+    [self setHidden:!isMimo
+        forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1011]
+                      inView:self.currentPaneView];
+    self.asrMimoApiKeyField.hidden = YES;
+    self.asrMimoApiKeySecureField.hidden = !isMimo;
+    self.asrMimoApiKeyToggle.hidden = !isMimo;
+
     self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
     [self setHidden:!isAppleSpeech
         forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1005]
@@ -5609,7 +5802,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self updateModelStatusLabel];
     }
 
-    BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm;
+    BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isMimo;
     self.asrTestButton.hidden = isLocal;
     self.asrTestResultLabel.hidden = isLocal;
     self.asrTestResultLabel.stringValue = @"";
@@ -6369,6 +6562,14 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.asrQwenApiKeySecureField.stringValue = qwenApiKey;
         self.asrQwenApiKeyField.stringValue = qwenApiKey;
 
+        NSString *glmApiKey = configGet(@"asr.glm.api_key");
+        self.asrGlmApiKeySecureField.stringValue = glmApiKey;
+        self.asrGlmApiKeyField.stringValue = glmApiKey;
+
+        NSString *mimoApiKey = configGet(@"asr.mimo.api_key");
+        self.asrMimoApiKeySecureField.stringValue = mimoApiKey;
+        self.asrMimoApiKeyField.stringValue = mimoApiKey;
+
         [self asrProviderChanged:self.asrProviderPopup];
 
         NSString *locale = configGet(@"asr.apple-speech.locale");
@@ -6604,6 +6805,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         BOOL isModelBasedLocal = ![provider isEqualToString:@"doubaoime"]
             && ![provider isEqualToString:@"doubao"]
             && ![provider isEqualToString:@"qwen"]
+            && ![provider isEqualToString:@"glm"]
+            && ![provider isEqualToString:@"mimo"]
             && ![provider isEqualToString:@"apple-speech"];
         if (isModelBasedLocal) {
             NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
@@ -6705,6 +6908,16 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             ? self.asrQwenApiKeyField.stringValue
             : self.asrQwenApiKeySecureField.stringValue;
         saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
+
+        NSString *glmApiKey = self.asrGlmApiKeyToggle.tag == 1
+            ? self.asrGlmApiKeyField.stringValue
+            : self.asrGlmApiKeySecureField.stringValue;
+        saveOk &= configSet(@"asr.glm.api_key", glmApiKey);
+
+        NSString *mimoApiKey = self.asrMimoApiKeyToggle.tag == 1
+            ? self.asrMimoApiKeyField.stringValue
+            : self.asrMimoApiKeySecureField.stringValue;
+        saveOk &= configSet(@"asr.mimo.api_key", mimoApiKey);
 
         if ([selectedProvider isEqualToString:@"apple-speech"]) {
             NSString *locale = self.appleSpeechLocalePopup.selectedItem.representedObject;
@@ -7419,6 +7632,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         [self testQwenConnection];
     } else if ([provider isEqualToString:@"glm"]) {
         [self testGlmConnection];
+    } else if ([provider isEqualToString:@"mimo"]) {
+        [self testMimoConnection];
     } else {
         self.asrTestResultLabel.stringValue = KoeLocalizedString(@"setupWizard.common.status.installed");
         self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
@@ -7988,6 +8203,100 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             @"Connection timed out: please check your network";
         strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
       });
+}
+
+- (void)testMimoConnection {
+  NSString *apiKey = self.asrMimoApiKeyToggle.tag == 1
+                         ? self.asrMimoApiKeyField.stringValue
+                         : self.asrMimoApiKeySecureField.stringValue;
+
+  if (apiKey.length == 0) {
+    self.asrTestResultLabel.stringValue = @"Please fill in API Key first";
+    self.asrTestResultLabel.textColor = [NSColor systemOrangeColor];
+    return;
+  }
+
+  self.asrTestButton.enabled = NO;
+  self.asrTestResultLabel.stringValue = @"Testing...";
+  self.asrTestResultLabel.textColor = [NSColor secondaryLabelColor];
+
+  // MiMo uses HTTP POST — send a minimal request to verify API key
+  NSString *mimoUrl = configGet(@"asr.mimo.url");
+  if (mimoUrl.length == 0)
+    mimoUrl = @"https://api.xiaomimimo.com/v1/chat/completions";
+
+  NSURL *url = [NSURL URLWithString:mimoUrl];
+  NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+  request.HTTPMethod = @"POST";
+  request.timeoutInterval = 10;
+  [request setValue:apiKey forHTTPHeaderField:@"api-key"];
+  [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+
+  // Minimal body — just model + empty message to test auth
+  NSDictionary *body = @{
+    @"model" : @"mimo-v2.5-asr",
+    @"messages" : @[
+      @{@"role" : @"user", @"content" : @"test"}
+    ]
+  };
+  request.HTTPBody =
+      [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+
+  __weak typeof(self) weakSelf = self;
+  NSURLSessionDataTask *task =
+      [[NSURLSession sharedSession]
+          dataTaskWithRequest:request
+            completionHandler:^(NSData *data, NSURLResponse *response,
+                                NSError *error) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (!strongSelf)
+                  return;
+                strongSelf.asrTestButton.enabled = YES;
+
+                if (error) {
+                  NSString *errorMsg = error.localizedDescription;
+                  if (error.code == NSURLErrorTimedOut) {
+                    strongSelf.asrTestResultLabel.stringValue =
+                        @"Connection timed out: please check your network";
+                  } else if ([errorMsg containsString:@"Cannot connect"] ||
+                             [errorMsg containsString:@"unable"]) {
+                    strongSelf.asrTestResultLabel.stringValue =
+                        @"Network error: please check your network settings";
+                  } else {
+                    strongSelf.asrTestResultLabel.stringValue =
+                        [NSString stringWithFormat:@"Error: %@", errorMsg];
+                  }
+                  strongSelf.asrTestResultLabel.textColor =
+                      [NSColor systemRedColor];
+                  return;
+                }
+
+                NSHTTPURLResponse *httpResponse =
+                    (NSHTTPURLResponse *)response;
+                if (httpResponse.statusCode == 200 ||
+                    httpResponse.statusCode == 400) {
+                  // 400 = bad request (expected with minimal body), but auth
+                  // worked
+                  strongSelf.asrTestResultLabel.stringValue = @"Connected";
+                  strongSelf.asrTestResultLabel.textColor =
+                      [NSColor systemGreenColor];
+                } else if (httpResponse.statusCode == 401 ||
+                           httpResponse.statusCode == 403) {
+                  strongSelf.asrTestResultLabel.stringValue =
+                      @"Auth failed: please check your API Key";
+                  strongSelf.asrTestResultLabel.textColor =
+                      [NSColor systemRedColor];
+                } else {
+                  strongSelf.asrTestResultLabel.stringValue =
+                      [NSString stringWithFormat:@"HTTP %ld: unexpected response",
+                                                 (long)httpResponse.statusCode];
+                  strongSelf.asrTestResultLabel.textColor =
+                      [NSColor systemOrangeColor];
+                }
+              });
+            }];
+  [task resume];
 }
 
 - (void)showAlert:(NSString *)message info:(NSString *)info {

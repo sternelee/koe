@@ -2,8 +2,8 @@ use crate::config::{self, Config};
 #[cfg(feature = "apple-speech")]
 use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
 use koe_asr::{
-    AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, GlmAsrProvider, QwenAsrProvider,
-    WhisperConfig, WhisperProvider,
+    AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, GlmAsrProvider, MimoAsrProvider,
+    QwenAsrProvider, WhisperConfig, WhisperProvider,
 };
 #[cfg(feature = "mlx")]
 use koe_asr::{MlxConfig, MlxProvider};
@@ -114,6 +114,34 @@ pub fn build_asr_provider(
                 context_messages: Vec::new(),
             };
             (config, Box::new(GlmAsrProvider::new()))
+        }
+        "mimo" => {
+            let mimo = &cfg.asr.mimo;
+            let config = AsrConfig {
+                url: mimo.url.clone(),
+                app_key: mimo.model.clone(),
+                access_key: String::new(),
+                api_key: mimo.api_key.clone(),
+                resource_id: String::new(),
+                sample_rate_hz: 16000,
+                connect_timeout_ms: mimo.connect_timeout_ms,
+                final_wait_timeout_ms: mimo.final_wait_timeout_ms,
+                enable_ddc: false,
+                enable_itn: false,
+                enable_punc: false,
+                enable_nonstream: false,
+                hotwords: Vec::new(),
+                language: Some(mimo.language.clone()),
+                custom_headers: std::collections::HashMap::new(),
+                end_window_size: None,
+                force_to_speech_time: None,
+                vad_segment_duration: None,
+                output_zh_variant: None,
+                enable_accelerate_text: false,
+                accelerate_score: None,
+                context_messages: Vec::new(),
+            };
+            (config, Box::new(MimoAsrProvider::new()))
         }
         "whisper" => {
             let whisper = &cfg.asr.whisper;
