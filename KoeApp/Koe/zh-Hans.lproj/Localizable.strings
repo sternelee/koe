@@ -156,6 +156,7 @@
 "setupWizard.translation.virtualMic.action.updating" = "正在更新…";
 "setupWizard.translation.virtualMic.action.uninstall" = "卸载";
 "setupWizard.translation.virtualMic.action.uninstalling" = "正在卸载…";
+"setupWizard.translation.virtualMic.success.restartRequired" = "安装成功，重启后生效。";
 "setupWizard.translation.virtualMic.uninstall.title" = "要移除虚拟麦克风驱动吗？";
 "setupWizard.translation.virtualMic.uninstall.message" = "这将删除 /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver 并重载 Core Audio。之后可随时重新安装。";
 "setupWizard.translation.virtualMic.error.unknown" = "未知错误";

@@ -4629,14 +4629,23 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self updateTranslationEnabledAvailability];
 }
 
-- (void)setVirtualMicError:(nullable NSString *)message {
+- (void)setVirtualMicMessage:(nullable NSString *)message color:(NSColor *)color {
     if (message.length == 0) {
         self.virtualMicErrorLabel.stringValue = @"";
         self.virtualMicErrorLabel.hidden = YES;
     } else {
         self.virtualMicErrorLabel.stringValue = message;
+        self.virtualMicErrorLabel.textColor = color;
         self.virtualMicErrorLabel.hidden = NO;
     }
+}
+
+- (void)setVirtualMicError:(nullable NSString *)message {
+    [self setVirtualMicMessage:message color:[NSColor systemRedColor]];
+}
+
+- (void)setVirtualMicSuccess:(nullable NSString *)message {
+    [self setVirtualMicMessage:message color:[NSColor systemGreenColor]];
 }
 
 - (void)beginVirtualMicOperation {
@@ -4669,6 +4678,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.virtualMicOperationInstallsDriver = YES;
     [self beginVirtualMicOperation];
     [SPVirtualMicInstaller installWithCompletion:^(NSError * _Nullable error) {
+        if (error != nil && [SPVirtualMicInstaller isInstalledAndCurrent]) {
+            [self endVirtualMicOperationWithError:nil];
+            [self setVirtualMicSuccess:KoeLocalizedString(@"setupWizard.translation.virtualMic.success.restartRequired")];
+            return;
+        }
         [self endVirtualMicOperationWithError:error];
     }];
 }

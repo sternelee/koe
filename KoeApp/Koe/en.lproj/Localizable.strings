@@ -156,6 +156,7 @@
 "setupWizard.translation.virtualMic.action.updating" = "Updating…";
 "setupWizard.translation.virtualMic.action.uninstall" = "Uninstall";
 "setupWizard.translation.virtualMic.action.uninstalling" = "Uninstalling…";
+"setupWizard.translation.virtualMic.success.restartRequired" = "Driver installed. Restart your Mac to make it available.";
 "setupWizard.translation.virtualMic.uninstall.title" = "Remove Virtual Microphone driver?";
 "setupWizard.translation.virtualMic.uninstall.message" = "This will delete /Library/Audio/Plug-Ins/HAL/KoeVirtualMic.driver and reload Core Audio. You can reinstall it at any time.";
 "setupWizard.translation.virtualMic.error.unknown" = "Unknown error";
