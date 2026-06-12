@@ -3678,7 +3678,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [section addSubview:self.translationTtsBaseUrlField];
 
         // TTS Test section
-        sy -= 20;
+        sy -= rowH;
         NSTextField *ttsTestLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.tts.testTextLabel") frame:NSMakeRect(0, sy, labelW, 22)];
         [section addSubview:ttsTestLabel];
         self.translationTtsTestTextField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 80, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.tts.testTextPlaceholder")];
