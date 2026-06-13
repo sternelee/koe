@@ -81,7 +81,7 @@ typedef NS_ENUM(NSInteger, SPModelVerifyMode) {
 /// Cancel an active download.
 - (void)cancelDownload:(NSString *)modelPath;
 
-// ─── Rewrite / Prompt Templates ───────────────────────────────────
+// ─── Rewrite Actions ──────────────────────────────────────────────
 
 /// Get prompt templates as array of dicts mirroring PromptTemplate in Rust config.
 - (NSArray<NSDictionary *> *)promptTemplates;
@@ -89,7 +89,7 @@ typedef NS_ENUM(NSInteger, SPModelVerifyMode) {
 /// Save prompt templates from array of dicts. Returns YES on success.
 - (BOOL)setPromptTemplates:(NSArray<NSDictionary *> *)templates;
 
-/// Rewrite ASR text using template at given index. Returns YES on success.
+/// Rewrite source text using the action/template at the given index. Returns YES on success.
 - (BOOL)rewriteWithTemplateIndex:(NSInteger)index asrText:(NSString *)text;
 
 /// Remove downloaded model files (keeps manifest). Returns files removed.

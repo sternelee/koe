@@ -6,6 +6,8 @@
   "download_url": "https://github.com/missuo/koe/releases/download/v1.0.16/Koe-macOS-arm64.zip",
   "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.16",
   "notes": [
+    "Clarify LLM-related settings around Model & Connection, Default Output, and Quick Rewrite.",
+    "Make quick rewrite actions operate on the final pasted output instead of the raw ASR transcript.",
     "Add a Translation settings input-source selector that can use either a microphone or macOS System Audio for live translation input.",
     "Add Screen Recording permission prompts and in-app guidance for system-audio translation capture.",
     "Fix translation mode teardown and restart races when switching translation input sources or quitting while system-audio capture is active.",

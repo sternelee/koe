@@ -44,3 +44,4 @@ koe-core/target/
 .env
 .env.*
 *.dmg
+.omx/

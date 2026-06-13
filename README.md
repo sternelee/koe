@@ -30,7 +30,7 @@ Koe takes a different approach:
 3. A floating status pill shows real-time interim recognition text as you speak
 4. The overlay stays visible through ASR finalization and LLM correction, so you can see both the final transcript and corrected result
 5. The corrected text is automatically pasted into the active input field
-6. If overlay templates are enabled, you can optionally click a template or press `1-9` to rewrite the result and copy that variant to the clipboard
+6. If quick rewrite actions are enabled, you can optionally click an action or press `1-9` to rewrite the final output and copy that variant to the clipboard
 
 ASR provider support:
 
@@ -145,17 +145,19 @@ for warning/error notifications and update-related diagnostics.
 
 All config files live in `~/.koe/` and are auto-generated on first launch. You
 can edit them directly, or use the built-in settings window (Setup Wizard) from
-the menu bar. The settings window includes tabs for ASR, LLM, **Translation**,
-Controls, Dictionary, System Prompt, Templates, and About. The System Prompt tab
-edits `system_prompt.txt`; the Templates tab manages prompt-template visibility,
-ordering, and prompts; advanced knobs such as `user_prompt.txt`, ASR custom
-`headers`, and advanced profile fields such as `no_reasoning_control` remain
-file-based settings. When a local ASR provider is selected, the ASR tab shows
+the menu bar. The settings window includes tabs for ASR, Model & Connection,
+**Translation**, Controls, Dictionary, Default Output, Quick Rewrite, and About.
+The Default Output tab edits `system_prompt.txt`; Quick Rewrite manages the
+post-paste rewrite actions shown above the overlay; advanced knobs such as
+`user_prompt.txt`, ASR custom `headers`, and advanced profile fields such as
+`no_reasoning_control` remain file-based settings. The text flow is:
+ASR -> default output -> optional output translation -> paste -> optional quick
+rewrite copy. When a local ASR provider is selected, the ASR tab shows
 provider-specific controls: model picker with download/delete for MLX and
 Sherpa-ONNX, or language picker with asset status and download for Apple Speech.
-The LLM tab supports multiple profiles for OpenAI-compatible APIs, APFEL, and
-local MLX models. Selecting MLX shows a model picker with download/status controls
-instead of API fields.
+The Model & Connection tab supports multiple profiles for OpenAI-compatible APIs,
+APFEL, and local MLX models. Selecting MLX shows a model picker with
+download/status controls instead of API fields.
 
 ```
 ~/.koe/
@@ -426,15 +428,16 @@ jq -r '.dependencies | keys[]' package.json >> ~/.koe/dictionary.txt
 
 Since the dictionary is just a text file, you can version-control it, share it across machines, or script its maintenance however you like.
 
-### Prompts
+### Default Output
 
-The LLM correction behavior is fully customizable via two prompt files:
+The default output behavior is customizable via two prompt files:
 
 - **`~/.koe/system_prompt.txt`** — defines the correction rules (capitalization, spacing, punctuation, filler word removal, etc.)
 - **`~/.koe/user_prompt.txt`** — template that assembles the ASR output, interim history, and dictionary into the final LLM request
 
-The Setup Wizard edits `system_prompt.txt` directly. `user_prompt.txt` is still
-supported, but it is an advanced manual-edit file rather than a first-class UI pane.
+The Default Output settings tab edits `system_prompt.txt` directly.
+`user_prompt.txt` is still supported, but it is an advanced manual-edit file
+rather than a first-class UI pane.
 
 Available template placeholders in `user_prompt.txt`:
 
@@ -474,11 +477,11 @@ Notes:
 - To avoid feedback when using **System Audio**, use headphones or mute speakers that play the translated output audio.
 - Koe's translated audio still exits through the built-in **virtual microphone** path; changing the input source does not change the output path.
 
-### Prompt Templates
+### Quick Rewrite
 
-Koe can optionally keep the overlay visible after the default correction and show
-rewrite templates above the result bubble. The Templates pane lets you add, edit,
-remove, reorder, and enable or disable up to 9 templates.
+Koe can optionally keep the overlay visible after the final output is pasted and
+show quick rewrite actions above the result bubble. The Quick Rewrite pane lets
+you add, edit, remove, reorder, and enable or disable up to 9 actions.
 
 ```yaml
 llm:
@@ -488,22 +491,23 @@ prompt_templates:
   - name: "翻译英文"
     enabled: true
     shortcut: 1
-    system_prompt: "将用户的语音输入翻译为流畅的英文。保持原意，不要添加额外内容。只输出翻译结果。"
+    system_prompt: "将用户文本翻译为流畅的英文。保持原意，不要添加额外内容。只输出翻译结果。"
 
   - name: "邮件润色"
     enabled: true
     shortcut: 2
-    system_prompt: "将用户的语音输入整理为简洁、礼貌、自然的英文邮件内容。只输出最终邮件正文。"
+    system_prompt: "将用户文本整理为简洁、礼貌、自然的英文邮件内容。只输出最终邮件正文。"
 ```
 
-- `llm.prompt_templates_enabled` is the global switch for showing template buttons in the overlay.
-- `enabled` controls whether a specific template is shown.
+- `llm.prompt_templates_enabled` is the global switch for showing quick rewrite actions after paste.
+- `enabled` controls whether a specific action is shown.
 - `shortcut` is the contextual overlay slot (`1-9`) after reordering.
 - `system_prompt` and `system_prompt_path` are mutually exclusive.
 
-After the normal correction is pasted, you can hover or click a template button,
-or press `1-9`, to run a second-pass rewrite. Rewrite results are copied to the
-clipboard instead of being auto-pasted, so you can decide whether to use them.
+After the final output is pasted, you can hover or click an action button, or
+press `1-9`, to run a second-pass rewrite on that final output. Rewrite results
+are copied to the clipboard instead of being auto-pasted, so you can decide
+whether to use them.
 
 ## Usage Statistics
 

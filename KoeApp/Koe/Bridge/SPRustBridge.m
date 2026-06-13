@@ -345,7 +345,7 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
     return sp_core_remove_model_files(modelPath.UTF8String);
 }
 
-// ─── Rewrite / Prompt Templates ───────────────────────────────────
+// ─── Rewrite Actions ──────────────────────────────────────────────
 
 - (NSArray<NSDictionary *> *)promptTemplates {
     char *json = sp_core_get_prompt_templates_json();

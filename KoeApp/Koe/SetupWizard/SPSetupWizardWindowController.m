@@ -3310,10 +3310,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [section addSubview:self.virtualMicErrorLabel];
         sy -= 26.0;
 
-        NSTextField *realMicTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.translation.section.realMic") frame:NSMakeRect(0, sy, contentW, 20)];
-        [section addSubview:realMicTitle];
-        sy -= 32.0;
-
         [section addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.translation.label.inputDevice") frame:NSMakeRect(0, sy, labelW, 22)]];
         self.translationInputDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, sy - 2, fieldW, 26) pullsDown:NO];
         self.translationInputDevicePopup.target = self;

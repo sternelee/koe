@@ -27,6 +27,7 @@
 @property (nonatomic, copy) dispatch_block_t pendingSessionEndBlock;
 @property (nonatomic, assign) BOOL showingError;
 @property (nonatomic, copy) NSString *lastAsrText;
+@property (nonatomic, copy) NSString *lastFinalText;
 @property (nonatomic, strong) id numberKeyMonitor;
 @property (nonatomic, assign) NSUInteger translationModeRequestGeneration;
 @property (nonatomic, assign) uint64_t translationAudioFrameCount;
@@ -100,7 +101,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     }
 
     NSLog(@"[Koe] Prompt templates visible: %lu / %lu", (unsigned long)visibleTemplates.count, (unsigned long)templates.count);
-    if (visibleTemplates.count > 0 && self.lastAsrText.length > 0) {
+    if (visibleTemplates.count > 0 && self.lastFinalText.length > 0) {
         [self.overlayPanel showTemplateButtons:visibleTemplates];
     } else {
         [self.overlayPanel lingerAndDismiss];
@@ -369,6 +370,8 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.showingError = NO;
     [self cancelPendingSessionEnd];
     [self.audioCaptureManager stopCapture];
+    self.lastAsrText = nil;
+    self.lastFinalText = nil;
 
     self.recordingStartTime = [NSDate date];
     self.sessionState = @"recording_hold";
@@ -413,6 +416,8 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.showingError = NO;
     [self cancelPendingSessionEnd];
     [self.audioCaptureManager stopCapture];
+    self.lastAsrText = nil;
+    self.lastFinalText = nil;
 
     self.recordingStartTime = [NSDate date];
     self.sessionState = @"recording_toggle";
@@ -495,10 +500,12 @@ static BOOL configFlagEnabled(const char *keyPath) {
     NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (trimmed.length == 0) {
         NSLog(@"[Koe] Final text empty — skipping delivery");
+        self.lastFinalText = nil;
         self.recordingStartTime = nil;
         [self finishFinalTextDeliveryForToken:token];
         return;
     }
+    self.lastFinalText = text;
 
     // Record history
     NSInteger durationMs = 0;
@@ -1058,7 +1065,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 #pragma mark - SPOverlayPanelDelegate
 
 - (void)overlayPanel:(id)panel didSelectTemplateAtIndex:(NSInteger)templateIndex {
-    NSLog(@"[Koe] Template selected: index %ld", (long)templateIndex);
+    NSLog(@"[Koe] Rewrite action selected: index %ld", (long)templateIndex);
     [self stopNumberKeyMonitoring];
     [self stopAnyKeyDismissMonitoring];
     [self.clipboardManager cancelPendingRestore];
@@ -1067,7 +1074,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     [self.overlayPanel updateState:@"correcting"];
 
     // Trigger rewrite
-    if (![self.rustBridge rewriteWithTemplateIndex:templateIndex asrText:self.lastAsrText]) {
+    if (![self.rustBridge rewriteWithTemplateIndex:templateIndex asrText:self.lastFinalText]) {
         NSLog(@"[Koe] Rewrite failed to start");
         [self.overlayPanel lingerAndDismiss];
     }

@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## Unreleased
+
+### Changed
+
+- Renamed the settings information architecture around LLM output: LLM is now presented as Model & Connection, System Prompt as Default Output, and Templates as Quick Rewrite.
+- Changed quick rewrite actions to use the final pasted output as their input instead of the raw ASR transcript, so second-pass rewrites match what the user just saw.
+
 ## 1.0.16 - 2026-05-30
 
 ### Added
