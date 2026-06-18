@@ -1931,7 +1931,7 @@ translation:
     provider: "elevenlabs"    # elevenlabs | minimax | kokoro_onnx | supertonic_onnx | kitten_onnx
     api_key: ""               # or use ${ELEVENLABS_API_KEY} (cloud providers only)
     voice_id: ""              # ElevenLabs voice ID (cloud providers only)
-    model: "eleven_multilingual_v2"  # For local TTS: model dir under ~/.koe/models/ (e.g. "kokoro/kokoro-en", "supertonic/supertonic-2", or "kitten/kitten-tts-mini-0.8")
+    model: "eleven_multilingual_v2"  # For local TTS: model dir under ~/.koe/models/ (e.g. "kokoro/kokoro-en", "supertonic/supertonic-2", or "kitten/kitten-tts-nano-0.8-int8")
     base_url: "https://api.elevenlabs.io"
     speed: 1.0
     preset_voice: ""          # For kitten_onnx: e.g. Bella, Jasper; for kokoro_onnx: e.g. af_heart, zf_xiaoxiao
@@ -1983,6 +1983,8 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("sherpa-onnx/bilingual-zh-en"),
     manifest!("sherpa-onnx/multilingual-8lang"),
     manifest!("sherpa-onnx/zh-xlarge"),
+    manifest!("sherpa-onnx/zh-14M"),
+    manifest!("sherpa-onnx/en-20M"),
     manifest!("kokoro/kokoro-en"),
     manifest!("supertonic/supertonic-2"),
     manifest!("kitten/kitten-tts-nano-0.8-int8"),
@@ -1994,6 +1996,8 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
     manifest!("whisper/turbo"),
     manifest!("mt-local/opus-mt-zh-en"),
     manifest!("mt-local/opus-mt-en-zh"),
+    manifest!("mt-local/opus-mt-zh-en-int8"),
+    manifest!("mt-local/opus-mt-en-zh-int8"),
 ];
 
 #[cfg(test)]

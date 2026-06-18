@@ -1,0 +1,31 @@
+{
+    "provider": "sherpa-onnx",
+    "description": "English 20M streaming Zipformer (int8)",
+    "repo": "csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+    "files": [
+        {
+            "name": "decoder-epoch-99-avg-1.int8.onnx",
+            "size": 539499,
+            "sha256": "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/decoder-epoch-99-avg-1.int8.onnx"
+        },
+        {
+            "name": "encoder-epoch-99-avg-1.int8.onnx",
+            "size": 42845182,
+            "sha256": "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/encoder-epoch-99-avg-1.int8.onnx"
+        },
+        {
+            "name": "joiner-epoch-99-avg-1.int8.onnx",
+            "size": 259572,
+            "sha256": "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/joiner-epoch-99-avg-1.int8.onnx"
+        },
+        {
+            "name": "tokens.txt",
+            "size": 5048,
+            "sha256": "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb",
+            "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/tokens.txt"
+        }
+    ]
+}

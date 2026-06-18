@@ -3422,7 +3422,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"gpt-4o-mini"];
         self.translationMtModelField.tag = kTranslationMtOpenAIViewTagBase + 6;
         [section addSubview:self.translationMtModelField];
-        self.translationMtLocalModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"mt-local/opus-mt-zh-en or /absolute/path"];
+        self.translationMtLocalModelField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW, 24) placeholder:@"mt-local/opus-mt-zh-en-int8 or /absolute/path"];
         self.translationMtLocalModelField.tag = kTranslationMtLocalOnlyTag;
         self.translationMtLocalModelField.hidden = YES;
         [section addSubview:self.translationMtLocalModelField];
@@ -3992,7 +3992,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)updateTranslationMtPlaceholders {
     NSString *provider = self.translationMtProviderPopup.selectedItem.representedObject ?: @"open_ai_compatible";
     if ([provider isEqualToString:@"local"]) {
-        self.translationMtLocalModelField.placeholderString = @"mt-local/opus-mt-zh-en or /absolute/path";
+        self.translationMtLocalModelField.placeholderString = @"mt-local/opus-mt-zh-en-int8 or /absolute/path";
     } else {
         self.translationMtModelField.placeholderString = @"gpt-4o-mini";
         self.translationMtBaseUrlField.placeholderString = @"https://api.openai.com/v1";
@@ -4031,6 +4031,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
                 [self.translationMtLocalModelPopup selectItemAtIndex:i];
                 return;
             }
+        }
+    }
+    NSString *preferredLocalPath = @"mt-local/opus-mt-zh-en-int8";
+    for (NSInteger i = 0; i < self.translationMtLocalModelPopup.numberOfItems; i++) {
+        if ([[self.translationMtLocalModelPopup itemAtIndex:i].representedObject isEqualToString:preferredLocalPath]) {
+            [self.translationMtLocalModelPopup selectItemAtIndex:i];
+            return;
         }
     }
     [self.translationMtLocalModelPopup selectItemAtIndex:0];
@@ -4409,7 +4416,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     } else if ([provider isEqualToString:@"supertonic_onnx"]) {
         self.translationTtsModelField.placeholderString = @"supertonic/supertonic-2";
     } else if ([provider isEqualToString:@"kitten_onnx"]) {
-        self.translationTtsModelField.placeholderString = @"kitten/kitten-tts-mini-0.8";
+        self.translationTtsModelField.placeholderString = @"kitten/kitten-tts-nano-0.8-int8";
     } else if ([provider isEqualToString:@"mini_max"] || [provider isEqualToString:@"minimax"]) {
         self.translationTtsModelField.placeholderString = @"speech-02-hd";
         self.translationTtsBaseUrlField.placeholderString = @"https://api.minimax.chat";
@@ -4460,7 +4467,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         }
     }
     if ([provider isEqualToString:@"kitten_onnx"]) {
-        NSString *preferredKittenPath = @"kitten/kitten-tts-mini-0.8";
+        NSString *preferredKittenPath = @"kitten/kitten-tts-nano-0.8-int8";
         for (NSInteger i = 0; i < self.translationTtsLocalModelPopup.numberOfItems; i++) {
             if ([[self.translationTtsLocalModelPopup itemAtIndex:i].representedObject isEqualToString:preferredKittenPath]) {
                 [self.translationTtsLocalModelPopup selectItemAtIndex:i];
