@@ -1523,12 +1523,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
   // Test result label — positioned right after credential rows, before
   // language.
-  self.asrTestResultLabel = [NSTextField wrappingLabelWithString:@""];
+  self.asrTestResultLabel = [NSTextField labelWithString:@""];
   CGFloat testResultY = accessKeyY - rowH;
   self.asrTestResultLabel.frame =
       NSMakeRect(fieldX, testResultY, paneWidth - fieldX - 24, 20);
   self.asrTestResultLabel.font = [NSFont systemFontOfSize:12];
   self.asrTestResultLabel.selectable = YES;
+  self.asrTestResultLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [pane addSubview:self.asrTestResultLabel];
 
   // Language popup (Doubao + DoubaoIME)
@@ -7838,7 +7839,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         if (wsTask.state == NSURLSessionTaskStateRunning) {
             [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
             strongSelf.asrTestButton.enabled = YES;
-            strongSelf.asrTestResultLabel.stringValue = @"Connected (device registration will complete on first use)";
+            strongSelf.asrTestResultLabel.stringValue = @"Connected (registers on first use)";
+            strongSelf.asrTestResultLabel.toolTip = @"Device registration will complete on first use";
             strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
         } else if (wsTask.state == NSURLSessionTaskStateCompleted) {
             strongSelf.asrTestButton.enabled = YES;
@@ -7846,7 +7848,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
                 strongSelf.asrTestResultLabel.stringValue = [NSString stringWithFormat:@"Connection failed: %@", wsTask.error.localizedDescription];
                 strongSelf.asrTestResultLabel.textColor = [NSColor systemRedColor];
             } else {
-                strongSelf.asrTestResultLabel.stringValue = @"Connected (device registration will complete on first use)";
+                strongSelf.asrTestResultLabel.stringValue = @"Connected (registers on first use)";
+                strongSelf.asrTestResultLabel.toolTip = @"Device registration will complete on first use";
                 strongSelf.asrTestResultLabel.textColor = [NSColor systemGreenColor];
             }
         }
