@@ -1116,11 +1116,7 @@ async fn run_session(
     };
 
     let final_text = if output_translation_enabled {
-        let target_language = llm_config
-            .output_translation
-            .target_language
-            .trim()
-            .to_string();
+        let target_language = effective_output_translation_target_language(&llm_config);
 
         let output_translation_result = if llm_config
             .output_translation
@@ -1285,15 +1281,21 @@ fn llm_output_translation_enabled_for_session(
     if !cfg.enabled || !cfg.output_translation.enabled {
         return false;
     }
-    if cfg.output_translation.target_language.trim().is_empty() {
-        return false;
-    }
     if cfg.output_translation.provider.trim().eq_ignore_ascii_case("local_mt") {
         return local_mt_config_ready_for_output_translation(mt_config, source_language);
     }
     cfg.output_translation_profile_config()
         .map(|profile| profile.is_ready())
         .unwrap_or(false)
+}
+
+fn effective_output_translation_target_language(cfg: &config::LlmSection) -> String {
+    let trimmed = cfg.output_translation.target_language.trim();
+    if trimmed.is_empty() {
+        "English".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn effective_translation_target_language(cfg: &config::Config) -> String {

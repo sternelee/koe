@@ -3308,7 +3308,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.virtualMicErrorLabel = [NSTextField wrappingLabelWithString:@""];
         self.virtualMicErrorLabel.font = [NSFont systemFontOfSize:11];
         self.virtualMicErrorLabel.textColor = [NSColor systemRedColor];
-        self.virtualMicErrorLabel.frame = NSMakeRect(0, sy - 18, contentW, 18);
+        self.virtualMicErrorLabel.frame = NSMakeRect(0, sy + 2, contentW, 18);
         self.virtualMicErrorLabel.hidden = YES;
         [section addSubview:self.virtualMicErrorLabel];
         sy -= 26.0;
@@ -5581,7 +5581,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
   NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
   self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
-  self.llmOutputTranslationTargetLanguageField.stringValue = configGet(@"llm.output_translation.target_language");
+  NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
+  self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
 
   [self loadLlmProfilesFromCore];
   NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
@@ -6957,7 +6958,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
         NSString *outputTranslationEnabled = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.output_translation.enabled", outputTranslationEnabled);
-        saveOk &= configSet(@"llm.output_translation.target_language", self.llmOutputTranslationTargetLanguageField.stringValue ?: @"");
+        NSString *outputTranslationTarget = [[self.llmOutputTranslationTargetLanguageField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+        saveOk &= configSet(@"llm.output_translation.target_language", outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English");
         NSString *translationProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject ?: @"";
         BOOL outputTranslationUsesLocalMt = [translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId];
         saveOk &= configSet(@"llm.output_translation.provider", outputTranslationUsesLocalMt ? @"local_mt" : @"llm");
