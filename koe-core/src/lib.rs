@@ -361,6 +361,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     //   operations, so this has no effect.
     let (asr_config, asr) = asr_factory::build_asr_provider(cfg, &core.dictionary);
     let llm_config = cfg.llm.clone();
+    let output_translation_mt_config = cfg.translation.mt.clone();
+    let output_translation_source_language = effective_translation_source_language(cfg);
     let llm_http_client = core.llm_http_client.clone();
     let llm_warmup_state = core.llm_warmup_state.clone();
     let dictionary = core.dictionary.clone();
@@ -388,6 +390,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             asr_provider_name,
             asr,
             llm_config,
+            output_translation_mt_config,
+            output_translation_source_language,
             llm_http_client,
             llm_warmup_state,
             dictionary,
@@ -795,6 +799,8 @@ async fn run_session(
     asr_provider: String,
     mut asr: Box<dyn AsrProvider>,
     llm_config: config::LlmSection,
+    output_translation_mt_config: crate::translation::config::MtConfig,
+    output_translation_source_language: Option<String>,
     llm_http_client: Client,
     llm_warmup_state: Arc<Mutex<LlmWarmupState>>,
     dictionary: Vec<String>,
@@ -1027,7 +1033,11 @@ async fn run_session(
     }
 
     let llm_enabled = llm_enabled_for_session(&llm_config);
-    let output_translation_enabled = llm_output_translation_enabled_for_session(&llm_config);
+    let output_translation_enabled = llm_output_translation_enabled_for_session(
+        &llm_config,
+        &output_translation_mt_config,
+        output_translation_source_language.as_deref(),
+    );
 
     let corrected_text = if llm_enabled {
         {
@@ -1106,23 +1116,40 @@ async fn run_session(
     };
 
     let final_text = if output_translation_enabled {
-        let translation_profile = llm_config
-            .output_translation_profile_config()
-            .expect("llm_output_translation_enabled_for_session checked the translation profile");
         let target_language = llm_config
             .output_translation
             .target_language
             .trim()
             .to_string();
-        let translation_llm = build_llm_provider(
-            &session_id,
-            &llm_config,
-            llm_http_client.clone(),
-            translation_profile,
-        );
-        let request = build_output_translation_request(&corrected_text, &target_language);
 
-        match translation_llm.correct(&request).await {
+        let output_translation_result = if llm_config
+            .output_translation
+            .provider
+            .trim()
+            .eq_ignore_ascii_case("local_mt")
+        {
+            let source_language = output_translation_source_language.as_deref().unwrap_or("auto");
+            let mt = crate::translation::mt::MtClient::new(
+                llm_http_client.clone(),
+                output_translation_mt_config,
+                output_translation_source_language.as_deref(),
+            );
+            mt.translate(&corrected_text, source_language, &target_language).await
+        } else {
+            let translation_profile = llm_config
+                .output_translation_profile_config()
+                .expect("llm_output_translation_enabled_for_session checked the translation profile");
+            let translation_llm = build_llm_provider(
+                &session_id,
+                &llm_config,
+                llm_http_client.clone(),
+                translation_profile,
+            );
+            let request = build_output_translation_request(&corrected_text, &target_language);
+            translation_llm.correct(&request).await
+        };
+
+        match output_translation_result {
             Ok(translated) => {
                 mark_llm_connection_touched(&llm_warmup_state);
                 log::info!(
@@ -1250,15 +1277,19 @@ fn llm_enabled_for_session(cfg: &config::LlmSection) -> bool {
         .unwrap_or(false)
 }
 
-fn llm_output_translation_enabled_for_session(cfg: &config::LlmSection) -> bool {
-    if !cfg.enabled {
-        return false;
-    }
-    if !cfg.output_translation.enabled {
+fn llm_output_translation_enabled_for_session(
+    cfg: &config::LlmSection,
+    mt_config: &crate::translation::config::MtConfig,
+    source_language: Option<&str>,
+) -> bool {
+    if !cfg.enabled || !cfg.output_translation.enabled {
         return false;
     }
     if cfg.output_translation.target_language.trim().is_empty() {
         return false;
+    }
+    if cfg.output_translation.provider.trim().eq_ignore_ascii_case("local_mt") {
+        return local_mt_config_ready_for_output_translation(mt_config, source_language);
     }
     cfg.output_translation_profile_config()
         .map(|profile| profile.is_ready())
@@ -1365,26 +1396,37 @@ fn translation_mt_ready(cfg: &config::Config) -> bool {
         return false;
     }
 
-    match cfg.translation.mt.provider {
+    local_mt_config_ready_for_output_translation(
+        &cfg.translation.mt,
+        effective_translation_source_language(cfg).as_deref(),
+    ) || match cfg.translation.mt.provider {
         crate::translation::config::MtProvider::OpenAiCompatible => {
             !cfg.translation.mt.base_url.trim().is_empty()
                 && !cfg.translation.mt.model.trim().is_empty()
         }
         crate::translation::config::MtProvider::Apple => true,
-        crate::translation::config::MtProvider::Local => {
-            if cfg.translation.mt.model.trim().is_empty() {
-                return false;
-            }
-            let model_dir = config::resolve_model_dir(&cfg.translation.mt.model);
-            if !model_dir.exists() || !crate::translation::local_mt::model_files_ready(&model_dir) {
-                return false;
-            }
-            if crate::translation::local_mt::provider_requires_source_language(&model_dir) {
-                effective_translation_source_language(cfg).is_some()
-            } else {
-                true
-            }
-        }
+        crate::translation::config::MtProvider::Local => false,
+    }
+}
+
+fn local_mt_config_ready_for_output_translation(
+    mt_config: &crate::translation::config::MtConfig,
+    source_language: Option<&str>,
+) -> bool {
+    if mt_config.provider != crate::translation::config::MtProvider::Local {
+        return false;
+    }
+    if !mt_config.enabled || mt_config.model.trim().is_empty() {
+        return false;
+    }
+    let model_dir = config::resolve_model_dir(&mt_config.model);
+    if !model_dir.exists() || !crate::translation::local_mt::model_files_ready(&model_dir) {
+        return false;
+    }
+    if crate::translation::local_mt::provider_requires_source_language(&model_dir) {
+        source_language.is_some()
+    } else {
+        true
     }
 }
 
@@ -2897,7 +2939,11 @@ mod tests {
         cfg.enabled = false;
         cfg.output_translation.enabled = true;
 
-        assert!(!llm_output_translation_enabled_for_session(&cfg));
+        assert!(!llm_output_translation_enabled_for_session(
+            &cfg,
+            &crate::translation::config::MtConfig::default(),
+            None,
+        ));
     }
 
     #[test]

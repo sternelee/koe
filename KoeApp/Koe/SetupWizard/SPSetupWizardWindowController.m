@@ -256,6 +256,8 @@ static NSToolbarItemIdentifier const kToolbarSystemPrompt = @"system_prompt";
 static NSToolbarItemIdentifier const kToolbarTemplates = @"templates";
 static NSToolbarItemIdentifier const kToolbarTranslation = @"translation";
 static NSToolbarItemIdentifier const kToolbarAbout = @"about";
+static const CGFloat kSettingsPaneWidth = 680.0;
+static NSString *const kLlmOutputTranslationLocalMtProfileId = @"__local_mt";
 
 // ─── Config helpers (backed by sp_config_get / sp_config_set) ───────
 #import "koe_core.h"
@@ -1054,7 +1056,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
 - (instancetype)init {
     NSWindow *window = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 600, 400)
+        initWithContentRect:NSMakeRect(0, 0, kSettingsPaneWidth, 400)
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
                     backing:NSBackingStoreBuffered
                       defer:YES];
@@ -1225,7 +1227,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 // ─── Build Panes ────────────────────────────────────────────────────
 
 - (NSView *)buildAsrPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat labelW = 130;
     CGFloat fieldX = labelW + 24;
     CGFloat fieldW = paneWidth - fieldX - 32;
@@ -1659,7 +1661,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildLlmPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
     CGFloat contentHeight = 780;
@@ -2031,7 +2033,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildOverlayPane {
-    CGFloat paneWidth = 600.0;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
     NSString *descriptionText = KoeLocalizedString(@"setupWizard.overlay.description");
@@ -2170,7 +2172,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildHotkeyPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat cardWidth = paneWidth - 48;
     CGFloat cardSpacing = 16.0;
     CGFloat topPad = 24.0;
@@ -2435,7 +2437,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildDictionaryPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentHeight = 440;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
@@ -2491,7 +2493,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildSystemPromptPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentHeight = 440;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
@@ -2549,7 +2551,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 // ─── Templates Pane ────────────────────────────────────────────────
 
 - (NSView *)buildTemplatesPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentHeight = 568;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
@@ -3205,7 +3207,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildTranslationPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat rowH = 32;
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
@@ -3378,10 +3380,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self.translationMtProviderPopup lastItem].representedObject = @"open_ai_compatible";
         [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.apple")];
         [self.translationMtProviderPopup lastItem].representedObject = @"apple";
-        if ([[self.rustBridge supportedLocalProviders] containsObject:@"mt-local"]) {
-            [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.local")];
-            [self.translationMtProviderPopup lastItem].representedObject = @"local";
-        }
+        [self.translationMtProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.local")];
+        [self.translationMtProviderPopup lastItem].representedObject = @"local";
         self.translationMtProviderPopup.target = self;
         self.translationMtProviderPopup.action = @selector(translationMtProviderChanged:);
         [section addSubview:self.translationMtProviderPopup];
@@ -4761,7 +4761,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (NSView *)buildAboutPane {
-    CGFloat paneWidth = 600;
+    CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentHeight = 308;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
@@ -5584,7 +5584,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   self.llmOutputTranslationTargetLanguageField.stringValue = configGet(@"llm.output_translation.target_language");
 
   [self loadLlmProfilesFromCore];
-  NSString *translationProfile = configGet(@"llm.output_translation.profile");
+  NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
+  NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
+      ? kLlmOutputTranslationLocalMtProfileId
+      : configGet(@"llm.output_translation.profile");
   BOOL matchedTranslationProfile = NO;
   for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
     if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
@@ -6290,6 +6293,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     [self.llmOutputTranslationProfilePopup removeAllItems];
     [self.llmOutputTranslationProfilePopup addItemWithTitle:KoeLocalizedString(@"setupWizard.llm.outputTranslation.sameAsCorrection")];
     [self.llmOutputTranslationProfilePopup lastItem].representedObject = @"";
+    [self.llmOutputTranslationProfilePopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.local")];
+    [self.llmOutputTranslationProfilePopup lastItem].representedObject = kLlmOutputTranslationLocalMtProfileId;
 
     for (NSString *profileId in self.llmProfileOrder) {
         NSDictionary *profile = self.llmProfiles[profileId];
@@ -6954,7 +6959,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         saveOk &= configSet(@"llm.output_translation.enabled", outputTranslationEnabled);
         saveOk &= configSet(@"llm.output_translation.target_language", self.llmOutputTranslationTargetLanguageField.stringValue ?: @"");
         NSString *translationProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject ?: @"";
-        saveOk &= configSet(@"llm.output_translation.profile", translationProfileId);
+        BOOL outputTranslationUsesLocalMt = [translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId];
+        saveOk &= configSet(@"llm.output_translation.provider", outputTranslationUsesLocalMt ? @"local_mt" : @"llm");
+        saveOk &= configSet(@"llm.output_translation.profile", outputTranslationUsesLocalMt ? @"" : translationProfileId);
 
         [self syncActiveLlmProfileFromFields];
         NSDictionary *payload = @{

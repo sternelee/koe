@@ -381,6 +381,8 @@ pub struct LlmProfilesPayload {
 pub struct OutputTranslationConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
+    #[serde(default = "default_output_translation_provider")]
+    pub provider: String,
     #[serde(default = "default_output_translation_target_language")]
     pub target_language: String,
     #[serde(default)]
@@ -953,6 +955,10 @@ fn default_llm_chat_completions_path() -> String {
 fn default_llm_active_profile() -> String {
     "openai".into()
 }
+fn default_output_translation_provider() -> String {
+    "llm".into()
+}
+
 fn default_output_translation_target_language() -> String {
     "English".into()
 }
@@ -1852,6 +1858,7 @@ llm:
   prompt_templates_enabled: false  # show rewrite template buttons above the overlay after transcription
   output_translation:
     enabled: false
+    provider: "llm"                # "llm" or "local_mt" (uses translation.mt Local MT settings)
     target_language: "English"    # e.g. English, Japanese, 简体中文
     profile: ""                    # empty = reuse active_profile
   active_profile: "openai"
