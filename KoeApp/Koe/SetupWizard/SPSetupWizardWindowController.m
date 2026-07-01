@@ -3387,12 +3387,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [section addSubview:self.translationMtProviderPopup];
         sy -= rowH;
 
-        self.translationMtAppleHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.mt.appleHint")];
-        CGFloat mtAppleHintHeight = [self fittingHeightForWrappingLabel:self.translationMtAppleHintLabel width:fieldW];
-        self.translationMtAppleHintLabel.frame = NSMakeRect(fieldX, sy + (rowH - mtAppleHintHeight) / 2.0, fieldW, mtAppleHintHeight);
-        self.translationMtAppleHintLabel.hidden = YES;
-        [section addSubview:self.translationMtAppleHintLabel];
-
         NSTextField *mtBaseUrlLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.label.baseUrl") frame:NSMakeRect(0, sy, labelW, 22)];
         mtBaseUrlLabel.tag = kTranslationMtOpenAIViewTagBase + 0;
         [section addSubview:mtBaseUrlLabel];
@@ -3509,8 +3503,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         self.translationMtLocalHintLabel.hidden = YES;
         [section addSubview:self.translationMtLocalHintLabel];
 
+        self.translationMtAppleHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.translation.mt.appleHint")];
+        CGFloat mtAppleHintHeight = [self fittingHeightForWrappingLabel:self.translationMtAppleHintLabel width:fieldW];
+        self.translationMtAppleHintLabel.frame = NSMakeRect(fieldX, sy + (rowH - mtAppleHintHeight) / 2.0, fieldW, mtAppleHintHeight);
+        self.translationMtAppleHintLabel.hidden = YES;
+        [section addSubview:self.translationMtAppleHintLabel];
+
         // MT Test section
-        sy -= MAX(rowH, mtLocalHintHeight) + 8.0;
+        sy -= MAX(rowH, MAX(mtLocalHintHeight, mtAppleHintHeight)) + 8.0;
         NSTextField *mtTestLabel = [self formLabel:KoeLocalizedString(@"setupWizard.translation.mt.testTextLabel") frame:NSMakeRect(0, sy, labelW, 22)];
         [section addSubview:mtTestLabel];
         self.translationMtTestTextField = [self formTextField:NSMakeRect(fieldX, sy - 2, fieldW - 80, 24) placeholder:KoeLocalizedString(@"setupWizard.translation.mt.testTextPlaceholder")];

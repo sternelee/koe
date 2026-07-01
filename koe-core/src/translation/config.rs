@@ -34,7 +34,7 @@ impl Default for TranslationConfig {
     fn default() -> Self {
         Self {
             target_language: "en".to_string(),
-            source_language: "auto".to_string(),
+            source_language: "zh".to_string(),
             vad_energy_threshold: 0.01,
             min_speech_ms: 500,
             silence_ms: 800,

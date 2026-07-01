@@ -1920,7 +1920,7 @@ overlay:
 translation:
   enabled: false              # set to true to enable translation mode menu item
   target_language: "en"       # language to translate into (e.g. en, zh, ja, ko)
-  source_language: "auto"     # ASR source language (auto, zh, en, ja, ko)
+  source_language: "zh"       # ASR source language (zh, en, ja, ko). "auto" is not recommended for Apple Translation.
   vad_energy_threshold: 0.01  # 0.0–1.0; lower = more sensitive
   min_speech_ms: 500          # minimum speech duration to trigger ASR
   silence_ms: 800             # silence gap to end a speech segment

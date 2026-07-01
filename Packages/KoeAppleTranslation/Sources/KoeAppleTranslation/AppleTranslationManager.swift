@@ -21,6 +21,8 @@ final class AppleTranslationManager {
                     sourceLang: sourceLang,
                     targetLang: targetLang
                 )
+            } catch let translationError as TranslationError {
+                output = "[error] Apple Translation: \(translationError.localizedDescription)"
             } catch {
                 output = "[error] \(error.localizedDescription)"
             }
@@ -33,12 +35,40 @@ final class AppleTranslationManager {
 
     @available(macOS 26.0, *)
     private func translate(sourceText: String, sourceLang: String?, targetLang: String) async throws -> String {
-        let sourceLanguage = sourceLang.flatMap(Self.language)
-            ?? Locale.preferredLanguages.compactMap(Self.language).first
-        guard let sourceLanguage, let targetLanguage = Self.language(targetLang) else {
-            throw NSError(domain: "nz.owo.koe.apple-translation", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Apple Translation requires a source language or a preferred system language, plus a target language.",
+        guard let targetLanguage = Self.language(targetLang) else {
+            throw NSError(domain: "nz.owo.koe.apple-translation", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Apple Translation requires a valid target language code (e.g. en, zh-Hans, ja).",
             ])
+        }
+
+        // Resolve source language. Prefer the caller-supplied value, then the system's
+        // preferred languages. `installedSource:` requires an *installed* source language,
+        // so we check availability first and report a clear error instead of letting the
+        // session fail with the generic "Unable to Translate".
+        let sourceLanguage: Locale.Language? = sourceLang.flatMap(Self.language)
+            ?? Locale.preferredLanguages.compactMap(Self.language).first
+
+        guard let sourceLanguage else {
+            throw NSError(domain: "nz.owo.koe.apple-translation", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Apple Translation could not determine the source language.",
+            ])
+        }
+
+        let availability = LanguageAvailability()
+        let status = await availability.status(from: sourceLanguage, to: targetLanguage)
+        switch status {
+        case .unsupported:
+            throw NSError(domain: "nz.owo.koe.apple-translation", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Apple Translation does not support this source/target language pair.",
+            ])
+        case .supported:
+            // The language pair is supported by the framework, but the source language
+            // model is not installed locally yet. Apple requires downloading it first.
+            throw NSError(domain: "nz.owo.koe.apple-translation", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Source language is not installed for Apple Translation. Please install it in System Settings > Apple Intelligence & Siri > Language.",
+            ])
+        case .installed:
+            break
         }
 
         let session = TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
