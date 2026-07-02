@@ -181,7 +181,7 @@
 "setupWizard.llm.outputTranslation.title" = "输出翻译";
 "setupWizard.llm.outputTranslation.targetLanguage" = "目标语言";
 "setupWizard.llm.outputTranslation.targetLanguagePlaceholder" = "English";
-"setupWizard.llm.outputTranslation.profile" = "翻译 LLM";
+"setupWizard.llm.outputTranslation.profile" = "Provider";
 "setupWizard.llm.outputTranslation.sameAsCorrection" = "与润色使用同一 Profile";
 "setupWizard.llm.outputTranslation.hint" = "在润色之后执行，最终粘贴的文本会被翻译到目标语言。";
 "setupWizard.common.save" = "保存";

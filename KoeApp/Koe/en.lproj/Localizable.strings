@@ -181,7 +181,7 @@
 "setupWizard.llm.outputTranslation.title" = "Output Translation";
 "setupWizard.llm.outputTranslation.targetLanguage" = "Target Language";
 "setupWizard.llm.outputTranslation.targetLanguagePlaceholder" = "English";
-"setupWizard.llm.outputTranslation.profile" = "Translation LLM";
+"setupWizard.llm.outputTranslation.profile" = "Provider";
 "setupWizard.llm.outputTranslation.sameAsCorrection" = "Same as correction profile";
 "setupWizard.llm.outputTranslation.hint" = "Applied after correction. Final pasted text will be translated into the target language.";
 "setupWizard.common.save" = "Save";

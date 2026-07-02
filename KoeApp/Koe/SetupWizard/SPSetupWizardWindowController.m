@@ -257,6 +257,7 @@ static NSToolbarItemIdentifier const kToolbarTranslation = @"translation";
 static NSToolbarItemIdentifier const kToolbarAbout = @"about";
 static const CGFloat kSettingsPaneWidth = 680.0;
 static NSString *const kLlmOutputTranslationLocalMtProfileId = @"__local_mt";
+static NSString *const kLlmOutputTranslationAppleProfileId = @"__apple";
 
 // ─── Config helpers (backed by sp_config_get / sp_config_set) ───────
 #import "koe_core.h"
@@ -702,6 +703,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, copy) NSString *currentPaneIdentifier;
 @property (nonatomic, strong) NSView *currentPaneView;
 @property (nonatomic, assign) BOOL suppressDynamicPaneResize;
+@property (nonatomic, assign) CGFloat cachedTitleBarHeight;
 
 // ASR fields
 @property (nonatomic, strong) NSPopUpButton *asrProviderPopup;
@@ -826,11 +828,19 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *templatesData;
 @property (nonatomic, strong) NSTableView *templatesTableView;
 @property (nonatomic, strong) NSSwitch *templatesEnabledSwitch;
+@property (nonatomic, strong) NSTextField *templatesDescriptionLabel;
+@property (nonatomic, strong) NSView *templatesVisibilityCard;
+@property (nonatomic, strong) NSView *templatesCorrectionCard;
+@property (nonatomic, strong) NSView *templatesOutputTranslationCard;
 @property (nonatomic, strong) NSSegmentedControl *templatePrimaryActionsControl;
 @property (nonatomic, strong) NSSegmentedControl *templateReorderActionsControl;
 @property (nonatomic, strong) NSTextField *templateNameField;
 @property (nonatomic, strong) NSSwitch *templateItemEnabledSwitch;
 @property (nonatomic, strong) NSTextView *templatePromptTextView;
+@property (nonatomic, strong) NSTextField *templatesListTitle;
+@property (nonatomic, strong) NSTextField *templatesEditorTitle;
+@property (nonatomic, strong) NSView *templatesListCard;
+@property (nonatomic, strong) NSView *templatesEditorCard;
 @property (nonatomic, assign) NSInteger selectedTemplateIndex;
 @property (nonatomic, assign) BOOL suppressTemplateSync;
 @property (nonatomic, assign) BOOL templateEditorDirty;
@@ -929,6 +939,9 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)resizeLlmPaneToCurrentState;
 - (CGFloat)targetHotkeyPaneHeight;
 - (void)resizeHotkeyPaneToCurrentState;
+- (CGFloat)targetTemplatesPaneHeight;
+- (void)resizeTemplatesPaneToCurrentState;
+- (void)applyInitialTemplatesPaneLayout;
 - (NSString *)prettyNameForLlmProvider:(NSString *)provider;
 - (NSMutableDictionary *)activeLlmProfile;
 - (void)syncActiveLlmProfileFromFields;
@@ -1082,6 +1095,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [self.window center];
     [self.window makeKeyAndOrderFront:sender];
     [NSApp activateIgnoringOtherApps:YES];
+    // Cache the true title bar height after the window is visible and laid out.
+    // This prevents a feedback loop when resizeCurrentPaneWindowToHeight: is called
+    // during CoreAnimation-based animation (contentView.frame lags window.frame).
+    self.cachedTitleBarHeight = self.window.frame.size.height - self.window.contentView.frame.size.height;
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -1199,6 +1216,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         [self applyInitialLlmPaneLayout];
     } else if ([identifier isEqualToString:kToolbarHotkey]) {
         [self applyInitialControlsPaneLayout];
+    } else if ([identifier isEqualToString:kToolbarTemplates]) {
+        [self applyInitialTemplatesPaneLayout];
     }
     self.window.toolbar.selectedItemIdentifier = identifier;
 
@@ -1206,7 +1225,10 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSSize paneSize = paneView.frame.size;
     NSRect windowFrame = self.window.frame;
     CGFloat contentHeight = paneSize.height;
-    CGFloat titleBarHeight = windowFrame.size.height - [self.window.contentView frame].size.height;
+    // Use cached title bar height when available to avoid inflation during animation.
+    CGFloat titleBarHeight = self.cachedTitleBarHeight > 0
+        ? self.cachedTitleBarHeight
+        : windowFrame.size.height - [self.window.contentView frame].size.height;
     CGFloat newHeight = contentHeight + titleBarHeight;
     CGFloat newWidth = paneSize.width;
 
@@ -1217,10 +1239,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
         newHeight
     );
 
-    [self.window setFrame:newFrame display:YES animate:YES];
+    [self.window setFrame:newFrame display:YES animate:NO];
 
-    // Add pane to window
-    paneView.frame = [self.window.contentView bounds];
+    // Add pane to window.
+    // Keep the pane's current frame (already set to the desired content height by
+    // build*Pane / applyInitial*Layout). Do not overwrite it with contentView.bounds,
+    // because during the animated resize contentView.frame may still reflect the old
+    // pane size, which would shrink the new pane and then re-trigger height growth.
     paneView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.window.contentView addSubview:paneView];
 
@@ -2129,50 +2154,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
 
-    // ── Description ──
-    CGFloat descHeight = 28.0;
-
-    // ── Default Correction toggle ──
-    self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
-    NSView *llmEnabledCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, cardWidth, 48.0)
-                                                         title:KoeLocalizedString(@"setupWizard.llm.correction.title")
-                                                        toggle:self.llmEnabledCheckbox];
-    CGFloat correctionCardH = llmEnabledCard.frame.size.height;
-
-    // ── Output Translation toggle ──
-    self.llmOutputTranslationEnabledSwitch = [self settingsSwitchWithAction:@selector(llmOutputTranslationToggled:)];
-    NSView *outputTranslationCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, cardWidth, 48.0)
-                                                                title:KoeLocalizedString(@"setupWizard.llm.outputTranslation.title")
-                                                               toggle:self.llmOutputTranslationEnabledSwitch];
-    CGFloat translationCardH = outputTranslationCard.frame.size.height;
-
-    // ── Output Translation settings card ──
-    CGFloat translationSettingsCardH = 104.0;
-    self.llmOutputTranslationSettingsCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, 0, cardWidth, translationSettingsCardH)];
-
-    CGFloat translationLabelW = 120.0;
-    CGFloat translationFieldX = 16.0 + translationLabelW + 12.0;
-    CGFloat translationFieldW = cardWidth - translationFieldX - 16.0;
-    CGFloat translationRowSpacing = 28.0;
-    CGFloat translationRowY = translationSettingsCardH - 34.0;
-
-    NSTextField *translationTargetLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguage") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
-    [self.llmOutputTranslationSettingsCard addSubview:translationTargetLabel];
-    self.llmOutputTranslationTargetLanguageField = [self formTextField:NSMakeRect(translationFieldX, translationRowY, 180, 22) placeholder:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguagePlaceholder")];
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationTargetLanguageField];
-    translationRowY -= translationRowSpacing;
-
-    NSTextField *translationProfileLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.profile") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
-    [self.llmOutputTranslationSettingsCard addSubview:translationProfileLabel];
-    self.llmOutputTranslationProfilePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(translationFieldX, translationRowY - 2, 220, 26) pullsDown:NO];
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationProfilePopup];
-    translationRowY -= translationRowSpacing;
-    self.llmOutputTranslationHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.hint")];
-    CGFloat translationHintHeight = [self fittingHeightForWrappingLabel:self.llmOutputTranslationHintLabel width:translationFieldW];
-    self.llmOutputTranslationHintLabel.frame = NSMakeRect(translationFieldX, MAX(10.0, translationRowY - 2), translationFieldW, translationHintHeight);
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationHintLabel];
-    self.llmOutputTranslationSettingsCard.hidden = YES; // starts hidden; revealed by loadControlsPaneValues
-
     // ── Trigger Key ──
     self.hotkeyPopup = [self hotkeyPresetPopup];
     self.hotkeyPopup.target = self;
@@ -2216,46 +2197,21 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     // ── Layout ──
     CGFloat triggerH = triggerCard.frame.size.height;
     CGFloat feedbackH = feedbackCard.frame.size.height;
-    // Correction card + spacing + translation toggle card + spacing + settings card + spacing + trigger + feedback
-    CGFloat contentHeight = topPad + descHeight + cardSpacing
-                          + correctionCardH + cardSpacing
-                          + translationCardH + cardSpacing
-                          + translationSettingsCardH + cardSpacing
-                          + triggerH + cardSpacing + feedbackH + 56;
+    CGFloat contentHeight = topPad + triggerH + cardSpacing + feedbackH + 56;
 
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
 
     CGFloat y = contentHeight - topPad;
 
-    // Description
-    NSTextField *desc = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.llm.description")
-                                                  toPane:pane
-                                                   topY:y
-                                                      x:contentX
-                                                  width:contentW];
-    y = NSMinY(desc.frame) - 12.0;
-
-    // Default Correction card
-    y -= correctionCardH;
-    llmEnabledCard.frame = NSMakeRect(contentX, y, cardWidth, correctionCardH);
-    [pane addSubview:llmEnabledCard];
-
-    y -= cardSpacing + translationCardH;
-    outputTranslationCard.frame = NSMakeRect(contentX, y, cardWidth, translationCardH);
-    [pane addSubview:outputTranslationCard];
-
-    y -= cardSpacing + translationSettingsCardH;
-    self.llmOutputTranslationSettingsCard.frame = NSMakeRect(contentX, y, cardWidth, translationSettingsCardH);
-    [pane addSubview:self.llmOutputTranslationSettingsCard];
-
-    y -= cardSpacing + triggerH;
+    // Trigger card
+    y -= triggerH;
     triggerCard.frame = NSMakeRect(24, y, cardWidth, triggerH);
     [pane addSubview:triggerCard];
-    // Fix control positions — the card's child (index 1) is the white card view
     NSView *triggerCardBody = triggerCard.subviews.count > 1 ? triggerCard.subviews[1] : triggerCard.subviews[0];
     [self layoutCardRowControls:triggerCardBody width:cardWidth];
 
+    // Feedback Sounds card
     y -= cardSpacing + feedbackH;
     feedbackCard.frame = NSMakeRect(24, y, cardWidth, feedbackH);
     [pane addSubview:feedbackCard];
@@ -2574,7 +2530,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 
 - (NSView *)buildTemplatesPane {
     CGFloat paneWidth = kSettingsPaneWidth;
-    CGFloat contentHeight = 568;
+    CGFloat contentHeight = 720;
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
 
@@ -2582,20 +2538,76 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat contentW = paneWidth - 48.0;
     CGFloat y = contentHeight - 30.0;
 
-    NSTextField *desc = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.templates.description")
-                                                  toPane:pane
-                                                   topY:y
-                                                      x:contentX
-                                                  width:contentW];
-    y = NSMinY(desc.frame) - 16.0;
+    self.templatesDescriptionLabel = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.templates.description")
+                                                               toPane:pane
+                                                                topY:y
+                                                                   x:contentX
+                                                               width:contentW];
+    y = NSMinY(self.templatesDescriptionLabel.frame) - 16.0;
 
     self.templatesEnabledSwitch = [self settingsSwitchWithAction:NULL];
-    NSView *visibilityCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48, contentW, 48)
-                                                         title:KoeLocalizedString(@"setupWizard.templates.showInOverlay")
-                                                        toggle:self.templatesEnabledSwitch];
-    [pane addSubview:visibilityCard];
+    self.templatesVisibilityCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48, contentW, 48)
+                                                               title:KoeLocalizedString(@"setupWizard.templates.showInOverlay")
+                                                              toggle:self.templatesEnabledSwitch];
+    [pane addSubview:self.templatesVisibilityCard];
+    y = NSMinY(self.templatesVisibilityCard.frame);
 
-    CGFloat sectionTitleY = NSMinY(visibilityCard.frame) - 44.0;
+    // ── Default Correction toggle ──
+    if (!self.llmEnabledCheckbox) {
+        self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
+    }
+    self.templatesCorrectionCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, contentW, 48.0)
+                                                               title:KoeLocalizedString(@"setupWizard.llm.correction.title")
+                                                              toggle:self.llmEnabledCheckbox];
+    CGFloat correctionCardH = self.templatesCorrectionCard.frame.size.height;
+    y -= 16.0 + correctionCardH;
+    self.templatesCorrectionCard.frame = NSMakeRect(contentX, y, contentW, correctionCardH);
+    [pane addSubview:self.templatesCorrectionCard];
+
+    // ── Output Translation toggle ──
+    if (!self.llmOutputTranslationEnabledSwitch) {
+        self.llmOutputTranslationEnabledSwitch = [self settingsSwitchWithAction:@selector(llmOutputTranslationToggled:)];
+    }
+    self.templatesOutputTranslationCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, contentW, 48.0)
+                                                                      title:KoeLocalizedString(@"setupWizard.llm.outputTranslation.title")
+                                                                     toggle:self.llmOutputTranslationEnabledSwitch];
+    CGFloat translationCardH = self.templatesOutputTranslationCard.frame.size.height;
+    y -= 16.0 + translationCardH;
+    self.templatesOutputTranslationCard.frame = NSMakeRect(contentX, y, contentW, translationCardH);
+    [pane addSubview:self.templatesOutputTranslationCard];
+
+    // ── Output Translation settings card ──
+    CGFloat translationSettingsCardH = 104.0;
+    self.llmOutputTranslationSettingsCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, 0, contentW, translationSettingsCardH)];
+
+    CGFloat translationLabelW = 120.0;
+    CGFloat translationFieldX = 16.0 + translationLabelW + 12.0;
+    CGFloat translationFieldW = contentW - translationFieldX - 16.0;
+    CGFloat translationRowSpacing = 28.0;
+    CGFloat translationRowY = translationSettingsCardH - 34.0;
+
+    NSTextField *translationTargetLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguage") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
+    [self.llmOutputTranslationSettingsCard addSubview:translationTargetLabel];
+    self.llmOutputTranslationTargetLanguageField = [self formTextField:NSMakeRect(translationFieldX, translationRowY, 180, 22) placeholder:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguagePlaceholder")];
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationTargetLanguageField];
+    translationRowY -= translationRowSpacing;
+
+    NSTextField *translationProfileLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.profile") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
+    [self.llmOutputTranslationSettingsCard addSubview:translationProfileLabel];
+    self.llmOutputTranslationProfilePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(translationFieldX, translationRowY - 2, 220, 26) pullsDown:NO];
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationProfilePopup];
+    translationRowY -= translationRowSpacing;
+    self.llmOutputTranslationHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.hint")];
+    CGFloat translationHintHeight = [self fittingHeightForWrappingLabel:self.llmOutputTranslationHintLabel width:translationFieldW];
+    self.llmOutputTranslationHintLabel.frame = NSMakeRect(translationFieldX, MAX(10.0, translationRowY - 2), translationFieldW, translationHintHeight);
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationHintLabel];
+    self.llmOutputTranslationSettingsCard.hidden = YES; // revealed by loadTemplatesPaneValues
+
+    y -= 16.0 + translationSettingsCardH;
+    self.llmOutputTranslationSettingsCard.frame = NSMakeRect(contentX, y, contentW, translationSettingsCardH);
+    [pane addSubview:self.llmOutputTranslationSettingsCard];
+
+    CGFloat sectionTitleY = NSMinY(self.llmOutputTranslationSettingsCard.frame) - 16.0 - 24.0;
     CGFloat mainCardY = 60.0;
     CGFloat mainCardH = sectionTitleY - mainCardY - 12.0;
     CGFloat listW = 214.0;
@@ -2603,19 +2615,19 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat editorW = contentW - listW - cardGap;
     CGFloat editorX = contentX + listW + cardGap;
 
-    NSTextField *listTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.templates.library")
-                                               frame:NSMakeRect(contentX, sectionTitleY, listW, 20)];
-    [pane addSubview:listTitle];
+    self.templatesListTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.templates.library")
+                                                 frame:NSMakeRect(contentX, sectionTitleY, listW, 20)];
+    [pane addSubview:self.templatesListTitle];
 
-    NSTextField *editorTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.templates.editor")
-                                                 frame:NSMakeRect(editorX, sectionTitleY, editorW, 20)];
-    [pane addSubview:editorTitle];
+    self.templatesEditorTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.templates.editor")
+                                                   frame:NSMakeRect(editorX, sectionTitleY, editorW, 20)];
+    [pane addSubview:self.templatesEditorTitle];
 
-    NSView *listCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, mainCardY, listW, mainCardH)];
-    [pane addSubview:listCard];
+    self.templatesListCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, mainCardY, listW, mainCardH)];
+    [pane addSubview:self.templatesListCard];
 
-    NSView *editorCard = [self surfaceCardViewWithFrame:NSMakeRect(editorX, mainCardY, editorW, mainCardH)];
-    [pane addSubview:editorCard];
+    self.templatesEditorCard = [self surfaceCardViewWithFrame:NSMakeRect(editorX, mainCardY, editorW, mainCardH)];
+    [pane addSubview:self.templatesEditorCard];
 
     CGFloat headerH = 34.0;
     CGFloat footerH = 34.0;
@@ -2624,29 +2636,29 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     libraryCaption.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     libraryCaption.textColor = [NSColor labelColor];
     libraryCaption.frame = NSMakeRect(14, mainCardH - headerH + 9, 120, 18);
-    [listCard addSubview:libraryCaption];
+    [self.templatesListCard addSubview:libraryCaption];
 
     NSView *headerSeparator = [[NSView alloc] initWithFrame:NSMakeRect(0, mainCardH - headerH, listW, 1)];
     headerSeparator.wantsLayer = YES;
     headerSeparator.layer.backgroundColor = [NSColor separatorColor].CGColor;
-    [listCard addSubview:headerSeparator];
+    [self.templatesListCard addSubview:headerSeparator];
 
     NSView *footerSeparator = [[NSView alloc] initWithFrame:NSMakeRect(0, footerH, listW, 1)];
     footerSeparator.wantsLayer = YES;
     footerSeparator.layer.backgroundColor = [NSColor separatorColor].CGColor;
-    [listCard addSubview:footerSeparator];
+    [self.templatesListCard addSubview:footerSeparator];
 
     self.templatePrimaryActionsControl = [self templateActionSegmentedControlWithSymbols:@[@"plus", @"minus"]
                                                                                 toolTips:@[KoeLocalizedString(@"setupWizard.templates.tooltip.add"), KoeLocalizedString(@"setupWizard.templates.tooltip.remove")]
                                                                                   action:@selector(handleTemplatePrimaryActions:)];
     self.templatePrimaryActionsControl.frame = NSMakeRect(12, 5, 50, 24);
-    [listCard addSubview:self.templatePrimaryActionsControl];
+    [self.templatesListCard addSubview:self.templatePrimaryActionsControl];
 
     self.templateReorderActionsControl = [self templateActionSegmentedControlWithSymbols:@[@"arrow.up", @"arrow.down"]
                                                                                  toolTips:@[KoeLocalizedString(@"setupWizard.templates.tooltip.moveUp"), KoeLocalizedString(@"setupWizard.templates.tooltip.moveDown")]
                                                                                    action:@selector(handleTemplateReorderActions:)];
     self.templateReorderActionsControl.frame = NSMakeRect(listW - 12 - 50, 5, 50, 24);
-    [listCard addSubview:self.templateReorderActionsControl];
+    [self.templatesListCard addSubview:self.templateReorderActionsControl];
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(10, footerH + 10, listW - 20, mainCardH - headerH - footerH - 20)];
     scrollView.hasVerticalScroller = YES;
@@ -2658,7 +2670,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     scrollView.layer.borderWidth = 1.0;
     scrollView.layer.borderColor = [NSColor separatorColor].CGColor;
     scrollView.scrollerStyle = NSScrollerStyleOverlay;
-    [listCard addSubview:scrollView];
+    [self.templatesListCard addSubview:scrollView];
 
     self.templatesTableView = [[NSTableView alloc] initWithFrame:scrollView.bounds];
     NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"name"];
@@ -2678,11 +2690,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     scrollView.documentView = self.templatesTableView;
 
     NSTextField *nameLabel = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.common.name") frame:NSMakeRect(16, mainCardH - 34, editorW - 32, 18)];
-    [editorCard addSubview:nameLabel];
+    [self.templatesEditorCard addSubview:nameLabel];
 
     self.templateNameField = [self formTextField:NSMakeRect(16, mainCardH - 64, editorW - 32, 24) placeholder:KoeLocalizedString(@"setupWizard.templates.namePlaceholder")];
     self.templateNameField.delegate = self;
-    [editorCard addSubview:self.templateNameField];
+    [self.templatesEditorCard addSubview:self.templateNameField];
 
     self.templateItemEnabledSwitch = [self settingsSwitchWithAction:@selector(toggleSelectedTemplateEnabled:)
                                                         controlSize:NSControlSizeSmall];
@@ -2695,16 +2707,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
                                                floor(templateVisibilityCenterY - 10.0),
                                                editorW - templateItemToggleW - 44.0,
                                                20);
-    [editorCard addSubview:templateVisibilityLabel];
+    [self.templatesEditorCard addSubview:templateVisibilityLabel];
 
     self.templateItemEnabledSwitch.frame = NSMakeRect(editorW - 16 - templateItemToggleW,
                                                       floor(templateVisibilityCenterY - (templateItemToggleH / 2.0)),
                                                       templateItemToggleW,
                                                       templateItemToggleH);
-    [editorCard addSubview:self.templateItemEnabledSwitch];
+    [self.templatesEditorCard addSubview:self.templateItemEnabledSwitch];
 
     NSTextField *promptLabel = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.templates.prompt") frame:NSMakeRect(16, mainCardH - 124, editorW - 32, 18)];
-    [editorCard addSubview:promptLabel];
+    [self.templatesEditorCard addSubview:promptLabel];
 
     NSScrollView *promptScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16, 16, editorW - 32, mainCardH - 146)];
     promptScroll.hasVerticalScroller = YES;
@@ -2727,7 +2739,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.templatePromptTextView.allowsUndo = YES;
     self.templatePromptTextView.delegate = self;
     promptScroll.documentView = self.templatePromptTextView;
-    [editorCard addSubview:promptScroll];
+    [self.templatesEditorCard addSubview:promptScroll];
 
     // Save / Cancel buttons
     [self addButtonsToPane:pane atY:16 width:paneWidth];
@@ -5559,7 +5571,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (CGFloat)minimumHeightForVisibleSubviewsInView:(NSView *)view bottomPadding:(CGFloat)bottomPadding ignoringViews:(NSArray<NSView *> *)ignoredViews {
-  CGFloat currentHeight = view.frame.size.height;
   CGFloat requiredHeight = bottomPadding;
 
   for (NSView *subview in view.subviews) {
@@ -5570,9 +5581,12 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
       continue;
     }
 
-    CGFloat topInset = currentHeight - NSMaxY(subview.frame);
+    // Use NSMaxY directly — subview frames are in pane coordinates (y=0 at pane bottom),
+    // so NSMaxY + bottomPadding gives the pane height needed to make this subview visible
+    // with the required padding. This is independent of the current pane height, which may
+    // have changed due to autoresizing and would otherwise create a feedback loop.
     requiredHeight = MAX(requiredHeight,
-                         ceil(topInset + NSHeight(subview.frame) + bottomPadding));
+                         ceil(NSMaxY(subview.frame) + bottomPadding));
   }
 
   return requiredHeight;
@@ -5584,10 +5598,23 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   }
 
   NSRect windowFrame = self.window.frame;
-  CGFloat titleBarHeight =
-      windowFrame.size.height - self.window.contentView.frame.size.height;
+  // Use the cached title bar height to avoid feedback loops during resizes.
+  // The dynamic window.frame - contentView.frame calculation can give an inflated
+  // title bar height when the content view lags, causing the window to grow.
+  CGFloat fallbackTitleBarHeight = windowFrame.size.height - self.window.contentView.frame.size.height;
+  CGFloat titleBarHeight = self.cachedTitleBarHeight > 0
+      ? self.cachedTitleBarHeight
+      : fallbackTitleBarHeight;
   CGFloat newHeight = targetHeight + titleBarHeight;
+
   if (fabs(windowFrame.size.height - newHeight) < 1.0) {
+    return;
+  }
+
+  // When the cached height is available, also compare against the content view height
+  // to catch cases where the window frame is correct but the content view hasn't caught up.
+  CGFloat currentContentHeight = self.window.contentView.frame.size.height;
+  if (self.cachedTitleBarHeight > 0 && fabs(currentContentHeight - targetHeight) < 1.0) {
     return;
   }
 
@@ -5595,7 +5622,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
                                windowFrame.origin.y + windowFrame.size.height - newHeight,
                                windowFrame.size.width,
                                newHeight);
-  [self.window setFrame:newFrame display:YES animate:YES];
+  [self.window setFrame:newFrame display:YES animate:NO];
 }
 
 - (void)loadLlmPaneValues {
@@ -5603,9 +5630,14 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   [self loadLlmProfilesFromCore];
   if (self.llmOutputTranslationProfilePopup) {
     NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
-    NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
-        ? kLlmOutputTranslationLocalMtProfileId
-        : configGet(@"llm.output_translation.profile");
+    NSString *translationProfile = nil;
+    if ([translationProfileProvider isEqualToString:@"local_mt"]) {
+      translationProfile = kLlmOutputTranslationLocalMtProfileId;
+    } else if ([translationProfileProvider isEqualToString:@"apple"]) {
+      translationProfile = kLlmOutputTranslationAppleProfileId;
+    } else {
+      translationProfile = configGet(@"llm.output_translation.profile");
+    }
     BOOL matchedTranslationProfile = NO;
     for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
       if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
@@ -5637,40 +5669,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (void)loadControlsPaneValues {
-  NSString *enabled = configGet(@"llm.enabled");
-  if (self.llmEnabledCheckbox) {
-    self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
-  }
-  NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
-  if (self.llmOutputTranslationEnabledSwitch) {
-    self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
-  }
-  NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
-  if (self.llmOutputTranslationTargetLanguageField) {
-    self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
-  }
-
-  [self loadLlmProfilesFromCore];
-  if (self.llmOutputTranslationProfilePopup) {
-    NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
-    NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
-        ? kLlmOutputTranslationLocalMtProfileId
-        : configGet(@"llm.output_translation.profile");
-    BOOL matchedTranslationProfile = NO;
-    for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
-      if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
-        [self.llmOutputTranslationProfilePopup selectItemAtIndex:i];
-        matchedTranslationProfile = YES;
-        break;
-      }
-    }
-    if (!matchedTranslationProfile) {
-      [self.llmOutputTranslationProfilePopup selectItemAtIndex:0];
-    }
-  }
-  if (self.llmOutputTranslationSettingsCard) {
-    self.llmOutputTranslationSettingsCard.hidden = !(self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
-  }
+  // Controls pane loads its values directly from loadValuesForPane.
+  // No additional values to load here after LLM controls were moved to Quick Rewrite.
 }
 
 - (void)applyInitialControlsPaneLayout {
@@ -5681,6 +5681,101 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   self.suppressDynamicPaneResize = YES;
   [self loadControlsPaneValues];
   self.suppressDynamicPaneResize = NO;
+}
+
+- (void)applyInitialTemplatesPaneLayout {
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarTemplates] || self.currentPaneView == nil) {
+    return;
+  }
+
+  self.suppressDynamicPaneResize = YES;
+  [self layoutTemplatesPane];
+  // Set the pane frame to the computed target so switchToPane reads the correct
+  // content height. The pane is still a standalone view here (not yet added to
+  // the content view), so setting its frame does not conflict with autoresizing.
+  NSRect paneFrame = self.currentPaneView.frame;
+  paneFrame.size.height = [self targetTemplatesPaneHeight];
+  self.currentPaneView.frame = paneFrame;
+  self.suppressDynamicPaneResize = NO;
+}
+
+// Manually re-layout the Templates pane from the top down. This keeps the main
+// cards at a fixed size and anchors them above the Save/Cancel buttons, while
+// the toggle cards and description stay near the top. When Output Translation is
+// turned off, the settings card is removed from the stack and the section titles
+// / main cards slide up to fill the space instead of leaving a gap.
+- (void)layoutTemplatesPane {
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarTemplates] || self.currentPaneView == nil) {
+    return;
+  }
+
+  BOOL translationOn = NO;
+  if (self.llmOutputTranslationEnabledSwitch) {
+    translationOn = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
+  } else {
+    NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
+    translationOn = [translationEnabled isEqualToString:@"true"];
+  }
+  self.llmOutputTranslationSettingsCard.hidden = !translationOn;
+
+  CGFloat paneWidth = self.currentPaneView.frame.size.width;
+  CGFloat contentX = 24.0;
+  CGFloat contentW = paneWidth - 48.0;
+  CGFloat listW = 214.0;
+  CGFloat cardGap = 16.0;
+  CGFloat editorW = contentW - listW - cardGap;
+  CGFloat editorX = contentX + listW + cardGap;
+
+  CGFloat cardH = 48.0;
+  CGFloat sectionTitleH = 24.0;
+  CGFloat mainCardY = 60.0;
+  CGFloat mainCardH = self.templatesListCard ? self.templatesListCard.frame.size.height : 246.0;
+  CGFloat settingsCardH = self.llmOutputTranslationSettingsCard ? self.llmOutputTranslationSettingsCard.frame.size.height : 104.0;
+  CGFloat descH = self.templatesDescriptionLabel ? self.templatesDescriptionLabel.frame.size.height : 20.0;
+
+  // Compute pane height from the bottom up so there is no empty gap when the
+  // Output Translation settings card is hidden.
+  CGFloat sectionTitleY = mainCardY + mainCardH + 12.0;
+  CGFloat y = sectionTitleY + sectionTitleH + cardGap;
+  if (translationOn) {
+    y += settingsCardH + cardGap;
+  }
+  y += cardH + cardGap;   // Output Translation toggle
+  y += cardH + cardGap;   // Default Correction toggle
+  y += cardH + cardGap;   // Templates visibility toggle
+  y += descH + 30.0;      // description + top margin
+  CGFloat paneHeight = y;
+
+  // Do NOT set the pane frame here. The pane has NSViewHeightSizable, so its
+  // height is controlled by the content view (via autoresizing). Setting it
+  // manually here would conflict with the autoresizing delta that the animated
+  // window resize applies, leaving a gap at the top. The pane frame for the
+  // initial build is set by applyInitialTemplatesPaneLayout instead.
+
+  // Position from the top down.
+  y = paneHeight - 30.0;
+  self.templatesDescriptionLabel.frame = NSMakeRect(contentX, y - descH, contentW, descH);
+  y = NSMinY(self.templatesDescriptionLabel.frame) - cardGap;
+
+  self.templatesVisibilityCard.frame = NSMakeRect(contentX, y - cardH, contentW, cardH);
+  y = NSMinY(self.templatesVisibilityCard.frame) - cardGap;
+
+  self.templatesCorrectionCard.frame = NSMakeRect(contentX, y - cardH, contentW, cardH);
+  y = NSMinY(self.templatesCorrectionCard.frame) - cardGap;
+
+  self.templatesOutputTranslationCard.frame = NSMakeRect(contentX, y - cardH, contentW, cardH);
+  y = NSMinY(self.templatesOutputTranslationCard.frame) - cardGap;
+
+  if (translationOn) {
+    self.llmOutputTranslationSettingsCard.frame = NSMakeRect(contentX, y - settingsCardH, contentW, settingsCardH);
+    y = NSMinY(self.llmOutputTranslationSettingsCard.frame) - cardGap;
+  }
+
+  self.templatesListTitle.frame = NSMakeRect(contentX, sectionTitleY, listW, sectionTitleH);
+  self.templatesEditorTitle.frame = NSMakeRect(editorX, sectionTitleY, editorW, sectionTitleH);
+
+  self.templatesListCard.frame = NSMakeRect(contentX, mainCardY, listW, mainCardH);
+  self.templatesEditorCard.frame = NSMakeRect(editorX, mainCardY, editorW, mainCardH);
 }
 
 - (CGFloat)targetHotkeyPaneHeight {
@@ -5702,27 +5797,48 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   [self resizeCurrentPaneWindowToHeight:[self targetHotkeyPaneHeight]];
 }
 
+- (CGFloat)targetTemplatesPaneHeight {
+  // Compute the exact height from the current layout state so the pane shrinks
+  // smoothly when Output Translation is turned off and nothing below it is left
+  // with an empty gap.
+  BOOL translationOn = NO;
+  if (self.llmOutputTranslationEnabledSwitch) {
+    translationOn = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
+  } else {
+    NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
+    translationOn = [translationEnabled isEqualToString:@"true"];
+  }
+
+  CGFloat mainCardH = self.templatesListCard ? self.templatesListCard.frame.size.height : 246.0;
+  CGFloat descH = self.templatesDescriptionLabel ? self.templatesDescriptionLabel.frame.size.height : 20.0;
+  CGFloat settingsCardH = self.llmOutputTranslationSettingsCard ? self.llmOutputTranslationSettingsCard.frame.size.height : 104.0;
+
+  CGFloat sectionTitleY = 60.0 + mainCardH + 12.0;
+  CGFloat height = sectionTitleY + 24.0 + 16.0;
+  if (translationOn) {
+    height += settingsCardH + 16.0;
+  }
+  height += 48.0 + 16.0; // Output Translation toggle
+  height += 48.0 + 16.0; // Default Correction toggle
+  height += 48.0 + 16.0; // Templates visibility toggle
+  height += descH + 30.0;
+
+  return height;
+}
+
+- (void)resizeTemplatesPaneToCurrentState {
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarTemplates]) {
+    return;
+  }
+
+  [self resizeCurrentPaneWindowToHeight:[self targetTemplatesPaneHeight]];
+}
+
 - (CGFloat)targetLlmPaneHeight {
-  if (!self.currentPaneView) {
-    return 0.0;
-  }
-
-  CGFloat targetHeight = [self minimumHeightForVisibleSubviewsInView:self.currentPaneView
-                                                       bottomPadding:64.0
-                                                        ignoringViews:@[
-                                                          self.llmProfileTableScroll ?: (id)[NSNull null],
-                                                          self.llmAddProfileButton ?: (id)[NSNull null],
-                                                          self.llmDeleteProfileButton ?: (id)[NSNull null],
-                                                        ]];
-
-  if (self.llmProfileTableScroll != nil) {
-    CGFloat scrollTopInset = self.currentPaneView.frame.size.height - NSMaxY(self.llmProfileTableScroll.frame);
-    CGFloat scrollMinHeight = 180.0;
-    targetHeight = MAX(targetHeight,
-                       ceil(scrollTopInset + scrollMinHeight + NSMinY(self.llmProfileTableScroll.frame)));
-  }
-
-  return MAX(targetHeight, 500.0);
+  // Use a fixed design height for the LLM pane. The pane is built at 620pt and all
+  // subviews are positioned within that design; switching profiles only shows/hides
+  // existing fields, so the pane should not change size.
+  return 620.0;
 }
 
 - (void)resizeLlmPaneToCurrentState {
@@ -5763,7 +5879,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   CGFloat requiredSectionHeight = [self minimumHeightForVisibleSubviewsInView:section
                                                                 bottomPadding:8.0
                                                                  ignoringViews:@[]];
-  CGFloat topInset = pane.frame.size.height - NSMaxY(section.frame);
+  // Use the fixed design height (620) instead of the current pane height, which may
+  // have been autoresized larger. Using pane.frame.size.height creates a feedback
+  // loop: pane grows -> topInset grows -> targetHeight grows -> pane grows again.
+  CGFloat designPaneHeight = 620.0;
+  CGFloat topInset = designPaneHeight - NSMaxY(section.frame);
   CGFloat targetHeight = ceil(topInset + requiredSectionHeight + NSMinY(section.frame));
   return MAX(targetHeight, 340.0);
 }
@@ -6382,6 +6502,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     [self.llmOutputTranslationProfilePopup lastItem].representedObject = @"";
     [self.llmOutputTranslationProfilePopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.local")];
     [self.llmOutputTranslationProfilePopup lastItem].representedObject = kLlmOutputTranslationLocalMtProfileId;
+    if ([self isAppleTranslationAvailable]) {
+        [self.llmOutputTranslationProfilePopup addItemWithTitle:KoeLocalizedString(@"setupWizard.translation.mt.provider.apple")];
+        [self.llmOutputTranslationProfilePopup lastItem].representedObject = kLlmOutputTranslationAppleProfileId;
+    }
 
     for (NSString *profileId in self.llmProfileOrder) {
         NSDictionary *profile = self.llmProfiles[profileId];
@@ -6748,23 +6872,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             [self.triggerModePopup selectItemAtIndex:0];
         }
 
-        // LLM correction / output translation toggles (moved from LLM pane)
-        NSString *llmEnabled = configGet(@"llm.enabled");
-        if (self.llmEnabledCheckbox) {
-            self.llmEnabledCheckbox.state = ([llmEnabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
-        }
-        NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
-        if (self.llmOutputTranslationEnabledSwitch) {
-            self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
-        }
-        NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
-        if (self.llmOutputTranslationTargetLanguageField) {
-            self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
-        }
-        if (self.llmOutputTranslationSettingsCard) {
-            self.llmOutputTranslationSettingsCard.hidden = !(self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
-        }
-
         NSString *startSound = configGet(@"feedback.start_sound");
         NSString *stopSound = configGet(@"feedback.stop_sound");
         NSString *errorSound = configGet(@"feedback.error_sound");
@@ -6797,6 +6904,49 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
         [self reindexTemplateShortcuts];
         [self reloadTemplateTableSelectingRow:(self.templatesData.count > 0 ? 0 : -1)];
+
+        // ── Default Correction & Output Translation ──
+        NSString *llmEnabled = configGet(@"llm.enabled");
+        if (self.llmEnabledCheckbox) {
+            self.llmEnabledCheckbox.state = ([llmEnabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
+        }
+        NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
+        if (self.llmOutputTranslationEnabledSwitch) {
+            self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+        NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
+        if (self.llmOutputTranslationTargetLanguageField) {
+            self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
+        }
+
+        [self loadLlmProfilesFromCore];
+        if (self.llmOutputTranslationProfilePopup) {
+            NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
+            NSString *translationProfile = nil;
+            if ([translationProfileProvider isEqualToString:@"local_mt"]) {
+                translationProfile = kLlmOutputTranslationLocalMtProfileId;
+            } else if ([translationProfileProvider isEqualToString:@"apple"]) {
+                translationProfile = kLlmOutputTranslationAppleProfileId;
+            } else {
+                translationProfile = configGet(@"llm.output_translation.profile");
+            }
+            BOOL matchedTranslationProfile = NO;
+            for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
+                if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
+                    [self.llmOutputTranslationProfilePopup selectItemAtIndex:i];
+                    matchedTranslationProfile = YES;
+                    break;
+                }
+            }
+            if (!matchedTranslationProfile) {
+                [self.llmOutputTranslationProfilePopup selectItemAtIndex:0];
+            }
+        }
+        if (self.llmOutputTranslationSettingsCard) {
+            self.llmOutputTranslationSettingsCard.hidden = !(self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
+        }
+        [self layoutTemplatesPane];
+        [self resizeTemplatesPaneToCurrentState];
     } else if ([identifier isEqualToString:kToolbarTranslation]) {
         [self reloadTranslationInputDevices];
 
@@ -7069,9 +7219,16 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         }
         if (self.llmOutputTranslationProfilePopup) {
             NSString *translationProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject ?: @"";
-            BOOL outputTranslationUsesLocalMt = [translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId];
-            saveOk &= configSet(@"llm.output_translation.provider", outputTranslationUsesLocalMt ? @"local_mt" : @"llm");
-            saveOk &= configSet(@"llm.output_translation.profile", outputTranslationUsesLocalMt ? @"" : translationProfileId);
+            if ([translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId]) {
+                saveOk &= configSet(@"llm.output_translation.provider", @"local_mt");
+                saveOk &= configSet(@"llm.output_translation.profile", @"");
+            } else if ([translationProfileId isEqualToString:kLlmOutputTranslationAppleProfileId]) {
+                saveOk &= configSet(@"llm.output_translation.provider", @"apple");
+                saveOk &= configSet(@"llm.output_translation.profile", @"");
+            } else {
+                saveOk &= configSet(@"llm.output_translation.provider", @"llm");
+                saveOk &= configSet(@"llm.output_translation.profile", translationProfileId);
+            }
         }
 
         [self syncActiveLlmProfileFromFields];
@@ -7394,13 +7551,14 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 }
 
 - (void)updateLlmFieldsEnabled {
-    BOOL correctionEnabled = (self.llmEnabledCheckbox.state == NSControlStateValueOn);
+    NSDictionary *activeProfile = [self activeLlmProfile];
+    NSString *provider = [activeProfile[@"provider"] isKindOfClass:[NSString class]] ? activeProfile[@"provider"] : @"openai";
+
     BOOL outputTranslationEnabled = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
-    BOOL enabled = correctionEnabled || outputTranslationEnabled;
-    self.llmProfileTableView.enabled = enabled;
-    self.llmAddProfileButton.enabled = enabled;
-    self.llmDeleteProfileButton.enabled = enabled && self.llmProfiles.count > 1;
-    self.llmProfileNameField.enabled = enabled;
+    self.llmProfileTableView.enabled = YES;
+    self.llmAddProfileButton.enabled = YES;
+    self.llmDeleteProfileButton.enabled = self.llmProfiles.count > 1;
+    self.llmProfileNameField.enabled = YES;
     if (self.llmOutputTranslationSettingsCard) {
         self.llmOutputTranslationSettingsCard.hidden = !outputTranslationEnabled;
     }
@@ -7414,8 +7572,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.llmOutputTranslationHintLabel.textColor = outputTranslationEnabled ? [NSColor secondaryLabelColor] : [NSColor tertiaryLabelColor];
     }
 
-    NSDictionary *activeProfile = [self activeLlmProfile];
-    NSString *provider = [activeProfile[@"provider"] isKindOfClass:[NSString class]] ? activeProfile[@"provider"] : @"openai";
     // APFEL is just an OpenAI-compatible endpoint with a distinct label, so it
     // reuses the same field set as "openai".
     BOOL isOpenAiLike = [provider isEqualToString:@"openai"] || [provider isEqualToString:@"apfel"];
@@ -7436,12 +7592,12 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.llmApiKeySecureField.hidden = showPlain;
     }
 
-    self.llmBaseUrlField.enabled = enabled;
-    self.llmApiKeyField.enabled = enabled;
-    self.llmApiKeySecureField.enabled = enabled;
-    self.llmModelField.enabled = enabled;
+    self.llmBaseUrlField.enabled = YES;
+    self.llmApiKeyField.enabled = YES;
+    self.llmApiKeySecureField.enabled = YES;
+    self.llmModelField.enabled = YES;
     self.llmToggleModelPickerButton.hidden = !isOpenAiLike;
-    self.llmToggleModelPickerButton.enabled = enabled && isOpenAiLike;
+    self.llmToggleModelPickerButton.enabled = isOpenAiLike;
     [self.llmToggleModelPickerButton setTitle:(self.llmRemoteModelPickerExpanded ? @"Hide" : @"Choose")];
     BOOL showRemoteModelPicker = isOpenAiLike && self.llmRemoteModelPickerExpanded;
     [self setLlmRemoteModelPickerRowVisible:showRemoteModelPicker];
@@ -7449,26 +7605,28 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
  forViewsWithTagInRange:NSMakeRange(2004, 1)
              inView:self.currentPaneView];
     BOOL hasSelectableRemoteModel = (self.llmRemoteModelPopup.selectedItem.representedObject != nil);
-    self.llmRemoteModelPopup.enabled = enabled && showRemoteModelPicker && hasSelectableRemoteModel;
-    self.llmRefreshModelsButton.enabled = enabled && showRemoteModelPicker;
-    self.llmChatCompletionsPathField.enabled = enabled;
-    self.maxTokenParamPopup.enabled = enabled;
-    self.llmTestButton.enabled = enabled;
+    self.llmRemoteModelPopup.enabled = showRemoteModelPicker && hasSelectableRemoteModel;
+    self.llmRefreshModelsButton.enabled = showRemoteModelPicker;
+    self.llmChatCompletionsPathField.enabled = YES;
+    self.maxTokenParamPopup.enabled = YES;
+    self.llmTestButton.enabled = YES;
 
     // Toggle MLX fields (tag 2010-2012)
     [self setHidden:!isMlx
  forViewsWithTagInRange:NSMakeRange(2010, 3)
              inView:self.currentPaneView];
     if (isMlx) {
-        self.llmLocalModelPopup.enabled = enabled;
-        self.llmModelDownloadButton.enabled = enabled;
-        self.llmModelDeleteButton.enabled = enabled;
+        self.llmLocalModelPopup.enabled = YES;
+        self.llmModelDownloadButton.enabled = YES;
+        self.llmModelDeleteButton.enabled = YES;
         // Progress bar stays hidden unless downloading
         self.llmModelProgressBar.hidden = YES;
         self.llmModelProgressSizeLabel.hidden = YES;
     }
+    [self layoutTemplatesPane];
     [self resizeLlmPaneToCurrentState];
     [self resizeHotkeyPaneToCurrentState];
+    [self resizeTemplatesPaneToCurrentState];
 }
 
 - (void)populateLlmLocalModelPopup {
