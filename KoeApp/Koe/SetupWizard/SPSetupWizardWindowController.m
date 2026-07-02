@@ -233,8 +233,7 @@ static NSString *asrPopupValueForWhisperLanguage(NSString *language) {
     };
     return mapping[normalized] ?: @"";
 }
-static NSString *const kLlmProfileAreaShiftIdentifier = @"llm-profile-area-shift";
-static const CGFloat kLlmOutputTranslationCollapsedDelta = 114.0;
+// (removed: kLlmProfileAreaShiftIdentifier and kLlmOutputTranslationCollapsedDelta are no longer needed)
 static const NSInteger kOverlayFontSizeDefault = 13;
 static const NSInteger kOverlayFontSizeMin = 12;
 static const NSInteger kOverlayFontSizeMax = 28;
@@ -781,7 +780,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSTextField *llmOutputTranslationTargetLanguageField;
 @property (nonatomic, strong) NSPopUpButton *llmOutputTranslationProfilePopup;
 @property (nonatomic, strong) NSTextField *llmOutputTranslationHintLabel;
-@property (nonatomic, assign) BOOL llmOutputTranslationCollapsed;
 
 // LLM max token parameter
 @property (nonatomic, strong) NSPopUpButton *maxTokenParamPopup;
@@ -929,6 +927,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)resizeCurrentPaneWindowToHeight:(CGFloat)targetHeight;
 - (CGFloat)targetLlmPaneHeight;
 - (void)resizeLlmPaneToCurrentState;
+- (CGFloat)targetHotkeyPaneHeight;
+- (void)resizeHotkeyPaneToCurrentState;
 - (NSString *)prettyNameForLlmProvider:(NSString *)provider;
 - (NSMutableDictionary *)activeLlmProfile;
 - (void)syncActiveLlmProfileFromFields;
@@ -967,6 +967,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (void)switchToPane:(NSString *)identifier;
 - (void)loadLlmPaneValues;
 - (void)applyInitialLlmPaneLayout;
+- (void)loadControlsPaneValues;
+- (void)applyInitialControlsPaneLayout;
 - (CGFloat)targetTranslationPaneHeightForPane:(NSView *)pane selectedStep:(NSInteger)selectedStep;
 - (void)resizeTranslationPaneToCurrentStep;
 - (NSView *)buildAsrPane;
@@ -1195,6 +1197,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.currentPaneView = paneView;
     if ([identifier isEqualToString:kToolbarLLM]) {
         [self applyInitialLlmPaneLayout];
+    } else if ([identifier isEqualToString:kToolbarHotkey]) {
+        [self applyInitialControlsPaneLayout];
     }
     self.window.toolbar.selectedItemIdentifier = identifier;
 
@@ -1664,7 +1668,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat paneWidth = kSettingsPaneWidth;
     CGFloat contentX = 24.0;
     CGFloat contentW = paneWidth - 48.0;
-    CGFloat contentHeight = 780;
+    CGFloat contentHeight = 620;
 
     // Sidebar (profile list) geometry
     CGFloat sidebarX = 24.0;
@@ -1681,59 +1685,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
 
+    // Ensure LLM control properties exist even if Controls pane hasn't been opened yet.
+    if (!self.llmEnabledCheckbox) {
+        self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
+    }
+    if (!self.llmOutputTranslationEnabledSwitch) {
+        self.llmOutputTranslationEnabledSwitch = [self settingsSwitchWithAction:@selector(llmOutputTranslationToggled:)];
+    }
+
     CGFloat y = contentHeight - 30.0;
-
-    // Description
-    NSTextField *desc = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.llm.description")
-                                                  toPane:pane
-                                                   topY:y
-                                                      x:contentX
-                                                  width:contentW];
-    y = NSMinY(desc.frame) - 16.0;
-
-    // Enabled toggle
-    self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
-    NSView *llmEnabledCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48.0, contentW, 48.0)
-                                                         title:KoeLocalizedString(@"setupWizard.llm.correction.title")
-                                                        toggle:self.llmEnabledCheckbox];
-    [pane addSubview:llmEnabledCard];
-    y = NSMinY(llmEnabledCard.frame) - 12.0;
-
-    // Output translation toggle + config
-    self.llmOutputTranslationEnabledSwitch = [self settingsSwitchWithAction:@selector(llmOutputTranslationToggled:)];
-    NSView *outputTranslationCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, y - 48.0, contentW, 48.0)
-                                                                title:KoeLocalizedString(@"setupWizard.llm.outputTranslation.title")
-                                                               toggle:self.llmOutputTranslationEnabledSwitch];
-    [pane addSubview:outputTranslationCard];
-    y = NSMinY(outputTranslationCard.frame) - 12.0;
-
-    CGFloat translationCardHeight = 104.0;
-    self.llmOutputTranslationSettingsCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, y - translationCardHeight, contentW, translationCardHeight)];
-    [pane addSubview:self.llmOutputTranslationSettingsCard];
-
-    CGFloat translationLabelW = 120.0;
-    CGFloat translationFieldX = 16.0 + translationLabelW + 12.0;
-    CGFloat translationFieldW = contentW - translationFieldX - 16.0;
-    CGFloat translationRowSpacing = 28.0;
-    CGFloat translationRowY = translationCardHeight - 34.0;
-
-    NSTextField *translationTargetLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguage") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
-    [self.llmOutputTranslationSettingsCard addSubview:translationTargetLabel];
-    self.llmOutputTranslationTargetLanguageField = [self formTextField:NSMakeRect(translationFieldX, translationRowY, 180, 22) placeholder:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguagePlaceholder")];
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationTargetLanguageField];
-    translationRowY -= translationRowSpacing;
-
-    NSTextField *translationProfileLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.profile") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
-    [self.llmOutputTranslationSettingsCard addSubview:translationProfileLabel];
-    self.llmOutputTranslationProfilePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(translationFieldX, translationRowY - 2, 220, 26) pullsDown:NO];
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationProfilePopup];
-    translationRowY -= translationRowSpacing;
-    self.llmOutputTranslationHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.hint")];
-    CGFloat translationHintHeight = [self fittingHeightForWrappingLabel:self.llmOutputTranslationHintLabel width:translationFieldW];
-    self.llmOutputTranslationHintLabel.frame = NSMakeRect(translationFieldX, MAX(10.0, translationRowY - 2), translationFieldW, translationHintHeight);
-    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationHintLabel];
-
-    y = NSMinY(self.llmOutputTranslationSettingsCard.frame) - 10.0;
 
     NSTextField *sectionTitle = [self sectionTitleLabel:KoeLocalizedString(@"setupWizard.common.profiles")
                                                   frame:NSMakeRect(contentX, floor(y - 20.0), contentW, 20.0)];
@@ -2005,16 +1965,6 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     self.llmModelProgressSizeLabel.hidden = YES;
     [pane addSubview:self.llmModelProgressSizeLabel];
 
-    CGFloat llmProfileAreaMaxY = NSMaxY(sectionTitle.frame) + 1.0;
-    for (NSView *subview in pane.subviews) {
-        if (subview == llmEnabledCard || subview == outputTranslationCard || subview == self.llmOutputTranslationSettingsCard) {
-            continue;
-        }
-        if (subview.frame.origin.y >= profilesBottomY && subview.frame.origin.y <= llmProfileAreaMaxY) {
-            subview.identifier = kLlmProfileAreaShiftIdentifier;
-        }
-    }
-
     // Save / Cancel buttons
     [self addButtonsToPane:pane atY:16 width:paneWidth];
 
@@ -2176,6 +2126,52 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     CGFloat cardWidth = paneWidth - 48;
     CGFloat cardSpacing = 16.0;
     CGFloat topPad = 24.0;
+    CGFloat contentX = 24.0;
+    CGFloat contentW = paneWidth - 48.0;
+
+    // ── Description ──
+    CGFloat descHeight = 28.0;
+
+    // ── Default Correction toggle ──
+    self.llmEnabledCheckbox = [self settingsSwitchWithAction:@selector(llmEnabledToggled:)];
+    NSView *llmEnabledCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, cardWidth, 48.0)
+                                                         title:KoeLocalizedString(@"setupWizard.llm.correction.title")
+                                                        toggle:self.llmEnabledCheckbox];
+    CGFloat correctionCardH = llmEnabledCard.frame.size.height;
+
+    // ── Output Translation toggle ──
+    self.llmOutputTranslationEnabledSwitch = [self settingsSwitchWithAction:@selector(llmOutputTranslationToggled:)];
+    NSView *outputTranslationCard = [self settingsToggleCardWithFrame:NSMakeRect(contentX, 0, cardWidth, 48.0)
+                                                                title:KoeLocalizedString(@"setupWizard.llm.outputTranslation.title")
+                                                               toggle:self.llmOutputTranslationEnabledSwitch];
+    CGFloat translationCardH = outputTranslationCard.frame.size.height;
+
+    // ── Output Translation settings card ──
+    CGFloat translationSettingsCardH = 104.0;
+    self.llmOutputTranslationSettingsCard = [self surfaceCardViewWithFrame:NSMakeRect(contentX, 0, cardWidth, translationSettingsCardH)];
+
+    CGFloat translationLabelW = 120.0;
+    CGFloat translationFieldX = 16.0 + translationLabelW + 12.0;
+    CGFloat translationFieldW = cardWidth - translationFieldX - 16.0;
+    CGFloat translationRowSpacing = 28.0;
+    CGFloat translationRowY = translationSettingsCardH - 34.0;
+
+    NSTextField *translationTargetLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguage") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
+    [self.llmOutputTranslationSettingsCard addSubview:translationTargetLabel];
+    self.llmOutputTranslationTargetLanguageField = [self formTextField:NSMakeRect(translationFieldX, translationRowY, 180, 22) placeholder:KoeLocalizedString(@"setupWizard.llm.outputTranslation.targetLanguagePlaceholder")];
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationTargetLanguageField];
+    translationRowY -= translationRowSpacing;
+
+    NSTextField *translationProfileLabel = [self formLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.profile") frame:NSMakeRect(16, translationRowY, translationLabelW, 22)];
+    [self.llmOutputTranslationSettingsCard addSubview:translationProfileLabel];
+    self.llmOutputTranslationProfilePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(translationFieldX, translationRowY - 2, 220, 26) pullsDown:NO];
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationProfilePopup];
+    translationRowY -= translationRowSpacing;
+    self.llmOutputTranslationHintLabel = [self descriptionLabel:KoeLocalizedString(@"setupWizard.llm.outputTranslation.hint")];
+    CGFloat translationHintHeight = [self fittingHeightForWrappingLabel:self.llmOutputTranslationHintLabel width:translationFieldW];
+    self.llmOutputTranslationHintLabel.frame = NSMakeRect(translationFieldX, MAX(10.0, translationRowY - 2), translationFieldW, translationHintHeight);
+    [self.llmOutputTranslationSettingsCard addSubview:self.llmOutputTranslationHintLabel];
+    self.llmOutputTranslationSettingsCard.hidden = YES; // starts hidden; revealed by loadControlsPaneValues
 
     // ── Trigger Key ──
     self.hotkeyPopup = [self hotkeyPresetPopup];
@@ -2220,14 +2216,40 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     // ── Layout ──
     CGFloat triggerH = triggerCard.frame.size.height;
     CGFloat feedbackH = feedbackCard.frame.size.height;
-    CGFloat contentHeight = topPad + triggerH + cardSpacing + feedbackH + 56;
+    // Correction card + spacing + translation toggle card + spacing + settings card + spacing + trigger + feedback
+    CGFloat contentHeight = topPad + descHeight + cardSpacing
+                          + correctionCardH + cardSpacing
+                          + translationCardH + cardSpacing
+                          + translationSettingsCardH + cardSpacing
+                          + triggerH + cardSpacing + feedbackH + 56;
 
     NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
     [self applySettingsPaneBackgroundToView:pane];
 
     CGFloat y = contentHeight - topPad;
 
-    y -= triggerH;
+    // Description
+    NSTextField *desc = [self addSettingsDescriptionText:KoeLocalizedString(@"setupWizard.llm.description")
+                                                  toPane:pane
+                                                   topY:y
+                                                      x:contentX
+                                                  width:contentW];
+    y = NSMinY(desc.frame) - 12.0;
+
+    // Default Correction card
+    y -= correctionCardH;
+    llmEnabledCard.frame = NSMakeRect(contentX, y, cardWidth, correctionCardH);
+    [pane addSubview:llmEnabledCard];
+
+    y -= cardSpacing + translationCardH;
+    outputTranslationCard.frame = NSMakeRect(contentX, y, cardWidth, translationCardH);
+    [pane addSubview:outputTranslationCard];
+
+    y -= cardSpacing + translationSettingsCardH;
+    self.llmOutputTranslationSettingsCard.frame = NSMakeRect(contentX, y, cardWidth, translationSettingsCardH);
+    [pane addSubview:self.llmOutputTranslationSettingsCard];
+
+    y -= cardSpacing + triggerH;
     triggerCard.frame = NSMakeRect(24, y, cardWidth, triggerH);
     [pane addSubview:triggerCard];
     // Fix control positions — the card's child (index 1) is the white card view
@@ -5577,28 +5599,24 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 }
 
 - (void)loadLlmPaneValues {
-  NSString *enabled = configGet(@"llm.enabled");
-  self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
-  NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
-  self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
-  NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
-  self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
-
+  // Only load profile data — checkbox states are managed by the Controls pane.
   [self loadLlmProfilesFromCore];
-  NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
-  NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
-      ? kLlmOutputTranslationLocalMtProfileId
-      : configGet(@"llm.output_translation.profile");
-  BOOL matchedTranslationProfile = NO;
-  for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
-    if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
-      [self.llmOutputTranslationProfilePopup selectItemAtIndex:i];
-      matchedTranslationProfile = YES;
-      break;
+  if (self.llmOutputTranslationProfilePopup) {
+    NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
+    NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
+        ? kLlmOutputTranslationLocalMtProfileId
+        : configGet(@"llm.output_translation.profile");
+    BOOL matchedTranslationProfile = NO;
+    for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
+      if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
+        [self.llmOutputTranslationProfilePopup selectItemAtIndex:i];
+        matchedTranslationProfile = YES;
+        break;
+      }
     }
-  }
-  if (!matchedTranslationProfile) {
-    [self.llmOutputTranslationProfilePopup selectItemAtIndex:0];
+    if (!matchedTranslationProfile) {
+      [self.llmOutputTranslationProfilePopup selectItemAtIndex:0];
+    }
   }
   self.llmTestResultLabel.stringValue = @"";
   [self updateLlmFieldsEnabled];
@@ -5616,6 +5634,72 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   NSRect paneFrame = self.currentPaneView.frame;
   paneFrame.size.height = [self targetLlmPaneHeight];
   self.currentPaneView.frame = paneFrame;
+}
+
+- (void)loadControlsPaneValues {
+  NSString *enabled = configGet(@"llm.enabled");
+  if (self.llmEnabledCheckbox) {
+    self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
+  }
+  NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
+  if (self.llmOutputTranslationEnabledSwitch) {
+    self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+  }
+  NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
+  if (self.llmOutputTranslationTargetLanguageField) {
+    self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
+  }
+
+  [self loadLlmProfilesFromCore];
+  if (self.llmOutputTranslationProfilePopup) {
+    NSString *translationProfileProvider = configGet(@"llm.output_translation.provider");
+    NSString *translationProfile = [translationProfileProvider isEqualToString:@"local_mt"]
+        ? kLlmOutputTranslationLocalMtProfileId
+        : configGet(@"llm.output_translation.profile");
+    BOOL matchedTranslationProfile = NO;
+    for (NSInteger i = 0; i < self.llmOutputTranslationProfilePopup.numberOfItems; i++) {
+      if ([[self.llmOutputTranslationProfilePopup itemAtIndex:i].representedObject isEqualToString:(translationProfile ?: @"")]) {
+        [self.llmOutputTranslationProfilePopup selectItemAtIndex:i];
+        matchedTranslationProfile = YES;
+        break;
+      }
+    }
+    if (!matchedTranslationProfile) {
+      [self.llmOutputTranslationProfilePopup selectItemAtIndex:0];
+    }
+  }
+  if (self.llmOutputTranslationSettingsCard) {
+    self.llmOutputTranslationSettingsCard.hidden = !(self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
+  }
+}
+
+- (void)applyInitialControlsPaneLayout {
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarHotkey] || self.currentPaneView == nil) {
+    return;
+  }
+
+  self.suppressDynamicPaneResize = YES;
+  [self loadControlsPaneValues];
+  self.suppressDynamicPaneResize = NO;
+}
+
+- (CGFloat)targetHotkeyPaneHeight {
+  if (!self.currentPaneView) {
+    return 0.0;
+  }
+
+  CGFloat targetHeight = [self minimumHeightForVisibleSubviewsInView:self.currentPaneView
+                                                       bottomPadding:64.0
+                                                        ignoringViews:@[]];
+  return MAX(targetHeight, 400.0);
+}
+
+- (void)resizeHotkeyPaneToCurrentState {
+  if (![self.currentPaneIdentifier isEqualToString:kToolbarHotkey]) {
+    return;
+  }
+
+  [self resizeCurrentPaneWindowToHeight:[self targetHotkeyPaneHeight]];
 }
 
 - (CGFloat)targetLlmPaneHeight {
@@ -6286,6 +6370,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 }
 
 - (void)reloadLlmOutputTranslationProfilePopupPreservingSelection:(BOOL)preserveSelection {
+    if (!self.llmOutputTranslationProfilePopup) return;
+
     NSString *selectedProfileId = @"";
     if (preserveSelection && self.llmOutputTranslationProfilePopup.selectedItem.representedObject) {
         selectedProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject;
@@ -6662,6 +6748,23 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             [self.triggerModePopup selectItemAtIndex:0];
         }
 
+        // LLM correction / output translation toggles (moved from LLM pane)
+        NSString *llmEnabled = configGet(@"llm.enabled");
+        if (self.llmEnabledCheckbox) {
+            self.llmEnabledCheckbox.state = ([llmEnabled isEqualToString:@"false"]) ? NSControlStateValueOff : NSControlStateValueOn;
+        }
+        NSString *translationEnabled = configGet(@"llm.output_translation.enabled");
+        if (self.llmOutputTranslationEnabledSwitch) {
+            self.llmOutputTranslationEnabledSwitch.state = [translationEnabled isEqualToString:@"true"] ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+        NSString *outputTranslationTarget = configGet(@"llm.output_translation.target_language");
+        if (self.llmOutputTranslationTargetLanguageField) {
+            self.llmOutputTranslationTargetLanguageField.stringValue = outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English";
+        }
+        if (self.llmOutputTranslationSettingsCard) {
+            self.llmOutputTranslationSettingsCard.hidden = !(self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn);
+        }
+
         NSString *startSound = configGet(@"feedback.start_sound");
         NSString *stopSound = configGet(@"feedback.stop_sound");
         NSString *errorSound = configGet(@"feedback.error_sound");
@@ -6956,14 +7059,20 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         NSString *enabledStr = (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true" : @"false";
         saveOk &= configSet(@"llm.enabled", enabledStr);
 
-        NSString *outputTranslationEnabled = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
-        saveOk &= configSet(@"llm.output_translation.enabled", outputTranslationEnabled);
-        NSString *outputTranslationTarget = [[self.llmOutputTranslationTargetLanguageField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
-        saveOk &= configSet(@"llm.output_translation.target_language", outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English");
-        NSString *translationProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject ?: @"";
-        BOOL outputTranslationUsesLocalMt = [translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId];
-        saveOk &= configSet(@"llm.output_translation.provider", outputTranslationUsesLocalMt ? @"local_mt" : @"llm");
-        saveOk &= configSet(@"llm.output_translation.profile", outputTranslationUsesLocalMt ? @"" : translationProfileId);
+        if (self.llmOutputTranslationEnabledSwitch) {
+            NSString *outputTranslationEnabled = (self.llmOutputTranslationEnabledSwitch.state == NSControlStateValueOn) ? @"true" : @"false";
+            saveOk &= configSet(@"llm.output_translation.enabled", outputTranslationEnabled);
+        }
+        if (self.llmOutputTranslationTargetLanguageField) {
+            NSString *outputTranslationTarget = [[self.llmOutputTranslationTargetLanguageField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+            saveOk &= configSet(@"llm.output_translation.target_language", outputTranslationTarget.length > 0 ? outputTranslationTarget : @"English");
+        }
+        if (self.llmOutputTranslationProfilePopup) {
+            NSString *translationProfileId = self.llmOutputTranslationProfilePopup.selectedItem.representedObject ?: @"";
+            BOOL outputTranslationUsesLocalMt = [translationProfileId isEqualToString:kLlmOutputTranslationLocalMtProfileId];
+            saveOk &= configSet(@"llm.output_translation.provider", outputTranslationUsesLocalMt ? @"local_mt" : @"llm");
+            saveOk &= configSet(@"llm.output_translation.profile", outputTranslationUsesLocalMt ? @"" : translationProfileId);
+        }
 
         [self syncActiveLlmProfileFromFields];
         NSDictionary *payload = @{
@@ -7157,37 +7266,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     [self updateLlmFieldsEnabled];
 }
 
-- (void)updateLlmOutputTranslationLayoutForExpanded:(BOOL)expanded {
-    if (self.currentPaneView == nil || self.llmProfileTableScroll == nil) {
-        return;
-    }
-
-    BOOL shouldCollapse = !expanded;
-    if (self.llmOutputTranslationCollapsed == shouldCollapse) {
-        return;
-    }
-
-    for (NSView *subview in self.currentPaneView.subviews) {
-        if (![subview.identifier isEqualToString:kLlmProfileAreaShiftIdentifier]) {
-            continue;
-        }
-        if (subview == self.llmProfileTableScroll) {
-            NSRect frame = subview.frame;
-            frame.size.height += shouldCollapse ? kLlmOutputTranslationCollapsedDelta : -kLlmOutputTranslationCollapsedDelta;
-            subview.frame = frame;
-            continue;
-        }
-        if (subview == self.llmAddProfileButton || subview == self.llmDeleteProfileButton) {
-            continue;
-        }
-        NSRect frame = subview.frame;
-        frame.origin.y += shouldCollapse ? kLlmOutputTranslationCollapsedDelta : -kLlmOutputTranslationCollapsedDelta;
-        subview.frame = frame;
-    }
-
-    self.llmOutputTranslationCollapsed = shouldCollapse;
-}
-
 - (void)toggleLlmRemoteModelPicker:(id)sender {
     self.llmRemoteModelPickerExpanded = !self.llmRemoteModelPickerExpanded;
     if (self.llmRemoteModelPickerExpanded) {
@@ -7323,11 +7401,18 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     self.llmAddProfileButton.enabled = enabled;
     self.llmDeleteProfileButton.enabled = enabled && self.llmProfiles.count > 1;
     self.llmProfileNameField.enabled = enabled;
-    self.llmOutputTranslationSettingsCard.hidden = !outputTranslationEnabled;
-    self.llmOutputTranslationTargetLanguageField.enabled = outputTranslationEnabled;
-    self.llmOutputTranslationProfilePopup.enabled = outputTranslationEnabled;
-    self.llmOutputTranslationHintLabel.textColor = outputTranslationEnabled ? [NSColor secondaryLabelColor] : [NSColor tertiaryLabelColor];
-    [self updateLlmOutputTranslationLayoutForExpanded:outputTranslationEnabled];
+    if (self.llmOutputTranslationSettingsCard) {
+        self.llmOutputTranslationSettingsCard.hidden = !outputTranslationEnabled;
+    }
+    if (self.llmOutputTranslationTargetLanguageField) {
+        self.llmOutputTranslationTargetLanguageField.enabled = outputTranslationEnabled;
+    }
+    if (self.llmOutputTranslationProfilePopup) {
+        self.llmOutputTranslationProfilePopup.enabled = outputTranslationEnabled;
+    }
+    if (self.llmOutputTranslationHintLabel) {
+        self.llmOutputTranslationHintLabel.textColor = outputTranslationEnabled ? [NSColor secondaryLabelColor] : [NSColor tertiaryLabelColor];
+    }
 
     NSDictionary *activeProfile = [self activeLlmProfile];
     NSString *provider = [activeProfile[@"provider"] isKindOfClass:[NSString class]] ? activeProfile[@"provider"] : @"openai";
@@ -7383,6 +7468,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         self.llmModelProgressSizeLabel.hidden = YES;
     }
     [self resizeLlmPaneToCurrentState];
+    [self resizeHotkeyPaneToCurrentState];
 }
 
 - (void)populateLlmLocalModelPopup {
