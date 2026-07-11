@@ -1,11 +1,11 @@
 {
-  "version": "1.0.18",
-  "build": 19,
+  "version": "1.0.19",
+  "build": 20,
   "published_at": "2026-07-11T00:00:00Z",
   "minimum_system_version": "14.0",
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.18/Koe-macOS-arm64.zip",
-  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.18",
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.19/Koe-macOS-arm64.zip",
+  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.19",
   "notes": [
-    "Fix the first Apple Translation attempt failing with \"Source language is not installed\". A supported-but-not-yet-downloaded language pair now triggers the download and waits for it to finish, instead of erroring out (which previously only succeeded on the second attempt)."
+    "Selecting a microphone from the menu-bar Microphone submenu now also sets it as the translation input source. Previously translation stayed on \"system audio\" unless changed in the Setup Wizard, so speaking into the mic produced no translated output. The active translation session hot-switches to the new input source immediately."
   ]
 }

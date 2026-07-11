@@ -619,6 +619,18 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     [self.audioDeviceManager selectDevice:uid name:name];
     NSLog(@"[Koe] Audio device selected: %@", uid ?: @"System Default");
 
+    // The menu-bar Microphone menu only lists real input devices (and System
+    // Default). Picking any of them means the user wants microphone input, so
+    // also make it the translation input source. This keeps the regular voice
+    // input and the translation mode input source consistent, instead of
+    // leaving translation silently on "system_audio". To capture system audio
+    // for translation, use the Setup Wizard's translation input selector.
+    NSString *previousSource = [[NSUserDefaults standardUserDefaults] stringForKey:@"SPTranslationInputSource"];
+    if (![previousSource isEqualToString:@"microphone"]) {
+        [[NSUserDefaults standardUserDefaults] setObject:@"microphone" forKey:@"SPTranslationInputSource"];
+        NSLog(@"[Koe] Translation input source switched to microphone via menu selection (was %@)", previousSource ?: @"(unset)");
+    }
+
     if ([self.delegate respondsToSelector:@selector(statusBarDidSelectAudioDeviceWithUID:)]) {
         [self.delegate statusBarDidSelectAudioDeviceWithUID:uid];
     }

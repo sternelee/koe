@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.19 - 2026-07-11
+
+### Changed
+
+- Selecting a microphone from the menu-bar Microphone submenu now also sets it as the translation input source (previously translation stayed on "system audio" unless changed in the Setup Wizard, so speaking into the mic produced no translated output). The active translation session hot-switches to the new input source immediately.
+
 ## 1.0.18 - 2026-07-11
 
 ### Fixed

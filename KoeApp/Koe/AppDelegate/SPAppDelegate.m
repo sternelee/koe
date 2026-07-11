@@ -762,6 +762,11 @@ static BOOL configFlagEnabled(const char *keyPath) {
 
 - (void)statusBarDidSelectAudioDeviceWithUID:(NSString *)uid {
     NSLog(@"[Koe] Audio input device changed: %@", uid ?: @"System Default");
+    // Re-evaluate the translation audio source so a menu-bar microphone pick
+    // (which also flips SPTranslationInputSource to "microphone") takes effect
+    // for translation immediately, including hot-switching away from system
+    // audio capture. No-op when the source class is unchanged.
+    [self refreshTranslationAudioSourceFromConfig];
 }
 
 /// Keep the status-bar toggle synchronized with the actual translation runtime
