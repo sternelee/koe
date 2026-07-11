@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.18 - 2026-07-11
+
+### Fixed
+
+- Fixed the first Apple Translation attempt failing with "Source language is not installed". When a supported language pair was not yet downloaded on-device, the framework now requests the download and waits for it to finish instead of erroring out (which previously only succeeded on the second attempt).
+
 ## 1.0.17 - 2026-07-11
 
 ### Changed

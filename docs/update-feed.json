@@ -1,13 +1,11 @@
 {
-  "version": "1.0.17",
-  "build": 18,
+  "version": "1.0.18",
+  "build": 19,
   "published_at": "2026-07-11T00:00:00Z",
   "minimum_system_version": "14.0",
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.17/Koe-macOS-arm64.zip",
-  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.17",
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.18/Koe-macOS-arm64.zip",
+  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.18",
   "notes": [
-    "Clarify LLM-related settings around Model & Connection, Default Output, and Quick Rewrite.",
-    "Make quick rewrite actions operate on the final pasted output instead of the raw ASR transcript.",
-    "Fix Output Translation not producing translated text when the provider is set to Apple Translation. The apple provider was not wired into the output-translation pipeline, so it silently fell back to the un-translated text. Apple Translation now runs on-device without requiring an LLM profile."
+    "Fix the first Apple Translation attempt failing with \"Source language is not installed\". A supported-but-not-yet-downloaded language pair now triggers the download and waits for it to finish, instead of erroring out (which previously only succeeded on the second attempt)."
   ]
 }
