@@ -1131,6 +1131,28 @@ async fn run_session(
                 output_translation_source_language.as_deref(),
             );
             mt.translate(&corrected_text, source_language, &target_language).await
+        } else if llm_config
+            .output_translation
+            .provider
+            .trim()
+            .eq_ignore_ascii_case("apple")
+        {
+            // Apple Translation runs on-device via the Swift Translation
+            // framework. It does not use an LLM profile, so build a dedicated
+            // MT client with the Apple provider regardless of the root-level
+            // `translation.mt` config (which is for the virtual-mic pipeline).
+            let source_language = output_translation_source_language.as_deref().unwrap_or("auto");
+            let apple_mt_config = crate::translation::config::MtConfig {
+                provider: crate::translation::config::MtProvider::Apple,
+                enabled: true,
+                ..crate::translation::config::MtConfig::default()
+            };
+            let mt = crate::translation::mt::MtClient::new(
+                llm_http_client.clone(),
+                apple_mt_config,
+                output_translation_source_language.as_deref(),
+            );
+            mt.translate(&corrected_text, source_language, &target_language).await
         } else {
             let translation_profile = llm_config
                 .output_translation_profile_config()
@@ -1278,11 +1300,24 @@ fn llm_output_translation_enabled_for_session(
     mt_config: &crate::translation::config::MtConfig,
     source_language: Option<&str>,
 ) -> bool {
-    if !cfg.enabled || !cfg.output_translation.enabled {
+    if !cfg.output_translation.enabled {
         return false;
     }
-    if cfg.output_translation.provider.trim().eq_ignore_ascii_case("local_mt") {
+    let provider = cfg.output_translation.provider.trim();
+    // Apple Translation runs on-device via the Swift Translation framework and
+    // does not require an LLM profile, so it stays available even when LLM
+    // correction is disabled. Availability is verified at translate time (the
+    // Swift bridge returns an error if the framework is missing).
+    if provider.eq_ignore_ascii_case("apple") {
+        return true;
+    }
+    // Local MT also runs on-device and does not require an LLM profile.
+    if provider.eq_ignore_ascii_case("local_mt") {
         return local_mt_config_ready_for_output_translation(mt_config, source_language);
+    }
+    // LLM-based translation requires the LLM to be enabled and a ready profile.
+    if !cfg.enabled {
+        return false;
     }
     cfg.output_translation_profile_config()
         .map(|profile| profile.is_ready())
@@ -2940,6 +2975,38 @@ mod tests {
         let mut cfg = Config::default().llm;
         cfg.enabled = false;
         cfg.output_translation.enabled = true;
+
+        assert!(!llm_output_translation_enabled_for_session(
+            &cfg,
+            &crate::translation::config::MtConfig::default(),
+            None,
+        ));
+    }
+
+    #[test]
+    fn output_translation_apple_provider_works_without_llm_profile() {
+        // Apple Translation runs on-device and must not require an enabled LLM
+        // or a ready LLM profile. This mirrors the root-level translation
+        // pipeline (`translation_mt_ready` treats MtProvider::Apple as ready).
+        let mut cfg = Config::default().llm;
+        cfg.enabled = false;
+        cfg.output_translation.enabled = true;
+        cfg.output_translation.provider = "apple".into();
+        // No profiles are configured, so an LLM-based check would fail here.
+
+        assert!(llm_output_translation_enabled_for_session(
+            &cfg,
+            &crate::translation::config::MtConfig::default(),
+            None,
+        ));
+    }
+
+    #[test]
+    fn output_translation_apple_provider_disabled_when_output_translation_off() {
+        let mut cfg = Config::default().llm;
+        cfg.enabled = true;
+        cfg.output_translation.enabled = false;
+        cfg.output_translation.provider = "apple".into();
 
         assert!(!llm_output_translation_enabled_for_session(
             &cfg,

@@ -2,12 +2,16 @@
 
 All notable user-facing changes to Koe are documented here.
 
-## Unreleased
+## 1.0.17 - 2026-07-11
 
 ### Changed
 
 - Renamed the settings information architecture around LLM output: LLM is now presented as Model & Connection, System Prompt as Default Output, and Templates as Quick Rewrite.
 - Changed quick rewrite actions to use the final pasted output as their input instead of the raw ASR transcript, so second-pass rewrites match what the user just saw.
+
+### Fixed
+
+- Fixed Output Translation not producing translated text when the provider was set to Apple Translation. The `apple` provider was not handled in the output-translation pipeline, so it silently fell back to the un-translated (e.g. Chinese) text instead of calling the on-device Apple Translation framework. Apple Translation now runs on-device without requiring an LLM profile.
 
 ## 1.0.16 - 2026-05-30
 

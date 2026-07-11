@@ -1,16 +1,13 @@
 {
-  "version": "1.0.16",
-  "build": 17,
-  "published_at": "2026-05-30T00:00:00Z",
+  "version": "1.0.17",
+  "build": 18,
+  "published_at": "2026-07-11T00:00:00Z",
   "minimum_system_version": "14.0",
-  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.16/Koe-macOS-arm64.zip",
-  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.16",
+  "download_url": "https://github.com/missuo/koe/releases/download/v1.0.17/Koe-macOS-arm64.zip",
+  "release_notes_url": "https://github.com/missuo/koe/releases/tag/v1.0.17",
   "notes": [
     "Clarify LLM-related settings around Model & Connection, Default Output, and Quick Rewrite.",
     "Make quick rewrite actions operate on the final pasted output instead of the raw ASR transcript.",
-    "Add a Translation settings input-source selector that can use either a microphone or macOS System Audio for live translation input.",
-    "Add Screen Recording permission prompts and in-app guidance for system-audio translation capture.",
-    "Fix translation mode teardown and restart races when switching translation input sources or quitting while system-audio capture is active.",
-    "Fix stale translation callbacks and unexpected ScreenCaptureKit stop events so translation mode shuts down more cleanly."
+    "Fix Output Translation not producing translated text when the provider is set to Apple Translation. The apple provider was not wired into the output-translation pipeline, so it silently fell back to the un-translated text. Apple Translation now runs on-device without requiring an LLM profile."
   ]
 }
