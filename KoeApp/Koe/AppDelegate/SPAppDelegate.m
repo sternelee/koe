@@ -46,9 +46,14 @@ static BOOL configFlagEnabled(const char *keyPath) {
     char *rawValue = sp_config_get(keyPath);
     if (!rawValue) return NO;
 
-    BOOL enabled = strcmp(rawValue, "true") == 0;
+    NSString *value = [[[NSString stringWithUTF8String:rawValue] ?: @""
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
     sp_core_free_string(rawValue);
-    return enabled;
+    return [value isEqualToString:@"1"] ||
+           [value isEqualToString:@"true"] ||
+           [value isEqualToString:@"yes"] ||
+           [value isEqualToString:@"on"];
 }
 
 - (BOOL)prepareAudioQueueForResolvedDevice {
