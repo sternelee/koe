@@ -811,6 +811,15 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
 
     drop(global); // Release lock before spawning
 
+    // Trim-aware empty guard: a whitespace-only input carries no content, and
+    // feeding it to the LLM makes the model regurgitate the prompt's dictionary
+    // section instead of rewriting. Echo the original back and skip the call.
+    if asr_text.trim().is_empty() {
+        log::info!("sp_core_rewrite_with_template: empty ASR text, skipping LLM");
+        invoke_rewrite_text_ready(session_token, &asr_text);
+        return 0;
+    }
+
     runtime_handle.spawn(async move {
         log::info!(
             "rewrite: using template '{}' with {} chars of ASR text",
@@ -873,12 +882,25 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
 
         match llm.correct(&request).await {
             Ok(result) => {
-                log::info!(
-                    "rewrite: template '{}' produced {} chars",
-                    template.name,
-                    result.len()
-                );
-                invoke_rewrite_text_ready(session_token, &result);
+                if prompt::looks_like_degenerate_rewrite(
+                    &result,
+                    &request.asr_text,
+                    &request.dictionary_entries,
+                ) {
+                    log::warn!(
+                        "rewrite: template '{}' output looks degenerate ({} chars); falling back to ASR text",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &asr_text);
+                } else {
+                    log::info!(
+                        "rewrite: template '{}' produced {} chars",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &result);
+                }
             }
             Err(e) => {
                 log::error!("rewrite: template '{}' failed: {e}", template.name);
@@ -1124,9 +1146,12 @@ async fn run_session(
     }
 
     let asr_text = aggregator.best_text().to_string();
-    if asr_text.is_empty() {
+    if asr_text.trim().is_empty() {
         // A silent recording is a valid no-op, not a user-visible failure.
         // Exit quietly so the app returns to idle without error sounds or alerts.
+        // NOTE: must be trim-aware — a whitespace-only ASR result is non-empty
+        // but carries no content, and feeding it to the LLM makes the model
+        // regurgitate the prompt's dictionary section instead of producing text.
         log::info!(
             "[{session_id}] no ASR text available: treating silent recording as empty result"
         );
@@ -1246,8 +1271,21 @@ async fn run_session(
         match llm.correct(&request).await {
             Ok(corrected) => {
                 mark_llm_connection_touched(&llm_warmup_state);
-                log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
-                corrected
+                if prompt::looks_like_degenerate_rewrite(
+                    &corrected,
+                    &request.asr_text,
+                    &request.dictionary_entries,
+                ) {
+                    log::warn!(
+                        "[{session_id}] LLM output looks degenerate ({} chars from {} chars ASR); falling back to raw ASR text",
+                        corrected.len(),
+                        request.asr_text.len()
+                    );
+                    asr_text
+                } else {
+                    log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
+                    corrected
+                }
             }
             Err(e) => {
                 log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");

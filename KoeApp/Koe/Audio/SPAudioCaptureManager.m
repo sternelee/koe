@@ -52,6 +52,15 @@ static const NSTimeInterval kAudioLifecycleTimeoutSec = 3.0;
 @property (nonatomic, assign) BOOL didMuteOutput;
 @property (nonatomic, assign) AudioObjectID mutedOutputDevice;
 
+// Output volume save/restore. When AirPods are used as the recording mic they
+// switch A2DP→HFP, and macOS tracks media and call volume separately — so
+// playback can come back at a different level once recording ends. Capture the
+// pre-recording volume (while still A2DP) and re-assert it on stop. Guarded to a
+// sane audible range so we never zero the user's playback.
+@property (nonatomic, assign) BOOL didSaveVolume;
+@property (nonatomic, assign) AudioObjectID savedVolumeDevice;
+@property (nonatomic, assign) Float32 savedVolume;
+
 - (BOOL)startPreparedQueue;
 - (void)stopAndReprepare;
 - (BOOL)disposeQueue;
@@ -60,6 +69,8 @@ static const NSTimeInterval kAudioLifecycleTimeoutSec = 3.0;
                         lateCleanup:(dispatch_block_t)lateCleanup;
 - (void)muteSystemOutput;
 - (void)restoreSystemOutput;
+- (void)saveSystemOutputVolume;
+- (void)restoreSystemOutputVolume;
 
 @end
 
@@ -80,6 +91,31 @@ static AudioObjectID koeDefaultOutputDevice(void) {
         return kAudioObjectUnknown;
     }
     return device;
+}
+
+static BOOL koeReadOutputVolume(AudioObjectID device, Float32 *outValue) {
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyVolumeScalar,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    if (!AudioObjectHasProperty(device, &addr)) return NO;
+    UInt32 size = sizeof(*outValue);
+    if (AudioObjectGetPropertyData(device, &addr, 0, NULL, &size, outValue) != noErr) return NO;
+    return size == sizeof(Float32); // reject a malformed HAL response
+}
+
+static BOOL koeWriteOutputVolume(AudioObjectID device, Float32 value) {
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyVolumeScalar,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    Boolean settable = false;
+    if (AudioObjectIsPropertySettable(device, &addr, &settable) != noErr || !settable) {
+        return NO;
+    }
+    return AudioObjectSetPropertyData(device, &addr, 0, NULL, sizeof(value), &value) == noErr;
 }
 
 static double elapsedMillisecondsSince(uint64_t startedAt) {
@@ -195,6 +231,9 @@ static void queueInputCallback(void *userData,
         _muteOutputEnabled = NO;
         _didMuteOutput = NO;
         _mutedOutputDevice = kAudioObjectUnknown;
+        _didSaveVolume = NO;
+        _savedVolumeDevice = kAudioObjectUnknown;
+        _savedVolume = 0.0f;
         _lifecycleQueue = dispatch_queue_create("nz.owo.koe.audio-lifecycle",
                                                 DISPATCH_QUEUE_SERIAL);
         _lifecycleLock = [[NSObject alloc] init];
@@ -440,10 +479,18 @@ static void queueInputCallback(void *userData,
     NSLog(@"[Koe] Audio activation #%lu: trigger-down at 0.0ms",
           (unsigned long)self.activationSequence);
 
+    // Capture the output volume now, while the device is still A2DP — starting
+    // the queue below switches AirPods to HFP and can leave a different level
+    // behind. Only the first activation in a session needs this.
+    if (!self.isAudioQueueRunning) {
+        [self saveSystemOutputVolume];
+    }
+
     if (![self startPreparedQueue]) {
         @synchronized (self.accumBuffer) {
             self.isPreCapturing = NO;
         }
+        [self restoreSystemOutputVolume];
         return NO;
     }
 
@@ -462,6 +509,7 @@ static void queueInputCallback(void *userData,
     }
     NSLog(@"[Koe] Trigger gesture cancelled; stopping pre-capture");
     [self stopAndReprepare];
+    [self restoreSystemOutputVolume];
 }
 
 - (BOOL)startCaptureWithAudioCallback:(SPAudioFrameCallback)callback
@@ -508,6 +556,10 @@ static void queueInputCallback(void *userData,
     if (!self.isCapturing) {
         // Still restore in case mute was left on after a partial failure.
         [self restoreSystemOutput];
+        if (self.isPreCapturing || self.isAudioQueueRunning) {
+            [self stopAndReprepare];
+        }
+        [self restoreSystemOutputVolume];
         return;
     }
 
@@ -531,6 +583,9 @@ static void queueInputCallback(void *userData,
 
     [self restoreSystemOutput];
     [self stopAndReprepare];
+    // Re-assert the saved A2DP volume only after the input queue has stopped;
+    // restoring it while AirPods are still in HFP would update call volume.
+    [self restoreSystemOutputVolume];
     NSLog(@"[Koe] Audio capture stopped");
 }
 
@@ -576,6 +631,7 @@ static void queueInputCallback(void *userData,
 - (void)shutdown {
     [self restoreSystemOutput];
     [self disposeQueue];
+    [self restoreSystemOutputVolume];
     NSLog(@"[Koe] Audio queue shut down");
 }
 
@@ -635,6 +691,45 @@ static void queueInputCallback(void *userData,
     UInt32 off = 0;
     if (AudioObjectSetPropertyData(device, &addr, 0, NULL, sizeof(off), &off) == noErr) {
         NSLog(@"[Koe] Restored system output after recording");
+    }
+}
+
+// Remember the current output volume before the mic opens (and the AirPods
+// A2DP→HFP switch perturbs it). Only an audible level is remembered: a device
+// at/near zero is left alone so we never write a value that would silence
+// playback when restored.
+- (void)saveSystemOutputVolume {
+    self.didSaveVolume = NO;
+    self.savedVolumeDevice = kAudioObjectUnknown;
+
+    AudioObjectID device = koeDefaultOutputDevice();
+    if (device == kAudioObjectUnknown) return;
+
+    Float32 volume = 0.0f;
+    if (!koeReadOutputVolume(device, &volume)) return;
+    if (volume < 0.05f || volume > 1.0f) return; // out of audible range — don't touch
+
+    self.savedVolumeDevice = device;
+    self.savedVolume = volume;
+    self.didSaveVolume = YES;
+}
+
+- (void)restoreSystemOutputVolume {
+    if (!self.didSaveVolume) return;
+    self.didSaveVolume = NO;
+
+    AudioObjectID device = self.savedVolumeDevice;
+    self.savedVolumeDevice = kAudioObjectUnknown;
+    if (device == kAudioObjectUnknown) return;
+
+    // The output route can change mid-recording (AirPods disconnect, manual
+    // switch) and CoreAudio reuses device IDs — so only re-assert the level if
+    // the saved device is still the default output. Writing our remembered level
+    // to a device that ID now points at could blast its volume.
+    if (koeDefaultOutputDevice() != device) return;
+
+    if (koeWriteOutputVolume(device, self.savedVolume)) {
+        NSLog(@"[Koe] Restored output volume %.2f after recording", self.savedVolume);
     }
 }
 

@@ -675,7 +675,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property(nonatomic, strong) NSPopUpButton *appleSpeechLocalePopup;
 
 // LLM fields
-@property(nonatomic, strong) NSButton *llmEnabledCheckbox;
+@property(nonatomic, strong) NSSwitch *llmEnabledCheckbox;
 @property(nonatomic, strong) NSTableView *llmProfileTableView;
 @property(nonatomic, strong) NSScrollView *llmProfileTableScroll;
 @property(nonatomic, strong) NSButton *llmAddProfileButton;
@@ -5025,6 +5025,16 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
         accelerate ? NSControlStateValueOn : NSControlStateValueOff;
     [self rememberLoadedBooleanValue:accelerate
                               forKey:@"asr.doubao.enable_accelerate_text"];
+    // Restore the advanced-expanded state. The advanced VALUES persist in
+    // config, but the disclosure checkbox defaults to collapsed — so reopening
+    // Settings hid the section and the settings looked lost (they weren't).
+    // If any Doubao advanced value is non-default, pre-check the disclosure so
+    // the asrProviderChanged call below unhides the container and resizes.
+    BOOL hasAdvancedValues = (self.asrEndWindowField.stringValue.length > 0) ||
+                             (outputVariant.length > 0) ||
+                             accelerate;
+    self.asrAdvancedDisclosure.state =
+        hasAdvancedValues ? NSControlStateValueOn : NSControlStateValueOff;
     // Load Qwen fields
     NSString *qwenApiKey = configGet(@"asr.qwen.api_key");
     self.asrQwenApiKeySecureField.stringValue = qwenApiKey;

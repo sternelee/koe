@@ -935,8 +935,21 @@ impl AsrProvider for DoubaoImeProvider {
             if last_frame.len() < BYTES_PER_FRAME {
                 last_frame.resize(BYTES_PER_FRAME, 0);
             }
-            let msg = self.send_opus_frame(&last_frame, proto::FrameState::Last)?;
-            self.send_protobuf(msg).await?;
+            if self.frame_index == 0 {
+                // The whole utterance fit in less than one frame, so send_audio
+                // never emitted a First frame. The server rejects a Last that
+                // isn't preceded by First, so send this audio as First and then
+                // a silent Last to close the stream (send_opus_frame advances
+                // frame_index, so the second call is correctly a Last).
+                let msg = self.send_opus_frame(&last_frame, proto::FrameState::First)?;
+                self.send_protobuf(msg).await?;
+                let silent = vec![0u8; BYTES_PER_FRAME];
+                let msg = self.send_opus_frame(&silent, proto::FrameState::Last)?;
+                self.send_protobuf(msg).await?;
+            } else {
+                let msg = self.send_opus_frame(&last_frame, proto::FrameState::Last)?;
+                self.send_protobuf(msg).await?;
+            }
         } else if self.frame_index > 0 {
             // Send a silent last frame
             let silent = vec![0u8; BYTES_PER_FRAME];

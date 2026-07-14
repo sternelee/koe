@@ -297,13 +297,31 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .await
             .map_err(|e| KoeError::LlmFailed(format!("parse response: {e}")))?;
 
-        let content = json
-            .get("choices")
-            .and_then(|c| c.get(0))
+        let choice = json.get("choices").and_then(|c| c.get(0));
+
+        // A length finish reason is advisory: the returned rewrite may still
+        // be complete and useful. Keep it so the shared degeneration guard can
+        // compare it with the ASR text instead of unconditionally discarding
+        // all corrections.
+        let finish = choice
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|f| f.as_str());
+        if finish == Some("length") {
+            log::warn!("LLM response reached max_tokens (finish_reason=length); validating returned content");
+        }
+
+        let content = choice
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
             .ok_or_else(|| KoeError::LlmFailed("missing content in response".into()))?;
+
+        // Strip any leading <think>...</think> reasoning block emitted by
+        // reasoning models (Qwen3, R1, etc.) when the server ignores the
+        // no-reasoning request flag.  Must run before the empty-content guard
+        // so an unterminated <think> (truncated output) returns "" and triggers
+        // ASR fallback rather than pasting a partial monologue.
+        let content = crate::llm::strip_reasoning(content);
 
         // Basic output cleaning: trim whitespace, remove wrapping quotes
         let cleaned = content.trim();
@@ -315,6 +333,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .strip_prefix('\u{201c}')
             .and_then(|s| s.strip_suffix('\u{201d}'))
             .unwrap_or(cleaned);
+
+        // Reject empty or whitespace-only output so callers fall back to raw
+        // ASR text instead of silently erasing the user's utterance.
+        if cleaned.trim().is_empty() {
+            return Err(KoeError::LlmFailed("empty content in response".into()));
+        }
 
         Ok(cleaned.to_string())
     }

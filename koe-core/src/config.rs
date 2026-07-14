@@ -1165,18 +1165,27 @@ pub fn resolve_user_prompt_path(config: &Config) -> PathBuf {
 // ─── Environment Variable Substitution ──────────────────────────────
 
 /// Replace ${VAR_NAME} patterns with environment variable values.
+///
+/// Performs a single, non-recursive pass: each `${VAR}` token in the
+/// *original* input is replaced exactly once.  Substituted values are
+/// appended verbatim and never re-scanned, which prevents:
+/// - infinite loops when a value contains `${...}` (including self-references)
+/// - silent corruption of API keys or paths that happen to contain `${`
 fn substitute_env_vars(input: &str) -> String {
-    let mut result = input.to_string();
-    // Simple regex-free approach
-    while let Some(start) = result.find("${") {
-        let end = match result[start + 2..].find('}') {
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        let end = match rest[start + 2..].find('}') {
             Some(pos) => start + 2 + pos,
-            None => break,
+            None => break, // no closing brace; copy remainder verbatim below
         };
-        let var_name = &result[start + 2..end];
+        let var_name = &rest[start + 2..end];
         let value = std::env::var(var_name).unwrap_or_default();
-        result = format!("{}{}{}", &result[..start], value, &result[end + 1..]);
+        result.push_str(&rest[..start]);
+        result.push_str(&value); // value is NOT rescanned
+        rest = &rest[end + 1..];
     }
+    result.push_str(rest);
     result
 }
 
@@ -1819,6 +1828,7 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2012,11 +2022,53 @@ mod tests {
         assert!(!active.is_ready());
     }
 
-    // config_set tests are combined into one function because they mutate
-    // the HOME env var, which is process-global and races with parallel tests.
+    // Environment variables are process-global, so every test that mutates one
+    // shares this lock for its full duration. Poison-tolerant so one failing
+    // test does not cascade into the others.
+    static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var_os(key),
+            }
+        }
+
+        fn set(&self, value: impl AsRef<OsStr>) {
+            // SAFETY: process-global environment mutation is serialized by
+            // PROCESS_ENV_LOCK in every test that creates this guard.
+            unsafe { std::env::set_var(self.key, value) };
+        }
+
+        fn remove(&self) {
+            // SAFETY: see set().
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: the lock guard outlives this value in each test, so the
+            // original value is restored while mutation remains serialized.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     #[test]
     fn config_set_error_and_success() {
-        let orig_home = std::env::var("HOME").unwrap();
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = EnvVarGuard::new("HOME");
 
         // --- corrupted YAML should fail ---
         let tmp1 = std::env::temp_dir().join(format!(
@@ -2030,9 +2082,8 @@ mod tests {
         fs::create_dir_all(&koe_dir1).unwrap();
         fs::write(koe_dir1.join("config.yaml"), "{{{{invalid yaml").unwrap();
 
-        unsafe { std::env::set_var("HOME", &tmp1) };
+        home.set(&tmp1);
         let bad_result = config_set("test.key", "value");
-        unsafe { std::env::set_var("HOME", &orig_home) };
         let _ = fs::remove_dir_all(&tmp1);
         assert!(
             bad_result.is_err(),
@@ -2051,13 +2102,126 @@ mod tests {
         fs::create_dir_all(&koe_dir2).unwrap();
         fs::write(koe_dir2.join("config.yaml"), "asr:\n  provider: doubao\n").unwrap();
 
-        unsafe { std::env::set_var("HOME", &tmp2) };
+        home.set(&tmp2);
         let ok_result = config_set("llm.enabled", "true");
-        unsafe { std::env::set_var("HOME", &orig_home) };
 
         assert!(ok_result.is_ok(), "config_set should succeed on valid YAML");
         let content = fs::read_to_string(koe_dir2.join("config.yaml")).unwrap();
         assert!(content.contains("enabled: true"));
         let _ = fs::remove_dir_all(&tmp2);
+    }
+
+    // ─── substitute_env_vars tests ────────────────────────────────────
+
+    #[test]
+    fn substitute_env_vars_replaces_known_var() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_API_KEY");
+        variable.set("sk-test-123");
+        let result = substitute_env_vars("api_key: ${KOE_TEST_API_KEY}");
+        assert_eq!(result, "api_key: sk-test-123");
+    }
+
+    #[test]
+    fn substitute_env_vars_no_rescan_prevents_infinite_loop() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_SELF_REF");
+        // If the value itself contains "${...}", it must NOT be re-expanded.
+        variable.set("${KOE_TEST_SELF_REF}");
+        // Should return quickly and produce the literal value, not loop forever.
+        let result = substitute_env_vars("key: ${KOE_TEST_SELF_REF}");
+        assert_eq!(result, "key: ${KOE_TEST_SELF_REF}");
+    }
+
+    #[test]
+    fn substitute_env_vars_value_with_dollar_brace_not_re_expanded() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = EnvVarGuard::new("KOE_TEST_INNER");
+        let outer = EnvVarGuard::new("KOE_TEST_OUTER");
+        // A value that contains a different ${VAR} reference must not be resolved.
+        inner.set("hello");
+        outer.set("${KOE_TEST_INNER}");
+        let result = substitute_env_vars("v: ${KOE_TEST_OUTER}");
+        // Should equal the literal value of OUTER, not the expanded inner.
+        assert_eq!(result, "v: ${KOE_TEST_INNER}");
+    }
+
+    #[test]
+    fn substitute_env_vars_missing_var_becomes_empty() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_MISSING_VAR_XYZ");
+        // Ensure an unset var is replaced with ""
+        variable.remove();
+        let result = substitute_env_vars("key: ${KOE_TEST_MISSING_VAR_XYZ}");
+        assert_eq!(result, "key: ");
+    }
+
+    #[test]
+    fn substitute_env_vars_no_closing_brace_left_verbatim() {
+        let result = substitute_env_vars("key: ${UNCLOSED");
+        assert_eq!(result, "key: ${UNCLOSED");
+    }
+
+    #[test]
+    fn substitute_env_vars_multiple_vars_in_one_string() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let host = EnvVarGuard::new("KOE_TEST_HOST");
+        let port = EnvVarGuard::new("KOE_TEST_PORT");
+        host.set("localhost");
+        port.set("8080");
+        let result = substitute_env_vars("url: http://${KOE_TEST_HOST}:${KOE_TEST_PORT}/v1");
+        assert_eq!(result, "url: http://localhost:8080/v1");
+    }
+
+    // Mutates HOME; serialized with every other environment-mutating test.
+    #[test]
+    fn config_bool_round_trip_and_isolation() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = EnvVarGuard::new("HOME");
+
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-test-bool-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let koe_dir = tmp.join(".koe");
+        fs::create_dir_all(&koe_dir).unwrap();
+        fs::write(koe_dir.join("config.yaml"), "").unwrap();
+
+        home.set(&tmp);
+
+        // Write two bool keys.
+        config_set("asr.doubao.enable_accelerate_text", "true").unwrap();
+        config_set("llm.prompt_templates_enabled", "true").unwrap();
+
+        // Both round-trip as the exact string "true".
+        assert_eq!(
+            config_get("asr.doubao.enable_accelerate_text").unwrap(),
+            "true",
+            "asr.doubao.enable_accelerate_text should be \"true\""
+        );
+        assert_eq!(
+            config_get("llm.prompt_templates_enabled").unwrap(),
+            "true",
+            "llm.prompt_templates_enabled should be \"true\""
+        );
+
+        // Setting an unrelated third key must not clobber the first two.
+        config_set("asr.provider", "doubao").unwrap();
+
+        assert_eq!(
+            config_get("asr.doubao.enable_accelerate_text").unwrap(),
+            "true",
+            "asr.doubao.enable_accelerate_text should still be \"true\" after sibling write"
+        );
+        assert_eq!(
+            config_get("llm.prompt_templates_enabled").unwrap(),
+            "true",
+            "llm.prompt_templates_enabled should still be \"true\" after sibling write"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
