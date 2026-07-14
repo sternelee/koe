@@ -25,7 +25,9 @@ Koe takes a different approach:
 
 ## How It Works
 
-1. Press the trigger shortcut (default: **Fn**, configurable). In `hold` mode you press-and-hold to record; in `toggle` mode you tap once to start and tap again to stop.
+1. Press the trigger shortcut (default: **Fn**, configurable). Use `hold` to
+   press-and-hold, `toggle` to tap once to start/stop, or `double_tap` to
+   double-tap to start and single-tap to stop.
 2. Audio streams in real-time to a cloud ASR service (Doubao/豆包 by ByteDance)
 3. A floating status pill shows real-time interim recognition text as you speak
 4. The overlay stays visible through ASR finalization and LLM correction, so you can see both the final transcript and corrected result
@@ -41,8 +43,10 @@ ASR provider support:
 
 ## Installation
 
-Koe's standard prebuilt path is still **Apple Silicon first**, but Intel Macs
-can now build from source with the dedicated `x86_64` target.
+Koe is **Apple Silicon only**. Two prebuilt apps are published per release:
+**Koe** (the standard app; cloud + Apple Speech providers) and **Koe MLX**
+(adds on-device MLX model support). Both are signed, notarized, and update
+themselves via Sparkle.
 
 ### Homebrew
 
@@ -86,7 +90,7 @@ Koe opens the release download URL instead of patching the installed app in plac
 
 #### Prerequisites
 
-- macOS 14.0+ (13.0+ without MLX support)
+- macOS 14.0+
 - Apple Silicon or Intel Mac
 - Rust toolchain (`rustup`)
 - Xcode with command line tools
@@ -101,11 +105,11 @@ cd koe
 # Generate Xcode project
 cd KoeApp && xcodegen && cd ..
 
-# Build Apple Silicon
+# Build the standard app (cloud + Apple Speech)
 make build
 
-# Build Intel
-make build-x86_64
+# Build the MLX app (adds on-device MLX models)
+make build-mlx
 ```
 
 #### Run
@@ -353,7 +357,7 @@ hotkey:
   # You can also use a raw macOS keycode number such as 96 (F5) or 122 (F1),
   # or a normalized key combo such as "command+shift+49".
   trigger_key: "fn"
-  trigger_mode: "hold"  # "hold" | "toggle"
+  trigger_mode: "hold"  # "hold" | "toggle" | "double_tap"
 ```
 
 | Option | Key | Notes |
@@ -371,6 +375,9 @@ single trigger shortcut model:
 
 - `hold`: press-and-hold to record, release to stop
 - `toggle`: tap once to start, tap again to stop
+- `double_tap`: double-tap to start, then tap once to stop. This is especially
+  useful with `left_command` or `right_command`; Command-key combinations such
+  as Command-C do not count toward the double-tap gesture.
 
 You can choose a named modifier key, a raw macOS keycode, or record a custom
 shortcut combination directly in the Controls pane. Recorded combinations are
@@ -616,26 +623,22 @@ This is especially useful for first-time users who want a guided, interactive se
 
 ## Build Variants
 
-Koe ships multiple Xcode schemes for different use cases:
+Koe ships two Xcode schemes (both Apple Silicon):
 
 | Scheme | App | Zip | Idle Memory | Description |
 |--------|-----|-----|--------|-------------|
-| **Koe** | ~86 MB | ~24 MB | ~40 MB | Full build (arm64). All providers. |
-| **Koe-lite** | ~19 MB | ~7 MB | ~13 MB | Lightweight (arm64). Cloud + Apple Speech only. |
-| **Koe-x86** | — | — | — | Intel build (x86_64). No MLX. |
+| **Koe** | ~19 MB | ~7 MB | ~13 MB | Standard app. Cloud + Apple Speech only. |
+| **Koe-MLX** | ~86 MB | ~24 MB | ~40 MB | Adds on-device MLX model support. All providers. |
 
 ```bash
-# Full build (default, Apple Silicon)
+# Standard app (default; cloud + Apple Speech only)
 make build
 
-# Lite build (cloud + Apple Speech only, ~78% smaller)
-make build-lite
-
-# Intel build
-make build-x86_64
+# MLX app (adds local MLX models)
+make build-mlx
 ```
 
-The lite build excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB). Cloud providers (Doubao, Qwen) work on all macOS versions; Apple Speech requires macOS 26+.
+The standard app excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB) — for most users this is the right choice. Cloud providers (Doubao, Qwen) work on supported macOS versions; Apple Speech requires macOS 26+.
 
 Local ASR providers are controlled by Rust feature flags in `koe-core/Cargo.toml`: `mlx`, `apple-speech`, `sherpa-onnx` (all enabled by default). Each Xcode scheme passes the appropriate `--features` flags to `cargo build`.
 

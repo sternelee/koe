@@ -566,7 +566,7 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
                                                keyEquivalent:@""];
         item.target = self;
         item.representedObject = device.uid;
-        item.state = (selectedUID && [device.uid isEqualToString:selectedUID]) ? NSControlStateValueOn : NSControlStateValueOff;
+        item.state = [device.uid isEqualToString:selectedUID] ? NSControlStateValueOn : NSControlStateValueOff;
         [submenu addItem:item];
     }
 

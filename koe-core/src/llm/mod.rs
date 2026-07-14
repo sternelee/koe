@@ -14,14 +14,15 @@ use crate::errors::Result;
 ///   an answer, so returns `""` so the caller's empty-content guard fires and
 ///   falls back to raw ASR text.
 pub fn strip_reasoning(s: &str) -> &str {
-    // Use a lowercase copy only for searching; slicing is done on the original
-    // `s` so byte offsets remain valid.  <think>/</think> are pure ASCII, so
-    // to_ascii_lowercase() is length-preserving and offsets are stable.
-    let lower = s.to_ascii_lowercase();
-    if let Some(open) = lower.find("<think>") {
-        if let Some(close_rel) = lower[open..].find("</think>") {
-            let end = open + close_rel + "</think>".len();
-            return s[end..].trim_start();
+    // A reasoning block is metadata only when it is the first non-whitespace
+    // content. Preserve ordinary answer text that happens to mention a think
+    // tag later in the response.
+    let trimmed = s.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("<think>") {
+        if let Some(close) = lower.find("</think>") {
+            let end = close + "</think>".len();
+            return trimmed[end..].trim_start();
         }
         // Unterminated reasoning block (response was cut off by max_tokens).
         // There is no answer — return "" so the empty-content guard triggers
@@ -85,6 +86,20 @@ mod tests {
     fn strip_reasoning_case_insensitive() {
         let s = "<THINK>reasoning</THINK>answer";
         assert_eq!(strip_reasoning(s), "answer");
+    }
+
+    #[test]
+    fn strip_reasoning_allows_leading_whitespace() {
+        let s = "  \n<think>reasoning</think>answer";
+        assert_eq!(strip_reasoning(s), "answer");
+    }
+
+    #[test]
+    fn strip_reasoning_preserves_mid_answer_tag() {
+        let closed = "Keep this prefix <think>literal tag</think> and suffix";
+        let open = "Keep this prefix <think>literal unclosed tag";
+        assert_eq!(strip_reasoning(closed), closed);
+        assert_eq!(strip_reasoning(open), open);
     }
 
     #[test]

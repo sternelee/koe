@@ -299,16 +299,15 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let choice = json.get("choices").and_then(|c| c.get(0));
 
-        // Treat a length-truncated response as a failure so callers fall back
-        // to raw ASR text rather than pasting a chopped/partial sentence.
+        // A length finish reason is advisory: the returned rewrite may still
+        // be complete and useful. Keep it so the shared degeneration guard can
+        // compare it with the ASR text instead of unconditionally discarding
+        // all corrections.
         let finish = choice
             .and_then(|c| c.get("finish_reason"))
             .and_then(|f| f.as_str());
         if finish == Some("length") {
-            log::warn!("LLM response truncated by max_tokens (finish_reason=length); treating as failure");
-            return Err(KoeError::LlmFailed(
-                "response truncated by max_tokens".into(),
-            ));
+            log::warn!("LLM response reached max_tokens (finish_reason=length); validating returned content");
         }
 
         let content = choice

@@ -143,13 +143,13 @@ static NSInteger clampedOverlayMaxVisibleLinesValue(NSInteger value) {
              MIN(kOverlayMaxVisibleLinesMax, value));
 }
 
-static BOOL overlayLimitVisibleLinesEnabledValue(NSString *value) {
+static BOOL configBooleanValue(NSString *value, BOOL fallback) {
   NSString *normalized = [[[value ?: @""
       stringByTrimmingCharactersInSet:[NSCharacterSet
                                           whitespaceAndNewlineCharacterSet]]
       lowercaseString] copy];
   if (normalized.length == 0) {
-    return kOverlayLimitVisibleLinesDefault;
+    return fallback;
   }
 
   if ([normalized isEqualToString:@"1"] ||
@@ -166,7 +166,7 @@ static BOOL overlayLimitVisibleLinesEnabledValue(NSString *value) {
     return NO;
   }
 
-  return kOverlayLimitVisibleLinesDefault;
+  return fallback;
 }
 
 static NSString *normalizedOverlayFontFamilyValue(NSString *value) {
@@ -755,6 +755,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property(nonatomic, assign) BOOL suppressTemplateSync;
 @property(nonatomic, assign) BOOL templateEditorDirty;
 
+// Values captured when a pane is loaded. Saving only writes controls whose
+// semantic value changed, so visiting Settings cannot normalize or overwrite
+// config that the user did not edit.
+@property(nonatomic, strong)
+    NSMutableDictionary<NSString *, NSNumber *> *loadedBooleanValues;
+@property(nonatomic, copy) NSString *loadedDictionaryContent;
+@property(nonatomic, copy) NSString *loadedSystemPromptContent;
+@property(nonatomic, copy)
+    NSArray<NSDictionary *> *loadedTemplatesSnapshot;
+
 @end
 
 @implementation SPSetupWizardWindowController {
@@ -775,6 +785,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   if (self) {
     _verifyQueue =
         dispatch_queue_create("koe.model.verify", DISPATCH_QUEUE_SERIAL);
+    _loadedBooleanValues = [NSMutableDictionary dictionary];
     window.delegate = self;
     [self setupToolbar];
   }
@@ -2029,9 +2040,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   [self.triggerModePopup addItemsWithTitles:@[
     @"Hold (Press & Hold)",
     @"Toggle (Tap to Start/Stop)",
+    @"DoubleTap",
   ]];
   [self.triggerModePopup itemAtIndex:0].representedObject = @"hold";
   [self.triggerModePopup itemAtIndex:1].representedObject = @"toggle";
+  [self.triggerModePopup itemAtIndex:2].representedObject = @"double_tap";
 
   // ── Trigger card ──
   NSView *triggerCard =
@@ -4933,6 +4946,15 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
   [self loadValuesForPane:self.currentPaneIdentifier];
 }
 
+- (void)rememberLoadedBooleanValue:(BOOL)value forKey:(NSString *)key {
+  self.loadedBooleanValues[key] = @(value);
+}
+
+- (BOOL)shouldPersistBooleanValue:(BOOL)value forKey:(NSString *)key {
+  NSNumber *loadedValue = self.loadedBooleanValues[key];
+  return loadedValue == nil || loadedValue.boolValue != value;
+}
+
 - (void)loadValuesForPane:(NSString *)identifier {
   NSString *dir = configDirPath();
 
@@ -4997,10 +5019,12 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     } else {
       [self.asrOutputVariantPopup selectItemAtIndex:0];
     }
-    NSString *accelerate = configGet(@"asr.doubao.enable_accelerate_text");
-    self.asrAccelerateCheckbox.state = [accelerate isEqualToString:@"true"]
-                                           ? NSControlStateValueOn
-                                           : NSControlStateValueOff;
+    BOOL accelerate = configBooleanValue(
+        configGet(@"asr.doubao.enable_accelerate_text"), NO);
+    self.asrAccelerateCheckbox.state =
+        accelerate ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:accelerate
+                              forKey:@"asr.doubao.enable_accelerate_text"];
     // Restore the advanced-expanded state. The advanced VALUES persist in
     // config, but the disclosure checkbox defaults to collapsed — so reopening
     // Settings hid the section and the settings looked lost (they weren't).
@@ -5008,7 +5032,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     // the asrProviderChanged call below unhides the container and resizes.
     BOOL hasAdvancedValues = (self.asrEndWindowField.stringValue.length > 0) ||
                              (outputVariant.length > 0) ||
-                             [accelerate isEqualToString:@"true"];
+                             accelerate;
     self.asrAdvancedDisclosure.state =
         hasAdvancedValues ? NSControlStateValueOn : NSControlStateValueOff;
     // Load Qwen fields
@@ -5079,10 +5103,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     self.asrTestResultLabel.stringValue = @"";
     self.asrTestButton.enabled = YES;
   } else if ([identifier isEqualToString:kToolbarLLM]) {
-    NSString *enabled = configGet(@"llm.enabled");
-    self.llmEnabledCheckbox.state = ([enabled isEqualToString:@"false"])
-                                        ? NSControlStateValueOff
-                                        : NSControlStateValueOn;
+    BOOL enabled = configBooleanValue(configGet(@"llm.enabled"), YES);
+    self.llmEnabledCheckbox.state =
+        enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:enabled forKey:@"llm.enabled"];
 
     [self loadLlmProfilesFromCore];
     self.llmTestResultLabel.stringValue = @"";
@@ -5104,8 +5128,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
         bottomMarginRaw.length > 0
             ? clampedOverlayBottomMarginValue(bottomMarginRaw.integerValue)
             : kOverlayBottomMarginDefault;
-    BOOL limitVisibleLines =
-        overlayLimitVisibleLinesEnabledValue(limitVisibleLinesRaw);
+    BOOL limitVisibleLines = configBooleanValue(
+        limitVisibleLinesRaw, kOverlayLimitVisibleLinesDefault);
     NSInteger maxVisibleLines = maxVisibleLinesRaw.length > 0
                                     ? clampedOverlayMaxVisibleLinesValue(
                                           maxVisibleLinesRaw.integerValue)
@@ -5116,6 +5140,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     self.overlayBottomMarginSlider.integerValue = bottomMargin;
     self.overlayLimitVisibleLinesSwitch.state =
         limitVisibleLines ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:limitVisibleLines
+                              forKey:@"overlay.limit_visible_lines"];
     [self selectOverlayMaxVisibleLinesValue:maxVisibleLines];
     [self syncOverlayPreviewFromControls];
   } else if ([identifier isEqualToString:kToolbarHotkey]) {
@@ -5126,28 +5152,38 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
 
     // Load trigger mode
     NSString *triggerMode = configGet(@"hotkey.trigger_mode");
-    if ([triggerMode isEqualToString:@"toggle"]) {
+    if ([triggerMode isEqualToString:@"double_tap"]) {
+      [self.triggerModePopup selectItemAtIndex:2];
+    } else if ([triggerMode isEqualToString:@"toggle"]) {
       [self.triggerModePopup selectItemAtIndex:1];
     } else {
       [self.triggerModePopup selectItemAtIndex:0];
     }
 
-    NSString *startSound = configGet(@"feedback.start_sound");
-    NSString *stopSound = configGet(@"feedback.stop_sound");
-    NSString *errorSound = configGet(@"feedback.error_sound");
-    NSString *muteSystemOutput = configGet(@"feedback.mute_system_output");
-    self.startSoundCheckbox.state = [startSound isEqualToString:@"true"]
-                                        ? NSControlStateValueOn
-                                        : NSControlStateValueOff;
-    self.stopSoundCheckbox.state = [stopSound isEqualToString:@"true"]
-                                       ? NSControlStateValueOn
-                                       : NSControlStateValueOff;
-    self.errorSoundCheckbox.state = [errorSound isEqualToString:@"true"]
-                                        ? NSControlStateValueOn
-                                        : NSControlStateValueOff;
+    BOOL startSound =
+        configBooleanValue(configGet(@"feedback.start_sound"), NO);
+    BOOL stopSound =
+        configBooleanValue(configGet(@"feedback.stop_sound"), NO);
+    BOOL errorSound =
+        configBooleanValue(configGet(@"feedback.error_sound"), NO);
+    BOOL muteSystemOutput =
+        configBooleanValue(configGet(@"feedback.mute_system_output"), NO);
+    self.startSoundCheckbox.state =
+        startSound ? NSControlStateValueOn : NSControlStateValueOff;
+    self.stopSoundCheckbox.state =
+        stopSound ? NSControlStateValueOn : NSControlStateValueOff;
+    self.errorSoundCheckbox.state =
+        errorSound ? NSControlStateValueOn : NSControlStateValueOff;
     self.muteSystemOutputCheckbox.state =
-        [muteSystemOutput isEqualToString:@"true"] ? NSControlStateValueOn
-                                                   : NSControlStateValueOff;
+        muteSystemOutput ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:startSound
+                              forKey:@"feedback.start_sound"];
+    [self rememberLoadedBooleanValue:stopSound
+                              forKey:@"feedback.stop_sound"];
+    [self rememberLoadedBooleanValue:errorSound
+                              forKey:@"feedback.error_sound"];
+    [self rememberLoadedBooleanValue:muteSystemOutput
+                              forKey:@"feedback.mute_system_output"];
   } else if ([identifier isEqualToString:kToolbarDictionary]) {
     NSString *dictPath = [dir stringByAppendingPathComponent:kDictionaryFile];
     NSString *dictContent =
@@ -5156,6 +5192,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
                                      error:nil]
             ?: @"";
     [self.dictionaryTextView setString:dictContent];
+    self.loadedDictionaryContent = dictContent;
   } else if ([identifier isEqualToString:kToolbarSystemPrompt]) {
     NSString *promptPath =
         [dir stringByAppendingPathComponent:kSystemPromptFile];
@@ -5165,11 +5202,14 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
                                      error:nil]
             ?: @"";
     [self.systemPromptTextView setString:promptContent];
+    self.loadedSystemPromptContent = promptContent;
   } else if ([identifier isEqualToString:kToolbarTemplates]) {
-    NSString *templatesEnabled = configGet(@"llm.prompt_templates_enabled");
+    BOOL templatesEnabled = configBooleanValue(
+        configGet(@"llm.prompt_templates_enabled"), NO);
     self.templatesEnabledSwitch.state =
-        [templatesEnabled isEqualToString:@"true"] ? NSControlStateValueOn
-                                                   : NSControlStateValueOff;
+        templatesEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:templatesEnabled
+                              forKey:@"llm.prompt_templates_enabled"];
 
     NSArray *templates = [self.rustBridge promptTemplates];
     self.templatesData = [NSMutableArray array];
@@ -5188,6 +5228,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     [self reindexTemplateShortcuts];
     [self reloadTemplateTableSelectingRow:(self.templatesData.count > 0 ? 0
                                                                         : -1)];
+    self.loadedTemplatesSnapshot = [[self serializedTemplatesData] copy];
   }
 }
 
@@ -5259,13 +5300,17 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
   NSArray<NSDictionary *> *serializedTemplates = nil;
   if (self.templatesData) {
     [self saveCurrentTemplateEdits];
-    NSString *templateError = nil;
-    if (![self validateTemplatesDataWithMessage:&templateError]) {
-      [self showAlert:@"Invalid prompt templates"
-                 info:templateError ?: @"Check your templates and try again."];
-      return;
+    NSArray<NSDictionary *> *currentTemplates = [self serializedTemplatesData];
+    if (!self.loadedTemplatesSnapshot ||
+        ![currentTemplates isEqualToArray:self.loadedTemplatesSnapshot]) {
+      NSString *templateError = nil;
+      if (![self validateTemplatesDataWithMessage:&templateError]) {
+        [self showAlert:@"Invalid prompt templates"
+                   info:templateError ?: @"Check your templates and try again."];
+        return;
+      }
+      serializedTemplates = currentTemplates;
     }
-    serializedTemplates = [self serializedTemplatesData];
   }
 
   NSString *configPath = configFilePath();
@@ -5336,8 +5381,12 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
           (self.asrAccelerateCheckbox.state == NSControlStateValueOn)
               ? @"true"
               : @"false";
-      saveOk &=
-          configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+      if ([self shouldPersistBooleanValue:
+                    self.asrAccelerateCheckbox.state == NSControlStateValueOn
+                                  forKey:@"asr.doubao.enable_accelerate_text"]) {
+        saveOk &=
+            configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+      }
     }
     // Save Qwen fields
     NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
@@ -5377,7 +5426,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     NSString *enabledStr =
         (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true"
                                                                  : @"false";
-    saveOk &= configSet(@"llm.enabled", enabledStr);
+    if ([self shouldPersistBooleanValue:
+                  self.llmEnabledCheckbox.state == NSControlStateValueOn
+                                forKey:@"llm.enabled"]) {
+      saveOk &= configSet(@"llm.enabled", enabledStr);
+    }
 
     [self syncActiveLlmProfileFromFields];
     NSDictionary *payload = @{
@@ -5421,8 +5474,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
                         [NSString stringWithFormat:@"%ld", (long)fontSize]);
     saveOk &= configSet(@"overlay.bottom_margin",
                         [NSString stringWithFormat:@"%ld", (long)bottomMargin]);
-    saveOk &= configSet(@"overlay.limit_visible_lines",
-                        limitVisibleLines ? @"true" : @"false");
+    if ([self shouldPersistBooleanValue:limitVisibleLines
+                                 forKey:@"overlay.limit_visible_lines"]) {
+      saveOk &= configSet(@"overlay.limit_visible_lines",
+                          limitVisibleLines ? @"true" : @"false");
+    }
     saveOk &=
         configSet(@"overlay.max_visible_lines",
                   [NSString stringWithFormat:@"%ld", (long)maxVisibleLines]);
@@ -5437,22 +5493,44 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     NSString *errorSound =
         (self.errorSoundCheckbox.state == NSControlStateValueOn) ? @"true"
                                                                  : @"false";
-    saveOk &= configSet(@"feedback.start_sound", startSound);
-    saveOk &= configSet(@"feedback.stop_sound", stopSound);
-    saveOk &= configSet(@"feedback.error_sound", errorSound);
+    if ([self shouldPersistBooleanValue:
+                  self.startSoundCheckbox.state == NSControlStateValueOn
+                                forKey:@"feedback.start_sound"]) {
+      saveOk &= configSet(@"feedback.start_sound", startSound);
+    }
+    if ([self shouldPersistBooleanValue:
+                  self.stopSoundCheckbox.state == NSControlStateValueOn
+                                forKey:@"feedback.stop_sound"]) {
+      saveOk &= configSet(@"feedback.stop_sound", stopSound);
+    }
+    if ([self shouldPersistBooleanValue:
+                  self.errorSoundCheckbox.state == NSControlStateValueOn
+                                forKey:@"feedback.error_sound"]) {
+      saveOk &= configSet(@"feedback.error_sound", errorSound);
+    }
   }
   if (self.muteSystemOutputCheckbox) {
     NSString *muteSystemOutput =
         (self.muteSystemOutputCheckbox.state == NSControlStateValueOn)
             ? @"true"
             : @"false";
-    saveOk &= configSet(@"feedback.mute_system_output", muteSystemOutput);
+    if ([self shouldPersistBooleanValue:
+                  self.muteSystemOutputCheckbox.state == NSControlStateValueOn
+                                forKey:@"feedback.mute_system_output"]) {
+      saveOk &=
+          configSet(@"feedback.mute_system_output", muteSystemOutput);
+    }
   }
   if (self.templatesEnabledSwitch) {
     NSString *templatesEnabled =
         (self.templatesEnabledSwitch.state == NSControlStateValueOn) ? @"true"
                                                                      : @"false";
-    saveOk &= configSet(@"llm.prompt_templates_enabled", templatesEnabled);
+    if ([self shouldPersistBooleanValue:
+                  self.templatesEnabledSwitch.state == NSControlStateValueOn
+                                forKey:@"llm.prompt_templates_enabled"]) {
+      saveOk &=
+          configSet(@"llm.prompt_templates_enabled", templatesEnabled);
+    }
   }
 
   if (!saveOk) {
@@ -5476,7 +5554,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
 
   // Write dictionary.txt
   NSError *error = nil;
-  if (self.dictionaryTextView) {
+  if (self.dictionaryTextView &&
+      ![self.dictionaryTextView.string
+          isEqualToString:self.loadedDictionaryContent ?: @""]) {
     NSString *dictPath = [dir stringByAppendingPathComponent:kDictionaryFile];
     [self.dictionaryTextView.string writeToFile:dictPath
                                      atomically:YES
@@ -5493,7 +5573,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
   }
 
   // Write system_prompt.txt
-  if (self.systemPromptTextView) {
+  if (self.systemPromptTextView &&
+      ![self.systemPromptTextView.string
+          isEqualToString:self.loadedSystemPromptContent ?: @""]) {
     NSString *promptPath =
         [dir stringByAppendingPathComponent:kSystemPromptFile];
     [self.systemPromptTextView.string writeToFile:promptPath

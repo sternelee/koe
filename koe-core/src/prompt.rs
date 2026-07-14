@@ -118,6 +118,13 @@ pub fn looks_like_degenerate_rewrite(
 ) -> bool {
     let output_lower = output.to_lowercase();
     let asr_lower = asr_text.to_lowercase();
+    let remove_fillers = |s: &str| -> String {
+        let mut normalized = s.to_lowercase();
+        for filler in ["那个", "就是", "其实", "嗯", "啊", "哦", "额", "呃"] {
+            normalized = normalized.replace(filler, "");
+        }
+        normalized
+    };
 
     // --- Dump: many dictionary terms appear in the output that the user never
     // spoke. Terms the user actually said are excluded, so a normal rewrite
@@ -151,8 +158,15 @@ pub fn looks_like_degenerate_rewrite(
     // user's language (observed on the 0.6B for English-dense mixed input).
     // Mixed CN+English dictation keeps most of its CJK, so it passes.
     let cjk_count = |s: &str| {
-        s.chars()
+        let mut previous = None;
+        remove_fillers(s)
+            .chars()
             .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c))
+            .filter(|c| {
+                let repeated = previous == Some(*c);
+                previous = Some(*c);
+                !repeated
+            })
             .count()
     };
     let asr_cjk = cjk_count(asr_text);
@@ -162,14 +176,27 @@ pub fn looks_like_degenerate_rewrite(
 
     // Whitespace-stripped, lowercased forms so CJK/latin spacing and trailing
     // sentence punctuation don't skew the length/substring comparison.
-    let strip = |s: &str| -> String {
-        s.chars().filter(|c| !c.is_whitespace()).collect()
-    };
+    let strip = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
     let out_core = strip(&output_lower);
     let out_core = out_core.trim_end_matches(['。', '.', '，', ',', '！', '!', '？', '?']);
     let asr_core = strip(&asr_lower);
-    let out_chars = out_core.chars().count();
-    let asr_chars = asr_core.chars().count();
+    // Compare content-bearing characters rather than raw length. The prompt
+    // explicitly allows removing fillers and adjacent stutters, so counting
+    // those as lost content would reject a legitimate cleanup.
+    let meaningful_chars = |s: &str| -> usize {
+        let mut previous = None;
+        remove_fillers(s)
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .filter(|c| {
+                let repeated = previous == Some(*c);
+                previous = Some(*c);
+                !repeated
+            })
+            .count()
+    };
+    let out_chars = meaningful_chars(out_core);
+    let asr_chars = meaningful_chars(&asr_core);
     if out_chars == 0 {
         return false;
     }
@@ -241,13 +268,49 @@ mod tests {
 
     fn dict() -> Vec<String> {
         [
-            "cc-connect", "Anthropic", "Claudecode", "cloudflared", "Shadowrocket",
-            "Karabiner", "Obsidian", "DoubaoIME", "Cloudflare", "Nextcloud", "Doubao",
-            "Tailscale", "sing-box", "Docmost", "Hammerspoon", "GitHub", "Sherpa-ONNX",
-            "Cursor", "Tauri", "Sonnet", "Claude", "Miniflux", "Forgejo", "OpenAI",
-            "FastAPI", "Docker", "Telegram", "Gemini", "Haiku", "Codex", "Lucky",
-            "Xcode", "Rustls", "Opus", "Type4Me", "OKR", "Whisper", "ASR", "PTT",
-            "Vercel", "Qwen", "DeepSeek", "Hevy",
+            "cc-connect",
+            "Anthropic",
+            "Claudecode",
+            "cloudflared",
+            "Shadowrocket",
+            "Karabiner",
+            "Obsidian",
+            "DoubaoIME",
+            "Cloudflare",
+            "Nextcloud",
+            "Doubao",
+            "Tailscale",
+            "sing-box",
+            "Docmost",
+            "Hammerspoon",
+            "GitHub",
+            "Sherpa-ONNX",
+            "Cursor",
+            "Tauri",
+            "Sonnet",
+            "Claude",
+            "Miniflux",
+            "Forgejo",
+            "OpenAI",
+            "FastAPI",
+            "Docker",
+            "Telegram",
+            "Gemini",
+            "Haiku",
+            "Codex",
+            "Lucky",
+            "Xcode",
+            "Rustls",
+            "Opus",
+            "Type4Me",
+            "OKR",
+            "Whisper",
+            "ASR",
+            "PTT",
+            "Vercel",
+            "Qwen",
+            "DeepSeek",
+            "Hevy",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -351,5 +414,21 @@ mod tests {
         // Collapse detection must not depend on the dictionary being present.
         let asr = "我刚才说的那个 PPT master 的功能其实挺好用的";
         assert!(looks_like_degenerate_rewrite("PPT master", asr, &[]));
+    }
+
+    #[test]
+    fn passes_filler_heavy_cleanup() {
+        let asr = "嗯嗯，那个，就是其实我我我想说的是，嗯，那个，我们明天开会啊";
+        assert!(!looks_like_degenerate_rewrite(
+            "我们明天开会。",
+            asr,
+            &dict()
+        ));
+    }
+
+    #[test]
+    fn detects_non_fragment_severe_truncation() {
+        let asr = "We need to discuss deployment, review every open bug, and schedule next week's release work.";
+        assert!(looks_like_degenerate_rewrite("Ship soon.", asr, &dict()));
     }
 }

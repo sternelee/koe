@@ -11,7 +11,7 @@
 #import "SPOverlayPanel.h"
 #import "SPHistoryManager.h"
 #import "SPSetupWizardWindowController.h"
-#import "SPUpdateManager.h"
+#import <Sparkle/Sparkle.h>
 #import "SPLocalization.h"
 #import "koe_core.h"
 #import <os/log.h>
@@ -46,9 +46,14 @@ static BOOL configFlagEnabled(const char *keyPath) {
     char *rawValue = sp_config_get(keyPath);
     if (!rawValue) return NO;
 
-    BOOL enabled = strcmp(rawValue, "true") == 0;
+    NSString *value = [[[NSString stringWithUTF8String:rawValue] ?: @""
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
     sp_core_free_string(rawValue);
-    return enabled;
+    return [value isEqualToString:@"1"] ||
+           [value isEqualToString:@"true"] ||
+           [value isEqualToString:@"yes"] ||
+           [value isEqualToString:@"on"];
 }
 
 - (BOOL)prepareAudioQueueForResolvedDevice {
@@ -98,7 +103,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
                    self.hotkeyMonitor.altKeyCode != hotkeyConfig.trigger_alt_key_code ||
                    self.hotkeyMonitor.targetModifierFlag != hotkeyConfig.trigger_modifier_flag ||
                    self.hotkeyMonitor.targetMatchKind != hotkeyConfig.trigger_match_kind ||
-                   self.hotkeyMonitor.triggerMode != hotkeyConfig.trigger_mode;
+                   self.hotkeyMonitor.triggerMode != (SPHotkeyTriggerMode)hotkeyConfig.trigger_mode;
 
     if (!changed) return;
 
@@ -110,7 +115,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.hotkeyMonitor.altKeyCode = hotkeyConfig.trigger_alt_key_code;
     self.hotkeyMonitor.targetModifierFlag = hotkeyConfig.trigger_modifier_flag;
     self.hotkeyMonitor.targetMatchKind = hotkeyConfig.trigger_match_kind;
-    self.hotkeyMonitor.triggerMode = hotkeyConfig.trigger_mode;
+    self.hotkeyMonitor.triggerMode = (SPHotkeyTriggerMode)hotkeyConfig.trigger_mode;
 
     if (restartIfNeeded) {
         [self.hotkeyMonitor start];
@@ -181,9 +186,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.overlayPanel = [[SPOverlayPanel alloc] init];
     self.overlayPanel.delegate = self;
 
-    // Initialize app update checker
-    self.updateManager = [[SPUpdateManager alloc] initWithBundle:[NSBundle mainBundle]];
-    [self.updateManager start];
+    // Initialize Sparkle updater (feed URL and public key come from Info.plist)
+    self.updaterController = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
+                                                                           updaterDelegate:nil
+                                                                        userDriverDelegate:nil];
 
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
@@ -790,7 +796,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 }
 
 - (void)statusBarDidSelectCheckForUpdates {
-    [self.updateManager checkForUpdatesFromUserAction];
+    [self.updaterController checkForUpdates:nil];
 }
 
 #pragma mark - SPSetupWizardDelegate
