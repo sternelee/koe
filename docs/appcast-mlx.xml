@@ -4,5 +4,17 @@
     <title>Koe MLX</title>
     <description>Updates for the app with on-device MLX model support (Apple Silicon).</description>
     <language>en</language>
+    <item>
+      <title>Version 1.0.17</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.17</link>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>1.0.17</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 14 Jul 2026 09:32:46 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.17/Koe-MLX-macOS-arm64.zip"
+        sparkle:edSignature="lpI7kuSJPw4kJf/cqv5Gfa/HTQO2lbxbnowL58fLy8/4CVhWufuOzy3WkJ6JuVnJwj5+WXRgbZzYht5s/aqOCA=="
+        length="32113141"
+        type="application/octet-stream" />
+    </item>
   </channel>
 </rss>

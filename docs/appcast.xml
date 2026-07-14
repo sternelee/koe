@@ -4,5 +4,17 @@
     <title>Koe</title>
     <description>Updates for the standard app (Apple Silicon).</description>
     <language>en</language>
+    <item>
+      <title>Version 1.0.17</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.17</link>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>1.0.17</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 14 Jul 2026 09:32:46 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.17/Koe-macOS-arm64.zip"
+        sparkle:edSignature="GUcr7oQd8ZxrZ7l9TEsiRMiLEoJVVsTY9+asK/FaWdQtIoCnkeu+fhDjNn54O9IsB7l97qk1GC8mCscuxSsBCQ=="
+        length="11339616"
+        type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
