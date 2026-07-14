@@ -41,8 +41,10 @@ ASR provider support:
 
 ## Installation
 
-Koe's standard prebuilt path is still **Apple Silicon first**, but Intel Macs
-can now build from source with the dedicated `x86_64` target.
+Koe is **Apple Silicon only**. Two prebuilt apps are published per release:
+**Koe** (the standard app; cloud + Apple Speech providers) and **Koe MLX**
+(adds on-device MLX model support). Both are signed, notarized, and update
+themselves via Sparkle.
 
 ### Homebrew
 
@@ -101,11 +103,11 @@ cd koe
 # Generate Xcode project
 cd KoeApp && xcodegen && cd ..
 
-# Build Apple Silicon
+# Build the standard app (cloud + Apple Speech)
 make build
 
-# Build Intel
-make build-x86_64
+# Build the MLX app (adds on-device MLX models)
+make build-mlx
 ```
 
 #### Run
@@ -616,26 +618,22 @@ This is especially useful for first-time users who want a guided, interactive se
 
 ## Build Variants
 
-Koe ships multiple Xcode schemes for different use cases:
+Koe ships two Xcode schemes (both Apple Silicon):
 
 | Scheme | App | Zip | Idle Memory | Description |
 |--------|-----|-----|--------|-------------|
-| **Koe** | ~86 MB | ~24 MB | ~40 MB | Full build (arm64). All providers. |
-| **Koe-lite** | ~19 MB | ~7 MB | ~13 MB | Lightweight (arm64). Cloud + Apple Speech only. |
-| **Koe-x86** | — | — | — | Intel build (x86_64). No MLX. |
+| **Koe** | ~19 MB | ~7 MB | ~13 MB | Standard app. Cloud + Apple Speech only. |
+| **Koe-MLX** | ~86 MB | ~24 MB | ~40 MB | Adds on-device MLX model support. All providers. |
 
 ```bash
-# Full build (default, Apple Silicon)
+# Standard app (default; cloud + Apple Speech only)
 make build
 
-# Lite build (cloud + Apple Speech only, ~78% smaller)
-make build-lite
-
-# Intel build
-make build-x86_64
+# MLX app (adds local MLX models)
+make build-mlx
 ```
 
-The lite build excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB). Cloud providers (Doubao, Qwen) work on all macOS versions; Apple Speech requires macOS 26+.
+The standard app excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB) — for most users this is the right choice. Cloud providers (Doubao, Qwen) work on all macOS versions; Apple Speech requires macOS 26+.
 
 Local ASR providers are controlled by Rust feature flags in `koe-core/Cargo.toml`: `mlx`, `apple-speech`, `sherpa-onnx` (all enabled by default). Each Xcode scheme passes the appropriate `--features` flags to `cargo build`.
 

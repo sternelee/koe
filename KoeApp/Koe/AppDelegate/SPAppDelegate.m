@@ -11,7 +11,7 @@
 #import "SPOverlayPanel.h"
 #import "SPHistoryManager.h"
 #import "SPSetupWizardWindowController.h"
-#import "SPUpdateManager.h"
+#import <Sparkle/Sparkle.h>
 #import "SPLocalization.h"
 #import "koe_core.h"
 #import <os/log.h>
@@ -181,9 +181,10 @@ static BOOL configFlagEnabled(const char *keyPath) {
     self.overlayPanel = [[SPOverlayPanel alloc] init];
     self.overlayPanel.delegate = self;
 
-    // Initialize app update checker
-    self.updateManager = [[SPUpdateManager alloc] initWithBundle:[NSBundle mainBundle]];
-    [self.updateManager start];
+    // Initialize Sparkle updater (feed URL and public key come from Info.plist)
+    self.updaterController = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
+                                                                           updaterDelegate:nil
+                                                                        userDriverDelegate:nil];
 
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
@@ -790,7 +791,7 @@ static BOOL configFlagEnabled(const char *keyPath) {
 }
 
 - (void)statusBarDidSelectCheckForUpdates {
-    [self.updateManager checkForUpdatesFromUserAction];
+    [self.updaterController checkForUpdates:nil];
 }
 
 #pragma mark - SPSetupWizardDelegate

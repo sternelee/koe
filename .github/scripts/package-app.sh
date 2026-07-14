@@ -10,6 +10,9 @@
 #   APPLE_ID, APPLE_APP_PASSWORD,
 #   APPLE_TEAM_ID                            When all set (and CODESIGN_IDENTITY is set),
 #                                            the app is notarized and stapled before zipping.
+#   SPARKLE_BIN, SPARKLE_PRIVATE_KEY_FILE    When both set, the output zip is signed with
+#                                            Sparkle's sign_update and a <zip>.sparkle.json
+#                                            metadata file is written for appcast generation.
 set -euo pipefail
 
 APP_PATH="$1"
@@ -29,6 +32,18 @@ chmod +x "$APP_PATH/Contents/MacOS/koe-cli"
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
   echo "Signing with identity: $CODESIGN_IDENTITY"
   SIGN_FLAGS=(--force --options runtime --timestamp --sign "$CODESIGN_IDENTITY")
+
+  # Sparkle's helper executables and XPC services live inside the framework
+  # and must be signed individually before the framework bundle itself.
+  SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+  if [ -d "$SPARKLE_FW" ]; then
+    codesign "${SIGN_FLAGS[@]}" "$SPARKLE_FW/Versions/B/Autoupdate"
+    codesign "${SIGN_FLAGS[@]}" "$SPARKLE_FW/Versions/B/Updater.app"
+    for xpc in "$SPARKLE_FW"/Versions/B/XPCServices/*.xpc; do
+      [ -e "$xpc" ] || continue
+      codesign "${SIGN_FLAGS[@]}" --preserve-metadata=entitlements "$xpc"
+    done
+  fi
 
   # Sign nested code first (frameworks and dylibs, if any), then embedded
   # helper binaries, then the outer bundle. The entitlements are applied to
@@ -79,4 +94,35 @@ elif [ -n "${CODESIGN_IDENTITY:-}" ]; then
 fi
 
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_ZIP"
+
+if [ -n "${SPARKLE_BIN:-}" ] && [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
+  echo "Signing $OUTPUT_ZIP for Sparkle"
+  SIGN_OUTPUT=$("$SPARKLE_BIN/sign_update" -f "$SPARKLE_PRIVATE_KEY_FILE" "$OUTPUT_ZIP")
+  ED_SIGNATURE=$(printf '%s' "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+  if [ -z "$ED_SIGNATURE" ]; then
+    echo "ERROR: failed to extract sparkle:edSignature" >&2
+    echo "$SIGN_OUTPUT" >&2
+    exit 1
+  fi
+
+  ZIP_LENGTH=$(stat -f%z "$OUTPUT_ZIP")
+  APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+  APP_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+  MIN_SYSTEM_VERSION=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP_PATH/Contents/Info.plist")
+
+  ED_SIGNATURE="$ED_SIGNATURE" ZIP_LENGTH="$ZIP_LENGTH" APP_VERSION="$APP_VERSION" \
+  APP_BUILD="$APP_BUILD" MIN_SYSTEM_VERSION="$MIN_SYSTEM_VERSION" OUTPUT_ZIP="$OUTPUT_ZIP" \
+  python3 - <<'PY'
+import json, os
+with open(os.environ["OUTPUT_ZIP"] + ".sparkle.json", "w") as f:
+    json.dump({
+        "signature": os.environ["ED_SIGNATURE"],
+        "length": int(os.environ["ZIP_LENGTH"]),
+        "version": os.environ["APP_VERSION"],
+        "build": os.environ["APP_BUILD"],
+        "minimum_system_version": os.environ["MIN_SYSTEM_VERSION"],
+    }, f, indent=2)
+PY
+fi
+
 echo "Packaged $OUTPUT_ZIP"

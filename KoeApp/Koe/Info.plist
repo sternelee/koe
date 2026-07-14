@@ -37,7 +37,13 @@
 	<string>Koe uses on-device speech recognition to transcribe your voice input.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-	<key>SPUpdateFeedURL</key>
-	<string>$(APP_UPDATE_FEED_URL)</string>
+	<key>SUFeedURL</key>
+	<string>$(APP_APPCAST_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string></string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>21600</integer>
 </dict>
 </plist>

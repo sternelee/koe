@@ -7,12 +7,20 @@ All notable user-facing changes to Koe are documented here.
 ### Added
 
 - Added an optional setting to mute system audio while recording (off by default). When enabled, other apps' playback is silenced for the duration of the capture so it neither distracts the speaker nor bleeds into the microphone. The exact device is restored on stop (including app quit while recording), and a device the user had already muted is left untouched.
+- Release builds are now signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens them without warnings.
+- Switched in-app updates to Sparkle: updates now download, verify (EdDSA-signed), and install in place instead of opening a browser download.
 
 ### Changed
 
+- Renamed the build variants: the former lite build is now the standard **Koe** app (what most users should install), and the former full build is now **Koe MLX** (adds on-device MLX model support). Both keep the same bundle identifier and update on their own Sparkle channels.
+- Upgraded all dependencies: mlx-swift 0.30.6 → 0.31.6, mlx-swift-lm 2.30.6 → 3.31.4, mlx-audio-swift pinned to v0.1.3 (was an unpinned `main` branch that had drifted into a version conflict), and all Rust crates refreshed to their latest semver-compatible versions.
 - Start prepared microphone hardware on the initial trigger-down and retain a
   short hold-mode pre-roll, reducing Bluetooth headset activation delay without
   keeping the microphone active while Koe is idle.
+
+### Removed
+
+- Removed the x86_64 (Intel) build target; Koe is Apple Silicon only.
 
 ## 1.0.14 - 2026-04-09
 
