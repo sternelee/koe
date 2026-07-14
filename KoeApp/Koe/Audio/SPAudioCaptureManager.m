@@ -15,6 +15,12 @@ static const NSUInteger kMaxPreRollSamples = 4800; // 300ms at 16kHz
 static const int kNumBuffers = 3;
 static const UInt32 kBufferFrames = 800; // 50ms at 16kHz
 
+// CoreAudio may synchronously wait on coreaudiod while devices or Bluetooth
+// routes are being rebuilt. Keep those waits off the main thread and bound how
+// long callers wait for the result. A timed-out operation retains exclusive
+// ownership until its worker eventually returns, preventing overlapping retries.
+static const NSTimeInterval kAudioLifecycleTimeoutSec = 3.0;
+
 @interface SPAudioCaptureManager ()
 
 @property (nonatomic, assign) AudioQueueRef audioQueue;
@@ -33,6 +39,14 @@ static const UInt32 kBufferFrames = 800; // 50ms at 16kHz
 @property (nonatomic, assign) BOOL waitingForFirstCallback;
 @property (nonatomic, assign) BOOL waitingForFirstFrame;
 
+// All AudioQueue create/start/stop/dispose calls run on this serial queue.
+// lifecycleOperationInFlight remains true after a timeout until the underlying
+// CoreAudio call actually returns and late cleanup has completed.
+@property (nonatomic) dispatch_queue_t lifecycleQueue;
+@property (nonatomic, strong) NSObject *lifecycleLock;
+@property (nonatomic, assign) NSUInteger lifecycleGeneration;
+@property (nonatomic, assign) BOOL lifecycleOperationInFlight;
+
 // Output muting during recording: silence other apps' playback so it neither
 // distracts the speaker nor bleeds into the mic. Restored on stop/shutdown.
 @property (nonatomic, assign) BOOL didMuteOutput;
@@ -40,7 +54,10 @@ static const UInt32 kBufferFrames = 800; // 50ms at 16kHz
 
 - (BOOL)startPreparedQueue;
 - (void)stopAndReprepare;
-- (void)disposeQueue;
+- (BOOL)disposeQueue;
+- (BOOL)runLifecycleOperationNamed:(NSString *)name
+                         operation:(BOOL (^)(void))operation
+                        lateCleanup:(dispatch_block_t)lateCleanup;
 - (void)muteSystemOutput;
 - (void)restoreSystemOutput;
 
@@ -178,22 +195,100 @@ static void queueInputCallback(void *userData,
         _muteOutputEnabled = NO;
         _didMuteOutput = NO;
         _mutedOutputDevice = kAudioObjectUnknown;
+        _lifecycleQueue = dispatch_queue_create("nz.owo.koe.audio-lifecycle",
+                                                DISPATCH_QUEUE_SERIAL);
+        _lifecycleLock = [[NSObject alloc] init];
     }
     return self;
+}
+
+- (BOOL)runLifecycleOperationNamed:(NSString *)name
+                         operation:(BOOL (^)(void))operation
+                        lateCleanup:(dispatch_block_t)lateCleanup {
+    if (!operation) return NO;
+
+    __block BOOL completed = NO;
+    __block BOOL result = NO;
+    NSUInteger generation = 0;
+
+    @synchronized (self.lifecycleLock) {
+        if (self.lifecycleOperationInFlight) {
+            NSLog(@"[Koe] Audio %@ rejected: another lifecycle operation is still in flight",
+                  name);
+            return NO;
+        }
+        self.lifecycleOperationInFlight = YES;
+        self.lifecycleGeneration += 1;
+        generation = self.lifecycleGeneration;
+    }
+
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_async(self.lifecycleQueue, ^{
+        BOOL operationResult = operation();
+        BOOL abandoned = NO;
+
+        @synchronized (self.lifecycleLock) {
+            abandoned = generation != self.lifecycleGeneration;
+            if (!abandoned) {
+                result = operationResult;
+                completed = YES;
+                self.lifecycleOperationInFlight = NO;
+                // Signal while holding the handoff lock. If the deadline and
+                // completion race, the waiter re-checks completed under this
+                // same lock and accepts the completed result.
+                dispatch_semaphore_signal(semaphore);
+            }
+        }
+
+        if (abandoned) {
+            if (lateCleanup) lateCleanup();
+            @synchronized (self.lifecycleLock) {
+                self.lifecycleOperationInFlight = NO;
+            }
+        }
+    });
+
+    long waitResult = dispatch_semaphore_wait(
+        semaphore,
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(kAudioLifecycleTimeoutSec * NSEC_PER_SEC)));
+
+    @synchronized (self.lifecycleLock) {
+        if (completed) return result;
+
+        if (waitResult != 0 && generation == self.lifecycleGeneration) {
+            // Invalidate publication by the worker. The in-flight flag stays
+            // set until the worker returns and performs lateCleanup.
+            self.lifecycleGeneration += 1;
+        }
+    }
+
+    NSLog(@"[Koe] Audio %@ timed out after %.0fs; abandoning late result",
+          name, kAudioLifecycleTimeoutSec);
+    return NO;
 }
 
 - (void)setInputDeviceID:(AudioDeviceID)deviceID {
     if (self.pendingDeviceID == deviceID) return;
     self.pendingDeviceID = deviceID;
-    if (self.audioQueue && !self.isAudioQueueRunning && self.preparedDeviceID != deviceID) {
+    BOOL shouldDispose = NO;
+    @synchronized (self.lifecycleLock) {
+        shouldDispose = self.audioQueue && !self.isAudioQueueRunning &&
+                        self.preparedDeviceID != deviceID;
+    }
+    if (shouldDispose) {
         [self disposeQueue];
     }
 }
 
 - (BOOL)prepare {
-    if (self.audioQueue) return YES;
+    @synchronized (self.lifecycleLock) {
+        if (self.audioQueue) return YES;
+    }
 
     uint64_t prepareStartedAt = mach_continuous_time();
+    AudioDeviceID pendingDeviceID = self.pendingDeviceID;
+    __block AudioQueueRef preparedQueue = NULL;
 
     AudioStreamBasicDescription format = {
         .mSampleRate       = kTargetSampleRate,
@@ -206,60 +301,80 @@ static void queueInputCallback(void *userData,
         .mBytesPerPacket   = sizeof(float),
     };
 
-    AudioQueueRef queue = NULL;
-    OSStatus status = AudioQueueNewInput(&format, queueInputCallback,
-                                         (__bridge void *)self,
-                                         NULL, NULL, 0, &queue);
-    if (status != noErr) {
-        NSLog(@"[Koe] Failed to prepare audio queue: %d", (int)status);
-        return NO;
-    }
+    BOOL prepared = [self runLifecycleOperationNamed:@"queue preparation"
+                                           operation:^BOOL{
+        AudioQueueRef queue = NULL;
+        OSStatus status = AudioQueueNewInput(&format, queueInputCallback,
+                                             (__bridge void *)self,
+                                             NULL, NULL, 0, &queue);
+        if (status != noErr) {
+            NSLog(@"[Koe] Failed to prepare audio queue: %d", (int)status);
+            return NO;
+        }
+        preparedQueue = queue;
 
-    if (self.pendingDeviceID != kAudioObjectUnknown) {
-        AudioObjectPropertyAddress uidAddress = {
-            kAudioDevicePropertyDeviceUID,
-            kAudioObjectPropertyScopeGlobal,
-            kAudioObjectPropertyElementMain
-        };
-        CFStringRef uid = NULL;
-        UInt32 uidSize = sizeof(CFStringRef);
-        OSStatus uidStatus = AudioObjectGetPropertyData(self.pendingDeviceID,
-                                                        &uidAddress,
-                                                        0, NULL, &uidSize, &uid);
-        if (uidStatus == noErr && uid) {
-            OSStatus setStatus = AudioQueueSetProperty(queue,
-                                                       kAudioQueueProperty_CurrentDevice,
-                                                       &uid,
-                                                       sizeof(CFStringRef));
-            if (setStatus != noErr) {
-                NSLog(@"[Koe] Failed to set input device (ID %u): %d — using system default",
-                      (unsigned)self.pendingDeviceID, (int)setStatus);
+        if (pendingDeviceID != kAudioObjectUnknown) {
+            AudioObjectPropertyAddress uidAddress = {
+                kAudioDevicePropertyDeviceUID,
+                kAudioObjectPropertyScopeGlobal,
+                kAudioObjectPropertyElementMain
+            };
+            CFStringRef uid = NULL;
+            UInt32 uidSize = sizeof(CFStringRef);
+            OSStatus uidStatus = AudioObjectGetPropertyData(pendingDeviceID,
+                                                            &uidAddress,
+                                                            0, NULL,
+                                                            &uidSize, &uid);
+            if (uidStatus == noErr && uid) {
+                OSStatus setStatus = AudioQueueSetProperty(
+                    queue, kAudioQueueProperty_CurrentDevice,
+                    &uid, sizeof(CFStringRef));
+                if (setStatus != noErr) {
+                    NSLog(@"[Koe] Failed to set input device (ID %u): %d — using system default",
+                          (unsigned)pendingDeviceID, (int)setStatus);
+                }
+                CFRelease(uid);
             }
-            CFRelease(uid);
         }
-    }
 
-    UInt32 bufferSize = kBufferFrames * sizeof(float);
-    for (int i = 0; i < kNumBuffers; i++) {
-        AudioQueueBufferRef audioBuffer = NULL;
-        status = AudioQueueAllocateBuffer(queue, bufferSize, &audioBuffer);
-        if (status != noErr) {
-            NSLog(@"[Koe] Failed to allocate audio queue buffer %d: %d", i, (int)status);
-            AudioQueueDispose(queue, true);
-            return NO;
+        UInt32 bufferSize = kBufferFrames * sizeof(float);
+        for (int i = 0; i < kNumBuffers; i++) {
+            AudioQueueBufferRef audioBuffer = NULL;
+            status = AudioQueueAllocateBuffer(queue, bufferSize, &audioBuffer);
+            if (status != noErr) {
+                NSLog(@"[Koe] Failed to allocate audio queue buffer %d: %d",
+                      i, (int)status);
+                AudioQueueDispose(queue, true);
+                preparedQueue = NULL;
+                return NO;
+            }
+            status = AudioQueueEnqueueBuffer(queue, audioBuffer, 0, NULL);
+            if (status != noErr) {
+                NSLog(@"[Koe] Failed to enqueue audio queue buffer %d: %d",
+                      i, (int)status);
+                AudioQueueDispose(queue, true);
+                preparedQueue = NULL;
+                return NO;
+            }
         }
-        status = AudioQueueEnqueueBuffer(queue, audioBuffer, 0, NULL);
-        if (status != noErr) {
-            NSLog(@"[Koe] Failed to enqueue audio queue buffer %d: %d", i, (int)status);
-            AudioQueueDispose(queue, true);
-            return NO;
-        }
-    }
 
-    self.audioQueue = queue;
-    self.preparedDeviceID = self.pendingDeviceID;
-    AudioQueueAddPropertyListener(queue, kAudioQueueProperty_IsRunning,
-                                  queueRunningChanged, (__bridge void *)self);
+        AudioQueueAddPropertyListener(queue, kAudioQueueProperty_IsRunning,
+                                      queueRunningChanged,
+                                      (__bridge void *)self);
+        return YES;
+    } lateCleanup:^{
+        if (preparedQueue) {
+            AudioQueueDispose(preparedQueue, true);
+            preparedQueue = NULL;
+        }
+    }];
+
+    if (!prepared || !preparedQueue) return NO;
+
+    @synchronized (self.lifecycleLock) {
+        self.audioQueue = preparedQueue;
+        self.preparedDeviceID = pendingDeviceID;
+    }
     NSLog(@"[Koe] Audio queue prepared in %.1fms (hardware inactive)",
           elapsedMillisecondsSince(prepareStartedAt));
     return YES;
@@ -269,10 +384,35 @@ static void queueInputCallback(void *userData,
     if (self.isAudioQueueRunning) return YES;
     if (![self prepare]) return NO;
 
+    AudioQueueRef queue = NULL;
+    @synchronized (self.lifecycleLock) {
+        queue = self.audioQueue;
+    }
+    if (!queue) return NO;
+
     uint64_t startCalledAt = mach_continuous_time();
-    OSStatus status = AudioQueueStart(self.audioQueue, NULL);
-    if (status != noErr) {
-        NSLog(@"[Koe] Audio queue start failed: %d", (int)status);
+    __block OSStatus status = noErr;
+    BOOL started = [self runLifecycleOperationNamed:@"queue start"
+                                          operation:^BOOL{
+        status = AudioQueueStart(queue, NULL);
+        return status == noErr;
+    } lateCleanup:^{
+        // The caller has already abandoned this generation. A queue that
+        // starts after the timeout must never remain active or publish audio.
+        AudioQueueStop(queue, true);
+        AudioQueueDispose(queue, true);
+        @synchronized (self.lifecycleLock) {
+            if (self.audioQueue == queue) {
+                self.audioQueue = NULL;
+                self.preparedDeviceID = kAudioObjectUnknown;
+            }
+        }
+        self.isAudioQueueRunning = NO;
+    }];
+    if (!started) {
+        if (status != noErr) {
+            NSLog(@"[Koe] Audio queue start failed: %d", (int)status);
+        }
         [self disposeQueue];
         return NO;
     }
@@ -395,11 +535,12 @@ static void queueInputCallback(void *userData,
 }
 
 - (void)stopAndReprepare {
-    [self disposeQueue];
-    [self prepare];
+    if ([self disposeQueue]) {
+        [self prepare];
+    }
 }
 
-- (void)disposeQueue {
+- (BOOL)disposeQueue {
     @synchronized (self.accumBuffer) {
         self.isCapturing = NO;
         self.isPreCapturing = NO;
@@ -407,16 +548,29 @@ static void queueInputCallback(void *userData,
         self.audioCallback = nil;
         [self.accumBuffer setLength:0];
         [self.preRollBuffer setLength:0];
-        self.preparedDeviceID = kAudioObjectUnknown;
         self.waitingForFirstCallback = NO;
         self.waitingForFirstFrame = NO;
     }
 
-    if (self.audioQueue) {
-        AudioQueueStop(self.audioQueue, true);
-        AudioQueueDispose(self.audioQueue, true);
+    AudioQueueRef queue = NULL;
+    @synchronized (self.lifecycleLock) {
+        queue = self.audioQueue;
         self.audioQueue = NULL;
+        self.preparedDeviceID = kAudioObjectUnknown;
     }
+
+    if (!queue) return YES;
+
+    return [self runLifecycleOperationNamed:@"queue teardown"
+                                  operation:^BOOL{
+        OSStatus stopStatus = AudioQueueStop(queue, true);
+        OSStatus disposeStatus = AudioQueueDispose(queue, true);
+        if (stopStatus != noErr || disposeStatus != noErr) {
+            NSLog(@"[Koe] Audio queue teardown errors: stop=%d dispose=%d",
+                  (int)stopStatus, (int)disposeStatus);
+        }
+        return stopStatus == noErr && disposeStatus == noErr;
+    } lateCleanup:nil];
 }
 
 - (void)shutdown {
