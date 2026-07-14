@@ -1,4 +1,5 @@
 #import <XCTest/XCTest.h>
+#import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import "SPHotkeyMonitor.h"
 
@@ -88,6 +89,7 @@ static BOOL sessionStateAllowsConfigReloadForTest(NSString *state) {
 - (void)holdTimerFired;
 - (void)doubleTapTimerFired;
 - (void)cancelDoubleTapCandidateForInterveningInput;
+- (BOOL)handleNSEvent:(NSEvent *)event;
 - (void)scheduleModifierRelease;
 - (void)setRunning:(BOOL)running;
 - (void)setTriggerDown:(BOOL)triggerDown;
@@ -336,9 +338,46 @@ static void SPInstallCurrentModifierFlagsStub(void) {
     XCTAssertEqual(delegate.tapEndCount, 0);
 
     [monitor handleTriggerDown];
+
+    XCTAssertEqual(delegate.tapEndCount, 0);
+
     [monitor handleTriggerUp];
 
     XCTAssertEqual(delegate.tapStartCount, 1);
+    XCTAssertEqual(delegate.tapEndCount, 1);
+}
+
+- (void)testDoubleTapModeDoesNotStopRecordingForCommandShortcut {
+    SPHotkeyMonitorTestDelegate *delegate = [SPHotkeyMonitorTestDelegate new];
+    SPHotkeyMonitor *monitor = [[SPHotkeyMonitor alloc] initWithDelegate:delegate];
+    [monitor setRunning:YES];
+    monitor.triggerMode = SPHotkeyTriggerModeDoubleTap;
+
+    [monitor handleTriggerDown];
+    [monitor handleTriggerUp];
+    [monitor handleTriggerDown];
+    [monitor handleTriggerUp];
+    XCTAssertEqual(delegate.tapStartCount, 1);
+
+    [monitor handleTriggerDown];
+    NSEvent *commandC = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                         location:NSZeroPoint
+                                    modifierFlags:NSEventModifierFlagCommand
+                                        timestamp:0
+                                     windowNumber:0
+                                          context:nil
+                                       characters:@"c"
+                      charactersIgnoringModifiers:@"c"
+                                         isARepeat:NO
+                                           keyCode:8];
+    [monitor handleNSEvent:commandC];
+    [monitor handleTriggerUp];
+
+    XCTAssertEqual(delegate.tapEndCount, 0);
+
+    [monitor handleTriggerDown];
+    [monitor handleTriggerUp];
+
     XCTAssertEqual(delegate.tapEndCount, 1);
 }
 

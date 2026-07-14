@@ -12,6 +12,7 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
     SPHotkeyStateDoubleTapSecondDown, // Second press confirmed; pre-capture is active
     SPHotkeyStateRecordingHold,  // Confirmed hold, recording
     SPHotkeyStateRecordingToggle, // Confirmed tap, free-hands recording
+    SPHotkeyStateDoubleTapStopPending, // Trigger is down; wait to rule out a shortcut
     SPHotkeyStateConsumeKeyUp,   // Waiting to consume keyUp after toggle-stop
 };
 
@@ -520,7 +521,8 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     // it impossible for the second press to arrive within the gesture window.
     if (self.state == SPHotkeyStatePending ||
         self.state == SPHotkeyStateDoubleTapFirstDown ||
-        self.state == SPHotkeyStateDoubleTapSecondDown) {
+        self.state == SPHotkeyStateDoubleTapSecondDown ||
+        self.state == SPHotkeyStateDoubleTapStopPending) {
         self.triggerDown = NO;
         [self handleTriggerUp];
         return;
@@ -564,8 +566,12 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
             break;
 
         case SPHotkeyStateRecordingToggle:
-            self.state = SPHotkeyStateConsumeKeyUp;
-            [self.delegate hotkeyMonitorDidDetectTapEnd];
+            if (self.triggerMode == SPHotkeyTriggerModeDoubleTap) {
+                self.state = SPHotkeyStateDoubleTapStopPending;
+            } else {
+                self.state = SPHotkeyStateConsumeKeyUp;
+                [self.delegate hotkeyMonitorDidDetectTapEnd];
+            }
             break;
 
         default:
@@ -602,6 +608,11 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         case SPHotkeyStateRecordingHold:
             self.state = SPHotkeyStateIdle;
             [self.delegate hotkeyMonitorDidDetectHoldEnd];
+            break;
+
+        case SPHotkeyStateDoubleTapStopPending:
+            self.state = SPHotkeyStateIdle;
+            [self.delegate hotkeyMonitorDidDetectTapEnd];
             break;
 
         case SPHotkeyStateConsumeKeyUp:
@@ -655,13 +666,20 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     if (self.triggerMode != SPHotkeyTriggerModeDoubleTap) return;
 
     BOOL hadPreCapture = self.state == SPHotkeyStateDoubleTapSecondDown;
+    BOOL hadStopCandidate = self.state == SPHotkeyStateDoubleTapStopPending;
     if (self.state != SPHotkeyStateDoubleTapFirstDown &&
         self.state != SPHotkeyStateDoubleTapWaiting &&
-        !hadPreCapture) {
+        !hadPreCapture &&
+        !hadStopCandidate) {
         return;
     }
 
     [self cancelDoubleTapTimer];
+    if (hadStopCandidate) {
+        self.state = SPHotkeyStateRecordingToggle;
+        return;
+    }
+
     self.state = SPHotkeyStateIdle;
     if (hadPreCapture) {
         [self.delegate hotkeyMonitorDidCancelTrigger];
