@@ -90,7 +90,7 @@ Koe opens the release download URL instead of patching the installed app in plac
 
 #### Prerequisites
 
-- macOS 14.0+ (13.0+ without MLX support)
+- macOS 14.0+
 - Apple Silicon or Intel Mac
 - Rust toolchain (`rustup`)
 - Xcode with command line tools
@@ -638,7 +638,7 @@ make build
 make build-mlx
 ```
 
-The standard app excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB) — for most users this is the right choice. Cloud providers (Doubao, Qwen) work on all macOS versions; Apple Speech requires macOS 26+.
+The standard app excludes MLX and sherpa-onnx, producing a smaller app that doesn't require downloading on-device ASR models (~189 MB–1.5 GB) — for most users this is the right choice. Cloud providers (Doubao, Qwen) work on supported macOS versions; Apple Speech requires macOS 26+.
 
 Local ASR providers are controlled by Rust feature flags in `koe-core/Cargo.toml`: `mlx`, `apple-speech`, `sherpa-onnx` (all enabled by default). Each Xcode scheme passes the appropriate `--features` flags to `cargo build`.
 
