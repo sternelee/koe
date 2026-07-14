@@ -2,7 +2,7 @@
 
 All notable user-facing changes to Koe are documented here.
 
-## 1.0.17 - 2026-07-14
+## Unreleased
 
 ### Added
 
