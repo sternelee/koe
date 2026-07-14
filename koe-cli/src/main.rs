@@ -1,4 +1,6 @@
 mod benchmark;
+mod dict;
+mod text;
 
 use std::sync::Arc;
 
@@ -50,10 +52,45 @@ enum Commands {
         #[command(subcommand)]
         action: ModelCommands,
     },
+    /// Dictionary management and suggestions
+    Dict {
+        #[command(subcommand)]
+        action: DictCommands,
+    },
     /// Manifest management
     Manifest {
         #[command(subcommand)]
         action: ManifestCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum DictCommands {
+    /// Suggest dictionary entries mined from voice-input history.
+    ///
+    /// Compares each session's raw ASR transcript against its LLM-corrected
+    /// text and surfaces recurring corrections — likely proper nouns and
+    /// technical terms a dictionary entry would fix. Suggestions are never
+    /// added automatically; confirm with 'koe dict add <term>'.
+    Suggest {
+        /// Minimum number of sessions a correction must appear in
+        #[arg(long, default_value_t = 2)]
+        min_count: usize,
+        /// Maximum suggestions to show
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Path to history.db (default: ~/.koe/history.db)
+        #[arg(long)]
+        db: Option<String>,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add terms to the dictionary (after your confirmation)
+    Add {
+        /// Terms to append to ~/.koe/dictionary.txt
+        #[arg(required = true)]
+        terms: Vec<String>,
     },
 }
 
@@ -123,6 +160,15 @@ async fn main() {
             ModelCommands::Status { model, verify_mode } => status(&model, &verify_mode),
             ModelCommands::Pull { model } => pull(&model).await,
             ModelCommands::Remove { model } => remove(&model),
+        },
+        Commands::Dict { action } => match action {
+            DictCommands::Suggest {
+                min_count,
+                limit,
+                db,
+                json,
+            } => dict_suggest(min_count, limit, db.as_deref(), json),
+            DictCommands::Add { terms } => dict_add(&terms),
         },
         Commands::Manifest { action } => match action {
             ManifestCommands::Generate {
@@ -426,6 +472,119 @@ async fn transcribe(
         println!("{result}");
     }
 
+    Ok(())
+}
+
+// ─── Dictionary ─────────────────────────────────────────────────────
+
+fn dict_suggest(min_count: usize, limit: usize, db: Option<&str>, json: bool) -> Result<(), String> {
+    let db_path = match db {
+        Some(p) => std::path::PathBuf::from(p),
+        None => koe_core::config::config_dir().join("history.db"),
+    };
+
+    let pairs = dict::load_history_pairs(&db_path)?;
+    if pairs.is_empty() {
+        let analyzable = dict::count_analyzable(&db_path);
+        if analyzable == 0 {
+            eprintln!(
+                "No analyzable sessions yet. Raw ASR text is recorded from this \
+                 version onward — dictate for a while, then run this again."
+            );
+        } else {
+            eprintln!(
+                "No LLM-corrected sessions found ({analyzable} sessions have raw text). \
+                 Enable LLM correction to collect correction pairs."
+            );
+        }
+        return Ok(());
+    }
+
+    let cfg = koe_core::config::load_config().map_err(|e| format!("load config: {e}"))?;
+    let dict_path = koe_core::config::resolve_dictionary_path(&cfg);
+    let existing = koe_core::dictionary::load_dictionary(&dict_path)
+        .map_err(|e| format!("load dictionary: {e}"))?;
+
+    let all: Vec<dict::Replacement> = pairs
+        .iter()
+        .flat_map(|(asr, corrected)| dict::replacements(asr, corrected))
+        .collect();
+    let mut suggestions = dict::aggregate(all, &existing, min_count);
+    let total = suggestions.len();
+    suggestions.truncate(limit);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&suggestions).map_err(|e| format!("json: {e}"))?
+        );
+        return Ok(());
+    }
+
+    if suggestions.is_empty() {
+        eprintln!(
+            "No recurring corrections found across {} session(s). \
+             Lower the threshold with --min-count 1 to see one-off corrections.",
+            pairs.len()
+        );
+        return Ok(());
+    }
+
+    println!(
+        "Dictionary suggestions from {} corrected session(s):\n",
+        pairs.len()
+    );
+    for s in &suggestions {
+        println!("  {}  ({}x)", s.term, s.count);
+        println!("    heard as: {}", s.asr_forms.join(", "));
+        println!("    example:  {}\n", s.example);
+    }
+    if total > suggestions.len() {
+        println!("  … and {} more (raise --limit)\n", total - suggestions.len());
+    }
+    println!("Add with: koe dict add <term> …  (nothing is added automatically)");
+    Ok(())
+}
+
+fn dict_add(terms: &[String]) -> Result<(), String> {
+    let cfg = koe_core::config::load_config().map_err(|e| format!("load config: {e}"))?;
+    let dict_path = koe_core::config::resolve_dictionary_path(&cfg);
+    let existing = koe_core::dictionary::load_dictionary(&dict_path)
+        .map_err(|e| format!("load dictionary: {e}"))?;
+    let existing_lower: Vec<String> = existing.iter().map(|e| e.to_lowercase()).collect();
+
+    let mut content = if dict_path.exists() {
+        std::fs::read_to_string(&dict_path).map_err(|e| format!("read dictionary: {e}"))?
+    } else {
+        String::new()
+    };
+
+    let mut added = 0;
+    for term in terms {
+        let term = term.trim();
+        if term.is_empty() {
+            continue;
+        }
+        if existing_lower.contains(&term.to_lowercase()) {
+            println!("already present: {term}");
+            continue;
+        }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(term);
+        content.push('\n');
+        println!("added: {term}");
+        added += 1;
+    }
+
+    if added > 0 {
+        std::fs::write(&dict_path, content).map_err(|e| format!("write dictionary: {e}"))?;
+        println!(
+            "{added} term(s) written to {} (takes effect next session)",
+            dict_path.display()
+        );
+    }
     Ok(())
 }
 

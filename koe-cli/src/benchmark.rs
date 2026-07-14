@@ -80,34 +80,7 @@ pub fn load_corpus(dir: &Path) -> Result<Vec<CorpusEntry>, String> {
 /// (WER-style), lowercased. Punctuation and whitespace are separators.
 /// For pure-English text this yields WER, for pure-Chinese CER, and a
 /// uniform mixed token error rate for code-switched text.
-pub fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut word = String::new();
-
-    for ch in text.chars() {
-        let is_cjk = matches!(ch as u32,
-            0x3040..=0x30FF      // Hiragana + Katakana
-            | 0x3400..=0x4DBF    // CJK Extension A
-            | 0x4E00..=0x9FFF    // CJK Unified Ideographs
-            | 0xF900..=0xFAFF    // CJK Compatibility Ideographs
-            | 0x20000..=0x2A6DF  // CJK Extension B
-        );
-        if is_cjk {
-            if !word.is_empty() {
-                tokens.push(std::mem::take(&mut word));
-            }
-            tokens.push(ch.to_string());
-        } else if ch.is_alphanumeric() || ch == '\'' {
-            word.extend(ch.to_lowercase());
-        } else if !word.is_empty() {
-            tokens.push(std::mem::take(&mut word));
-        }
-    }
-    if !word.is_empty() {
-        tokens.push(word);
-    }
-    tokens
-}
+pub use crate::text::tokenize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct EditStats {
