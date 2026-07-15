@@ -177,16 +177,21 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         if (handlesModifierOnlyTrigger || handlesKeyDownMatchedTrigger) {
             NSLog(@"[Koe] Key event: type=%d keyCode=%ld", type, (long)keyCode);
             BOOL isDown = (type == kCGEventKeyDown);
-            if (isDown != monitor.triggerDown) {
+            // Dedup and mutate triggerDown ON THE MAIN THREAD, not here. The
+            // same physical event also arrives via the NSEvent monitor path
+            // on the main thread; if the tap thread flips triggerDown ahead
+            // of the main-thread state machine, a fast tap gets processed
+            // twice (start + immediate stop). All edges must be decided
+            // against triggerDown serially on main.
+            SPPerformOnMainRunLoop(^{
+                if (isDown == monitor.triggerDown) return;
                 monitor.triggerDown = isDown;
-                SPPerformOnMainRunLoop(^{
-                    if (isDown) {
-                        [monitor handleTriggerDown];
-                    } else {
-                        [monitor handleTriggerUp];
-                    }
-                });
-            }
+                if (isDown) {
+                    [monitor handleTriggerDown];
+                } else {
+                    [monitor handleTriggerUp];
+                }
+            });
             if (handlesKeyDownMatchedTrigger && isDown) {
                 [monitor addSuppressedHotkeyKeyCode:keyCodeNumber];
                 return NULL;
@@ -464,6 +469,17 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 - (BOOL)handleNSEvent:(NSEvent *)event {
     if (!self.running || self.suspended) return NO;
 
+    // The NSEvent monitors exist only as a fallback for when the CGEventTap
+    // is unavailable (no Input Monitoring permission) or disabled. While the
+    // tap is live it already sees every one of these events — earlier, on
+    // its own thread. Also acting on the monitor copy would double-process
+    // each physical keystroke: the tap thread outruns NSEvent delivery, so
+    // a fast trigger tap arrives as down/up (tap) followed by down/up
+    // (monitor) and the triggerDown dedup reads the late copies as a second
+    // tap — starting a session and instantly ending it.
+    CFMachPortRef tap = self.eventTap;
+    if (tap && CGEventTapIsEnabled(tap)) return NO;
+
     if (event.type == NSEventTypeFlagsChanged) {
         NSUInteger flags = event.modifierFlags;
         NSInteger keyCode = event.keyCode;
@@ -611,16 +627,21 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         return;
     }
 
-    if (triggerNow == self.triggerDown) return;
-
-    self.triggerDown = triggerNow;
-
+    // Dedup and mutate triggerDown ON THE MAIN THREAD (see the keyDown path
+    // in hotkeyEventCallback for why): the NSEvent monitor delivers the same
+    // physical event on the main thread, and deciding edges against a
+    // triggerDown that the tap thread already flipped lets a fast tap be
+    // processed twice — starting a session and instantly ending it.
     if (triggerNow) {
         SPPerformOnMainRunLoop(^{
+            if (self.triggerDown) return;
+            self.triggerDown = YES;
             [self handleTriggerDown];
         });
     } else {
         SPPerformOnMainRunLoop(^{
+            if (!self.triggerDown) return;
+            self.triggerDown = NO;
             [self scheduleModifierRelease];
         });
     }
@@ -648,19 +669,29 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         return;
     }
 
-    dispatch_block_t block = dispatch_block_create(0, ^{
-        self.pendingModifierReleaseBlock = nil;
-        if (([self currentModifierFlags] & self.targetModifierFlag) != 0) {
-            self.triggerDown = YES;
-            return;
-        }
-        self.triggerDown = NO;
-        [self handleTriggerUp];
+    // The debounce timer fires on a global queue and hops back to the main
+    // thread in common modes. dispatch_after onto the main queue would not
+    // fire while a modal loop runs (Sparkle update prompt, NSAlert) — the
+    // release would freeze there while trigger-down events keep arriving,
+    // wedging the state machine.
+    __block dispatch_block_t scheduled = nil;
+    scheduled = dispatch_block_create(0, ^{
+        SPPerformOnMainRunLoop(^{
+            // Superseded or cancelled while we hopped threads.
+            if (self.pendingModifierReleaseBlock != scheduled) return;
+            self.pendingModifierReleaseBlock = nil;
+            if (([self currentModifierFlags] & self.targetModifierFlag) != 0) {
+                self.triggerDown = YES;
+                return;
+            }
+            self.triggerDown = NO;
+            [self handleTriggerUp];
+        });
     });
-    self.pendingModifierReleaseBlock = block;
+    self.pendingModifierReleaseBlock = scheduled;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(SPModifierOnlyReleaseDebounceSeconds * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(),
-                   block);
+                   dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                   scheduled);
 }
 
 - (void)handleTriggerDown {
@@ -747,11 +778,15 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 - (void)startHoldTimer {
     [self cancelHoldTimer];
     __weak typeof(self) weakSelf = self;
-    self.holdTimer = [NSTimer scheduledTimerWithTimeInterval:(self.holdThresholdMs / 1000.0)
-                                                    repeats:NO
-                                                      block:^(NSTimer *timer) {
+    // Common modes so hold classification keeps working during modal or
+    // menu-tracking run loops (default-mode timers freeze there).
+    NSTimer *timer = [NSTimer timerWithTimeInterval:(self.holdThresholdMs / 1000.0)
+                                            repeats:NO
+                                              block:^(NSTimer *t) {
         [weakSelf holdTimerFired];
     }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    self.holdTimer = timer;
 }
 
 - (void)cancelHoldTimer {
@@ -762,11 +797,13 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 - (void)startDoubleTapTimer {
     [self cancelDoubleTapTimer];
     __weak typeof(self) weakSelf = self;
-    self.doubleTapTimer = [NSTimer scheduledTimerWithTimeInterval:(self.doubleTapThresholdMs / 1000.0)
-                                                          repeats:NO
-                                                            block:^(NSTimer *timer) {
+    NSTimer *timer = [NSTimer timerWithTimeInterval:(self.doubleTapThresholdMs / 1000.0)
+                                            repeats:NO
+                                              block:^(NSTimer *t) {
         [weakSelf doubleTapTimerFired];
     }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    self.doubleTapTimer = timer;
 }
 
 - (void)cancelDoubleTapTimer {
