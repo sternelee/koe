@@ -2,7 +2,11 @@
 
 All notable user-facing changes to Koe are documented here.
 
-## Unreleased
+## 1.0.19 - 2026-07-16
+
+### Added
+
+- The in-app update dialog now shows what changed in the new version: Sparkle appcast entries carry the release's changelog section as formatted release notes (effective for updates released from this version on).
 
 ### Fixed
 
