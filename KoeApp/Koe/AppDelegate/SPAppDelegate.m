@@ -277,6 +277,12 @@ static BOOL configFlagEnabled(const char *keyPath) {
     NSLog(@"[Koe] Application terminating...");
     self.quitting = YES;
     [self cancelPendingSessionEnd];
+    // Cancel any scheduled CGEventPost paste/undo blocks. The status-bar quit
+    // path already does this, but termination can also start elsewhere
+    // (Sparkle update relaunch, logout/shutdown) — without the cancel, a
+    // pending synthetic paste can still fire during run-loop draining and
+    // leak key events into whichever app is focused.
+    [self.pasteManager cancel];
     [self.audioCaptureManager shutdown];
     // Safety net: restore device mute even if capture state was already cleared.
     // Device mute is a persistent system property — leaving it on after quit is bad.
