@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.23 - 2026-07-19
+
+### Fixed
+
+- **Fixed DoubaoIME producing duplicated, ever-growing transcripts (regression in 1.0.22).** A change meant to fix the live-caption freeze after a speech pause assumed the server only sends per-segment text, but DoubaoIME responses often carry the full cumulative transcript — the committed-text prefix then doubled the output at every finalized segment. The change is reverted; DoubaoIME behaves as in 1.0.21 again (including the cosmetic caption-freeze quirk, which needs a different fix).
+
 ## 1.0.22 - 2026-07-19
 
 ### Added
