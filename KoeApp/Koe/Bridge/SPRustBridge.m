@@ -99,6 +99,21 @@ static void bridge_on_asr_final_text(uint64_t token, const char *text) {
     }
 }
 
+static void bridge_on_session_result_meta(uint64_t token, const char *asrText,
+                                          const char *asrProvider, bool llmApplied) {
+    NSString *asr = asrText ? [NSString stringWithUTF8String:asrText] : @"";
+    NSString *provider = asrProvider ? [NSString stringWithUTF8String:asrProvider] : @"";
+    id<SPRustBridgeDelegate> delegate = _bridgeDelegate;
+    if (delegate) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (token != _currentSessionToken) return;
+            [delegate rustBridgeDidReceiveSessionMetaWithAsrText:asr
+                                                        provider:provider
+                                                      llmApplied:llmApplied ? YES : NO];
+        });
+    }
+}
+
 static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
     NSString *txt = text ? [NSString stringWithUTF8String:text] : @"";
     id<SPRustBridgeDelegate> delegate = _bridgeDelegate;
@@ -152,6 +167,7 @@ static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
         .on_interim_text = bridge_on_interim_text,
         .on_asr_final_text = bridge_on_asr_final_text,
         .on_rewrite_text_ready = bridge_on_rewrite_text_ready,
+        .on_session_result_meta = bridge_on_session_result_meta,
     };
     sp_core_register_callbacks(callbacks);
 
@@ -200,6 +216,10 @@ static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
     sp_core_session_cancel();
 }
 
+- (BOOL)acceptAsrResult {
+    return sp_core_accept_asr_result() == 0;
+}
+
 - (void)reloadConfig {
     sp_core_reload_config();
 }
@@ -228,8 +248,15 @@ static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
     return [result isKindOfClass:[NSArray class]] ? result : @[];
 }
 
-- (NSDictionary *)llmRemoteModelsForBaseURL:(NSString *)baseURL apiKey:(NSString *)apiKey {
-    char *json = sp_llm_list_models_json((baseURL ?: @"").UTF8String, (apiKey ?: @"").UTF8String);
+- (NSDictionary *)llmRemoteModelsForProfile:(NSDictionary *)profile {
+    NSData *profileData = [NSJSONSerialization dataWithJSONObject:profile ?: @{}
+                                                          options:0
+                                                            error:nil];
+    NSString *profileJson = profileData
+                                ? [[NSString alloc] initWithData:profileData
+                                                       encoding:NSUTF8StringEncoding]
+                                : nil;
+    char *json = sp_llm_list_models_for_profile_json((profileJson ?: @"{}").UTF8String);
     if (!json) {
         return @{
             @"success": @NO,

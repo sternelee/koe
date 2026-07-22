@@ -5,7 +5,6 @@ pub struct TranscriptAggregator {
     definite_text: String,
     final_text: String,
     has_final: bool,
-    has_definite: bool,
     interim_history: Vec<String>,
 }
 
@@ -16,7 +15,6 @@ impl TranscriptAggregator {
             definite_text: String::new(),
             final_text: String::new(),
             has_final: false,
-            has_definite: false,
             interim_history: Vec::new(),
         }
     }
@@ -26,40 +24,79 @@ impl TranscriptAggregator {
         if !text.is_empty() {
             if self.interim_history.last().map(|s| s.as_str()) != Some(text) {
                 self.interim_history.push(text.to_string());
+                // Keep the tail; only the last ~10 entries are ever consumed
+                // (see interim_history()), so bounding at 64 is generous and
+                // prevents unbounded growth during very long dictation sessions.
+                const MAX_HISTORY: usize = 64;
+                if self.interim_history.len() > MAX_HISTORY {
+                    let drop = self.interim_history.len() - MAX_HISTORY;
+                    self.interim_history.drain(..drop);
+                }
             }
             self.interim_text = text.to_string();
         }
     }
 
-    /// Live preview that combines committed final text with the in-progress
-    /// interim. After a pause, providers like DoubaoIME emit `Interim` events
-    /// containing only the new segment, so showing `interim_text` alone would
-    /// hide previously-finalized sentences. Merge them with the same
-    /// overlap-trimming logic used for final segments.
+    /// Live preview that combines the committed text view with the
+    /// in-progress interim. After a pause, providers like DoubaoIME emit
+    /// `Interim` events containing only the new segment, so showing
+    /// `interim_text` alone would hide previously-finalized sentences. Merge
+    /// them with the same overlap-trimming logic used for final segments.
     pub fn live_preview(&self) -> String {
-        if self.final_text.is_empty() {
+        let committed_text = self.committed_text();
+
+        if committed_text.is_empty() {
             return self.interim_text.clone();
         }
         if self.interim_text.is_empty() {
-            return self.final_text.clone();
+            return committed_text;
         }
-        if self.interim_text.starts_with(&self.final_text) {
+        if self.interim_text.starts_with(&committed_text) {
             return self.interim_text.clone();
         }
-        if self.final_text.starts_with(&self.interim_text) {
-            return self.final_text.clone();
+        if committed_text.starts_with(&self.interim_text) {
+            return committed_text;
         }
-        let overlap = longest_overlap(&self.final_text, &self.interim_text);
-        let mut out = self.final_text.clone();
+        let overlap = longest_overlap(&committed_text, &self.interim_text);
+        let mut out = committed_text;
         out.push_str(&self.interim_text[overlap..]);
         out
     }
 
+    /// Committed text view: the third-pass `final_text` extended by any
+    /// second-pass `definite_text` that reaches beyond it, merged at read
+    /// time. `final_text` itself is never contaminated by second-pass output:
+    /// second- and third-pass text can differ mid-string, and baking a
+    /// definite into `final_text` would defeat the wholesale-replace path of
+    /// `merge_committed_text` for the next cumulative final, duplicating
+    /// content in the delivered transcript via the overlap fallback.
+    fn committed_text(&self) -> String {
+        if self.final_text.is_empty() {
+            return self.definite_text.clone();
+        }
+        if self.definite_text.is_empty() {
+            return self.final_text.clone();
+        }
+        let mut out = self.final_text.clone();
+        merge_committed_text(&mut out, &self.definite_text);
+        out
+    }
+
     /// Update with a definite result from two-pass recognition.
+    ///
+    /// A definite result is stable enough for preview and delivery purposes
+    /// even if it is not the session's terminal `Final`. It is kept separate
+    /// from `final_text` and merged into the committed view at read time
+    /// (see `committed_text`) so later confirmed segments are not hidden
+    /// behind an earlier final segment.
     pub fn update_definite(&mut self, text: &str) {
         if !text.is_empty() {
-            self.has_definite = true;
             self.definite_text = text.to_string();
+            if !self.has_final {
+                // The definite supersedes the interim it confirms; the next
+                // segment's interim re-arrives immediately.
+                self.interim_text.clear();
+            }
             log::info!("definite segment confirmed: {} chars", text.len());
         }
     }
@@ -76,34 +113,23 @@ impl TranscriptAggregator {
         if text.is_empty() {
             return;
         }
-        if self.final_text.is_empty() {
-            self.final_text = text.to_string();
-        } else if text.starts_with(&self.final_text) {
-            // New final is a refreshed full transcript of the same utterance.
-            self.final_text = text.to_string();
-        } else if self.final_text.starts_with(text) {
-            // Stale replay of earlier content — ignore.
-            return;
-        } else {
-            // New segment: strip the longest overlap between the existing tail
-            // and the incoming head so we don't duplicate boundary characters.
-            let overlap = longest_overlap(&self.final_text, text);
-            self.final_text.push_str(&text[overlap..]);
-        }
+        merge_committed_text(&mut self.final_text, text);
+        // The final supersedes the definite that preceded it; drop it so a
+        // divergent second-pass leftover cannot distort the committed view.
+        self.definite_text.clear();
         // The segment this interim was tracking is now finalized; clear it so
         // the next segment's live preview starts clean.
         self.interim_text.clear();
     }
 
     /// Get the best available text.
-    /// Priority: final > definite > interim.
-    pub fn best_text(&self) -> &str {
-        if self.has_final && !self.final_text.is_empty() {
-            &self.final_text
-        } else if self.has_definite && !self.definite_text.is_empty() {
-            &self.definite_text
+    /// Priority: committed (final extended by definite) > interim.
+    pub fn best_text(&self) -> String {
+        let committed = self.committed_text();
+        if !committed.is_empty() {
+            committed
         } else {
-            &self.interim_text
+            self.interim_text.clone()
         }
     }
 
@@ -112,7 +138,7 @@ impl TranscriptAggregator {
     pub fn best_confirmed_text(&self) -> Option<&str> {
         if self.has_final && !self.final_text.is_empty() {
             Some(&self.final_text)
-        } else if self.has_definite && !self.definite_text.is_empty() {
+        } else if !self.definite_text.is_empty() {
             Some(&self.definite_text)
         } else {
             None
@@ -144,6 +170,22 @@ impl TranscriptAggregator {
 impl Default for TranscriptAggregator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn merge_committed_text(committed: &mut String, text: &str) {
+    if committed.is_empty() {
+        *committed = text.to_string();
+    } else if text.starts_with(committed.as_str()) {
+        // New result is a refreshed full transcript of the same utterance.
+        *committed = text.to_string();
+    } else if committed.starts_with(text) {
+        // Stale replay of earlier content — ignore.
+    } else {
+        // New segment: strip the longest overlap between the existing tail
+        // and the incoming head so we don't duplicate boundary characters.
+        let overlap = longest_overlap(committed, text);
+        committed.push_str(&text[overlap..]);
     }
 }
 

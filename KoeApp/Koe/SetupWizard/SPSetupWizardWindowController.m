@@ -26,6 +26,11 @@ static NSString *const kSystemPromptFile = @"system_prompt.txt";
 static NSString *const kTemplateEditablePromptKey = @"__editable_prompt";
 static NSString *const kTemplateOriginalPromptKey = @"__original_prompt";
 static NSString *const kDefaultLlmChatCompletionsPath = @"/chat/completions";
+static NSString *const kDefaultLlmResponsesPath = @"/responses";
+static NSString *const kDefaultLlmAnthropicMessagesPath = @"/messages";
+static NSString *const kLlmProtocolOpenAIChat = @"openai_chat";
+static NSString *const kLlmProtocolOpenAIResponses = @"openai_responses";
+static NSString *const kLlmProtocolAnthropicMessages = @"anthropic_messages";
 static NSString *const kOverlayFontFamilyDefault = @"system";
 static NSString *const kOverlayFontFamilySystemLabel = @"System Default";
 static NSString *const kTranslationLastStepKey = @"SPTranslationWizardLastStep";
@@ -363,6 +368,32 @@ static BOOL overlayLimitVisibleLinesEnabledValue(NSString *value) {
     return kOverlayLimitVisibleLinesDefault;
 }
 
+static BOOL configBooleanValue(NSString *value, BOOL fallback) {
+  NSString *normalized = [[[value ?: @""
+      stringByTrimmingCharactersInSet:[NSCharacterSet
+                                          whitespaceAndNewlineCharacterSet]]
+      lowercaseString] copy];
+  if (normalized.length == 0) {
+    return fallback;
+  }
+
+  if ([normalized isEqualToString:@"1"] ||
+      [normalized isEqualToString:@"true"] ||
+      [normalized isEqualToString:@"yes"] ||
+      [normalized isEqualToString:@"on"]) {
+    return YES;
+  }
+
+  if ([normalized isEqualToString:@"0"] ||
+      [normalized isEqualToString:@"false"] ||
+      [normalized isEqualToString:@"no"] ||
+      [normalized isEqualToString:@"off"]) {
+    return NO;
+  }
+
+  return fallback;
+}
+
 static NSString *normalizedOverlayFontFamilyValue(NSString *value) {
     NSString *normalized = [[value ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
     if (normalized.length == 0) {
@@ -644,6 +675,80 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     [popup selectItem:[popup lastItem]];
 }
 
+// Pane background that follows the system appearance. Using
+// layer.backgroundColor with a static CGColor would freeze at the appearance
+// active at creation time; overriding updateLayer and resolving inside
+// performAsCurrentDrawingAppearance: ensures the colour is re-evaluated on
+// every appearance change.
+@interface SPPaneBackgroundView : NSView
+@end
+
+@implementation SPPaneBackgroundView
+- (BOOL)wantsUpdateLayer {
+  return YES;
+}
+- (void)updateLayer {
+  [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+    self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+  }];
+}
+@end
+
+// Elevated card surface (white in light mode, dark-elevated in dark mode) with
+// a separator-coloured border. Same dynamic-layer pattern as
+// SPPaneBackgroundView.
+@interface SPCardView : NSView
+@end
+
+@implementation SPCardView
+- (BOOL)wantsUpdateLayer {
+  return YES;
+}
+- (void)updateLayer {
+  self.layer.cornerRadius = 12.0;
+  self.layer.borderWidth = 1.0;
+  [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+    self.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+    self.layer.borderColor = NSColor.separatorColor.CGColor;
+  }];
+}
+@end
+
+// Status label whose text is set from many call sites at runtime (test
+// results, model download states). Keeps long text readable without any
+// caller cooperation: in growing mode it re-measures its wrapped height on
+// every text change (top edge fixed, grows downward); otherwise it stays a
+// single truncating line and mirrors the full text into its tooltip.
+@interface SPStatusLabel : NSTextField
+@property(nonatomic, assign) BOOL growsDownward;
+@end
+
+@implementation SPStatusLabel
+
+- (void)setStringValue:(NSString *)stringValue {
+  [super setStringValue:stringValue];
+  if (self.growsDownward) {
+    [self sp_remeasureHeight];
+  } else {
+    self.toolTip = stringValue.length > 0 ? stringValue : nil;
+  }
+}
+
+- (void)sp_remeasureHeight {
+  CGFloat width = self.frame.size.width;
+  if (width <= 0.0)
+    return;
+  NSTextFieldCell *cell = (NSTextFieldCell *)self.cell;
+  NSSize size = [cell cellSizeForBounds:NSMakeRect(0, 0, width, CGFLOAT_MAX)];
+  CGFloat height = ceil(MAX(18.0, size.height));
+  NSRect frame = self.frame;
+  frame.origin.y = NSMaxY(frame) - height;
+  frame.size.height = height;
+  self.frame = frame;
+}
+
+@end
+
 @interface SPTemplateRowView : NSTableRowView
 @end
 
@@ -741,47 +846,51 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) NSButton *asrAccelerateCheckbox;
 
 // Local ASR model selection
-@property (nonatomic, strong) NSPopUpButton *localModelPopup;
-@property (nonatomic, strong) NSTextField *localModelLabel;
-@property (nonatomic, strong) NSTextField *modelStatusLabel;
-@property (nonatomic, strong) NSButton *modelDownloadButton;
-@property (nonatomic, strong) NSButton *modelDeleteButton;
-@property (nonatomic, strong) NSProgressIndicator *modelProgressBar;
-@property (nonatomic, strong) NSTextField *modelProgressSizeLabel;
-@property (nonatomic, strong) NSMutableSet<NSString *> *downloadingModels;
-@property (nonatomic, copy) NSString *pendingVerificationPath;
+@property(nonatomic, strong) NSPopUpButton *localModelPopup;
+@property(nonatomic, strong) NSTextField *localModelLabel;
+@property(nonatomic, strong) NSTextField *modelStatusLabel;
+@property(nonatomic, strong) NSButton *modelDownloadButton;
+@property(nonatomic, strong) NSButton *modelDeleteButton;
+@property(nonatomic, strong) NSProgressIndicator *modelProgressBar;
+@property(nonatomic, strong) NSTextField *modelProgressSizeLabel;
+@property(nonatomic, strong) NSMutableSet<NSString *> *downloadingModels;
+@property(nonatomic, copy) NSString *pendingVerificationPath;
+// Pane height needed for the MiMo provider (derived from the measured
+// privacy-notice height at build time).
+@property(nonatomic, assign) CGFloat asrMimoRequiredPaneHeight;
 
 // Apple Speech locale selection
 @property (nonatomic, strong) NSPopUpButton *appleSpeechLocalePopup;
 
 // LLM fields
-@property (nonatomic, strong) NSSwitch *llmEnabledCheckbox;
-@property (nonatomic, strong) NSTableView *llmProfileTableView;
-@property (nonatomic, strong) NSScrollView *llmProfileTableScroll;
-@property (nonatomic, strong) NSButton *llmAddProfileButton;
-@property (nonatomic, strong) NSButton *llmDeleteProfileButton;
-@property (nonatomic, strong) NSMutableArray<NSString *> *llmProfileOrder;
-@property (nonatomic, assign) BOOL suppressLlmProfileSelection;
-@property (nonatomic, strong) NSTextField *llmProfileNameField;
-@property (nonatomic, strong) NSTextField *llmProfileTypeLabel;
-@property (nonatomic, strong) NSTextField *llmBaseUrlField;
-@property (nonatomic, strong) NSTextField *llmApiKeyField;
-@property (nonatomic, strong) NSSecureTextField *llmApiKeySecureField;
-@property (nonatomic, strong) NSButton *llmApiKeyToggle;
-@property (nonatomic, strong) NSTextField *llmModelField;
-@property (nonatomic, strong) NSButton *llmToggleModelPickerButton;
-@property (nonatomic, strong) NSPopUpButton *llmRemoteModelPopup;
-@property (nonatomic, strong) NSButton *llmRefreshModelsButton;
-@property (nonatomic, strong) NSTextField *llmChatCompletionsPathField;
-@property (nonatomic, strong) NSButton *llmTestButton;
-@property (nonatomic, strong) NSTextField *llmTestResultLabel;
-@property (nonatomic, assign) BOOL llmRemoteModelPickerExpanded;
-@property (nonatomic, assign) BOOL llmRemoteModelPickerRowVisible;
-@property (nonatomic, strong) NSSwitch *llmOutputTranslationEnabledSwitch;
-@property (nonatomic, strong) NSView *llmOutputTranslationSettingsCard;
-@property (nonatomic, strong) NSTextField *llmOutputTranslationTargetLanguageField;
-@property (nonatomic, strong) NSPopUpButton *llmOutputTranslationProfilePopup;
-@property (nonatomic, strong) NSTextField *llmOutputTranslationHintLabel;
+@property(nonatomic, strong) NSSwitch *llmEnabledCheckbox;
+@property(nonatomic, strong) NSSwitch *llmAutoPasteProcessedTextSwitch;
+@property(nonatomic, strong) NSTableView *llmProfileTableView;
+@property(nonatomic, strong) NSScrollView *llmProfileTableScroll;
+@property(nonatomic, strong) NSButton *llmAddProfileButton;
+@property(nonatomic, strong) NSButton *llmDeleteProfileButton;
+@property(nonatomic, strong) NSMutableArray<NSString *> *llmProfileOrder;
+@property(nonatomic, assign) BOOL suppressLlmProfileSelection;
+@property(nonatomic, strong) NSTextField *llmProfileNameField;
+@property(nonatomic, strong) NSTextField *llmProfileTypeLabel;
+@property(nonatomic, strong) NSTextField *llmBaseUrlField;
+@property(nonatomic, strong) NSTextField *llmApiKeyField;
+@property(nonatomic, strong) NSSecureTextField *llmApiKeySecureField;
+@property(nonatomic, strong) NSButton *llmApiKeyToggle;
+@property(nonatomic, strong) NSTextField *llmModelField;
+@property(nonatomic, strong) NSButton *llmToggleModelPickerButton;
+@property(nonatomic, strong) NSPopUpButton *llmRemoteModelPopup;
+@property(nonatomic, strong) NSButton *llmRefreshModelsButton;
+@property(nonatomic, strong) NSTextField *llmChatCompletionsPathField;
+@property(nonatomic, strong) NSButton *llmTestButton;
+@property(nonatomic, strong) NSTextField *llmTestResultLabel;
+@property(nonatomic, assign) BOOL llmRemoteModelPickerExpanded;
+@property(nonatomic, assign) BOOL llmRemoteModelPickerRowVisible;
+@property(nonatomic, strong) NSSwitch *llmOutputTranslationEnabledSwitch;
+@property(nonatomic, strong) NSView *llmOutputTranslationSettingsCard;
+@property(nonatomic, strong) NSTextField *llmOutputTranslationTargetLanguageField;
+@property(nonatomic, strong) NSPopUpButton *llmOutputTranslationProfilePopup;
+@property(nonatomic, strong) NSTextField *llmOutputTranslationHintLabel;
 
 // LLM max token parameter
 @property (nonatomic, strong) NSPopUpButton *maxTokenParamPopup;
@@ -803,10 +912,13 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 @property (nonatomic, strong) id hotkeyRecordingMonitor;
 @property (nonatomic, copy) NSString *recordingHotkeyTarget;
 // Trigger mode
-@property (nonatomic, strong) NSPopUpButton *triggerModePopup;
-@property (nonatomic, strong) NSSwitch *startSoundCheckbox;
-@property (nonatomic, strong) NSSwitch *stopSoundCheckbox;
-@property (nonatomic, strong) NSSwitch *errorSoundCheckbox;
+@property(nonatomic, strong) NSPopUpButton *triggerModePopup;
+@property(nonatomic, strong) NSSwitch *startSoundCheckbox;
+@property(nonatomic, strong) NSSwitch *stopSoundCheckbox;
+@property(nonatomic, strong) NSSwitch *errorSoundCheckbox;
+@property(nonatomic, strong) NSSwitch *muteSystemOutputCheckbox;
+// Paste behavior
+@property(nonatomic, strong) NSSwitch *autoReturnSwitch;
 
 // Overlay
 @property (nonatomic, strong) NSPopUpButton *overlayFontFamilyPopup;
@@ -995,6 +1107,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (NSView *)buildAboutPane;
 - (void)addButtonsToPane:(NSView *)pane atY:(CGFloat)y width:(CGFloat)paneWidth;
 - (NSTextField *)formLabel:(NSString *)title frame:(NSRect)frame;
+- (CGFloat)formLabelColumnWidthForTitles:(NSArray<NSString *> *)titles;
 - (NSTextField *)formTextField:(NSRect)frame placeholder:(NSString *)placeholder;
 - (NSTextField *)descriptionLabel:(NSString *)text;
 - (NSTextField *)addSettingsDescriptionText:(NSString *)text toPane:(NSView *)pane topY:(CGFloat)topY x:(CGFloat)x width:(CGFloat)width;
@@ -1063,6 +1176,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 - (NSTextField *)settingsRowLabelWithString:(NSString *)text;
 - (void)translationStepChanged:(id)sender;
 
+// Values captured when a pane is loaded. Saving only writes controls whose
+// semantic value changed, so visiting Settings cannot normalize or overwrite
+// config that the user did not edit.
+@property(nonatomic, strong)
+    NSMutableDictionary<NSString *, NSNumber *> *loadedBooleanValues;
+@property(nonatomic, copy) NSString *loadedDictionaryContent;
+@property(nonatomic, copy) NSString *loadedSystemPromptContent;
+@property(nonatomic, copy)
+    NSArray<NSDictionary *> *loadedTemplatesSnapshot;
+
 @end
 
 @implementation SPSetupWizardWindowController {
@@ -1078,13 +1201,15 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     window.title = KoeLocalizedString(@"settings.window.title");
     window.toolbarStyle = NSWindowToolbarStylePreference;
 
-    self = [super initWithWindow:window];
-    if (self) {
-        _verifyQueue = dispatch_queue_create("koe.model.verify", DISPATCH_QUEUE_SERIAL);
-        window.delegate = self;
-        [self setupToolbar];
-    }
-    return self;
+  self = [super initWithWindow:window];
+  if (self) {
+    _verifyQueue =
+        dispatch_queue_create("koe.model.verify", DISPATCH_QUEUE_SERIAL);
+    _loadedBooleanValues = [NSMutableDictionary dictionary];
+    window.delegate = self;
+    [self setupToolbar];
+  }
+  return self;
 }
 
 - (void)showWindow:(id)sender {
@@ -1256,13 +1381,17 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
 // ─── Build Panes ────────────────────────────────────────────────────
 
 - (NSView *)buildAsrPane {
-    CGFloat paneWidth = kSettingsPaneWidth;
-    CGFloat labelW = 130;
-    CGFloat fieldX = labelW + 24;
-    CGFloat fieldW = paneWidth - fieldX - 32;
-    CGFloat rowH = 32;
-    CGFloat contentX = 24.0;
-    CGFloat contentW = paneWidth - 48.0;
+  CGFloat paneWidth = 600;
+  CGFloat contentX = 24.0;
+  CGFloat contentW = paneWidth - 48.0;
+  // Label column measured from the actual strings so no label ever clips.
+  CGFloat labelW = [self formLabelColumnWidthForTitles:@[
+    @"Provider", @"Auth Mode", @"API Key", @"App Key", @"Access Key",
+    @"Language", @"Model", @"Endpoint Silence", @"Output Variant"
+  ]];
+  CGFloat fieldX = contentX + labelW + 12;
+  CGFloat fieldW = paneWidth - fieldX - 32;
+  CGFloat rowH = 32;
 
     // Calculate content height
     CGFloat contentHeight = 260;
@@ -1284,29 +1413,34 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     y = NSMinY(sectionTitle.frame) - 32.0;
     CGFloat formStartY = y;
 
-    // Provider
-    [pane addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.common.provider") frame:NSMakeRect(16, y, labelW, 22)]];
-    self.asrProviderPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 200, 26) pullsDown:NO];
-    [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.doubaoime")];
-    [self.asrProviderPopup lastItem].representedObject = @"doubaoime";
-    [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.doubao")];
-    [self.asrProviderPopup lastItem].representedObject = @"doubao";
-    [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.qwen")];
-    [self.asrProviderPopup lastItem].representedObject = @"qwen";
-    [self.asrProviderPopup addItemWithTitle:@"GLM (Zhipu)"];
-    [self.asrProviderPopup lastItem].representedObject = @"glm";
-    [self.asrProviderPopup addItemWithTitle:@"MiMo (Xiaomi)"];
-    [self.asrProviderPopup lastItem].representedObject = @"mimo";
-    NSArray<NSString *> *supportedLocalProviders = [self.rustBridge supportedLocalProviders];
-    // Add Apple Speech (macOS 26+, no model download required; also requires the
-    // apple-speech feature to be compiled into the Rust core — excluded on x86_64)
-    if (@available(macOS 26.0, *)) {
-        if ([supportedLocalProviders containsObject:@"apple-speech"]) {
-            [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.appleSpeech")];
-            [self.asrProviderPopup lastItem].representedObject = @"apple-speech";
-        }
+  // Provider
+  [pane addSubview:[self formLabel:KoeLocalizedString(@"setupWizard.common.provider")
+                             frame:NSMakeRect(contentX, y, labelW, 22)]];
+  self.asrProviderPopup =
+      [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 200, 26)
+                                 pullsDown:NO];
+  [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.doubaoime")];
+  [self.asrProviderPopup lastItem].representedObject = @"doubaoime";
+  [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.doubao")];
+  [self.asrProviderPopup lastItem].representedObject = @"doubao";
+  [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.qwen")];
+  [self.asrProviderPopup lastItem].representedObject = @"qwen";
+  [self.asrProviderPopup addItemWithTitle:@"GLM (Zhipu)"];
+  [self.asrProviderPopup lastItem].representedObject = @"glm";
+  [self.asrProviderPopup addItemWithTitle:@"MiMo (Xiaomi)"];
+  [self.asrProviderPopup lastItem].representedObject = @"mimo";
+  NSArray<NSString *> *supportedLocalProviders =
+      [self.rustBridge supportedLocalProviders];
+  // Add Apple Speech (macOS 26+, no model download required; also requires the
+  // apple-speech feature to be compiled into the Rust core — excluded on
+  // x86_64)
+  if (@available(macOS 26.0, *)) {
+    if ([supportedLocalProviders containsObject:@"apple-speech"]) {
+      [self.asrProviderPopup addItemWithTitle:KoeLocalizedString(@"setupWizard.asr.provider.appleSpeech")];
+      [self.asrProviderPopup lastItem].representedObject = @"apple-speech";
     }
-    // Add local providers supported by this build (model-based)
+  }
+  // Add local providers supported by this build (model-based)
     NSDictionary *localProviderLabels = @{
         @"mlx": KoeLocalizedString(@"setupWizard.llm.profile.mlx"),
         @"sherpa-onnx": KoeLocalizedString(@"setupWizard.asr.provider.sherpaOnnx"),
@@ -1619,7 +1753,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   // Advanced row 1: Endpoint Silence
   CGFloat advRowY = rowH * 2;
   NSTextField *endLabel = [self formLabel:@"Endpoint Silence"
-                                    frame:NSMakeRect(16, advRowY, labelW, 22)];
+                                    frame:NSMakeRect(contentX, advRowY, labelW, 22)];
   [self.asrAdvancedContainer addSubview:endLabel];
   self.asrEndWindowField =
       [self formTextField:NSMakeRect(fieldX, advRowY, 80, 22)
@@ -1628,6 +1762,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   NSTextField *endUnit =
       [self formLabel:@"ms (min 200)"
                 frame:NSMakeRect(fieldX + 86, advRowY, 100, 22)];
+  endUnit.alignment = NSTextAlignmentLeft;
   endUnit.font = [NSFont systemFontOfSize:11];
   endUnit.textColor = [NSColor secondaryLabelColor];
   [self.asrAdvancedContainer addSubview:endUnit];
@@ -1636,7 +1771,7 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   advRowY -= rowH;
   NSTextField *variantLabel =
       [self formLabel:@"Output Variant"
-                frame:NSMakeRect(16, advRowY, labelW, 22)];
+                frame:NSMakeRect(contentX, advRowY, labelW, 22)];
   [self.asrAdvancedContainer addSubview:variantLabel];
   self.asrOutputVariantPopup = [[NSPopUpButton alloc]
       initWithFrame:NSMakeRect(fieldX, advRowY - 2, 160, 26)
@@ -1668,7 +1803,11 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   // which stays pinned to the bottom. This lets `resizeAsrPaneToCurrentProvider`
   // shrink/grow the pane height per provider without orphaning controls.
   for (NSView *sub in pane.subviews) {
-    if (NSMinY(sub.frame) < 50) {
+    if (sub == self.asrAdvancedContainer) {
+      // Part of the form stack — must stay directly below its disclosure
+      // checkbox even though it builds low enough to look bottom-pinned.
+      sub.autoresizingMask = NSViewMinYMargin;
+    } else if (NSMinY(sub.frame) < 50) {
       sub.autoresizingMask = NSViewMaxYMargin;
     } else {
       sub.autoresizingMask = NSViewMinYMargin;
@@ -4888,6 +5027,16 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     return label;
 }
 
+- (CGFloat)formLabelColumnWidthForTitles:(NSArray<NSString *> *)titles {
+    NSDictionary *attrs = @{
+        NSFontAttributeName : [NSFont systemFontOfSize:13 weight:NSFontWeightMedium]
+    };
+    CGFloat width = 0.0;
+    for (NSString *title in titles)
+        width = MAX(width, ceil([title sizeWithAttributes:attrs].width));
+    return width + 4.0;
+}
+
 - (NSTextField *)formTextField:(NSRect)frame placeholder:(NSString *)placeholder {
     NSTextField *field = [[NSTextField alloc] initWithFrame:frame];
     field.placeholderString = placeholder;
@@ -5527,7 +5676,8 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
   }
   if ([provider isEqualToString:@"mimo"]) {
     // Taller than GLM to fit the privacy notice under the API key row.
-    return 360.0;
+    // The exact height is measured at pane-build time from the notice text.
+    return MAX(360.0, self.asrMimoRequiredPaneHeight);
   }
   if ([provider isEqualToString:@"apple-speech"]) {
     return 280.0;
@@ -6710,6 +6860,15 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     [self loadValuesForPane:self.currentPaneIdentifier];
 }
 
+- (void)rememberLoadedBooleanValue:(BOOL)value forKey:(NSString *)key {
+  self.loadedBooleanValues[key] = @(value);
+}
+
+- (BOOL)shouldPersistBooleanValue:(BOOL)value forKey:(NSString *)key {
+  NSNumber *loadedValue = self.loadedBooleanValues[key];
+  return loadedValue == nil || loadedValue.boolValue != value;
+}
+
 - (void)loadValuesForPane:(NSString *)identifier {
     NSString *dir = configDirPath();
 
@@ -7515,7 +7674,11 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
 
-        NSDictionary *result = [strongSelf.rustBridge llmRemoteModelsForBaseURL:baseURL apiKey:apiKey];
+        NSDictionary *profile = @{
+            @"base_url" : baseURL ?: @"",
+            @"api_key" : apiKey ?: @"",
+        };
+        NSDictionary *result = [strongSelf.rustBridge llmRemoteModelsForProfile:profile];
         BOOL success = [result[@"success"] boolValue];
         NSArray *modelsRaw = [result[@"models"] isKindOfClass:[NSArray class]] ? result[@"models"] : @[];
         NSMutableArray<NSString *> *models = [NSMutableArray arrayWithCapacity:modelsRaw.count];

@@ -99,19 +99,15 @@ impl Default for GeminiLiveConfig {
 /// Machine translation provider.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MtProvider {
     /// OpenAI-compatible chat-completions endpoint.
+    #[default]
     OpenAiCompatible,
     /// Apple Translation.framework on-device translator (macOS 15+).
     Apple,
     /// Local Marian / NLLB ONNX translation model.
     Local,
-}
-
-impl Default for MtProvider {
-    fn default() -> Self {
-        Self::OpenAiCompatible
-    }
 }
 
 /// Machine translation provider configuration.
@@ -151,7 +147,9 @@ impl Default for MtConfig {
 /// Text-to-speech provider configuration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TtsProvider {
+    #[default]
     ElevenLabs,
     #[serde(alias = "minimax")]
     MiniMax,
@@ -161,12 +159,6 @@ pub enum TtsProvider {
     SupertonicOnnx,
     /// KittenTTS ONNX local TTS via ONNX Runtime (CPU, English only).
     KittenOnnx,
-}
-
-impl Default for TtsProvider {
-    fn default() -> Self {
-        TtsProvider::ElevenLabs
-    }
 }
 
 /// TTS configuration.

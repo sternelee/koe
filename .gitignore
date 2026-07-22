@@ -45,3 +45,8 @@ koe-core/target/
 .env.*
 *.dmg
 .omx/
+
+# Lucky local session notes (not project content)
+.memory/
+KoeApp/build-ci/
+KoeApp/build-local/

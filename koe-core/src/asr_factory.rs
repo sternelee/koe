@@ -1,3 +1,9 @@
+//! Construction of ASR providers from configuration.
+//!
+//! Extracted from the session-start path so that other entry points
+//! (koe-cli transcription and benchmarking) can build the same providers
+//! from the same config without duplicating per-provider wiring.
+
 use crate::config::{self, Config};
 #[cfg(feature = "apple-speech")]
 use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
@@ -10,17 +16,36 @@ use koe_asr::{MlxConfig, MlxProvider};
 #[cfg(feature = "sherpa-onnx")]
 use koe_asr::{SherpaOnnxConfig, SherpaOnnxProvider};
 
-/// Build an ASR provider and its config from the global configuration.
+/// Provider names that can be constructed in this build.
+/// Local engines (mlx, sherpa-onnx, apple-speech) only appear when their
+/// Cargo features are enabled.
+pub fn supported_providers() -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut providers = vec!["doubaoime", "doubao", "qwen", "glm", "mimo", "whisper"];
+    #[cfg(feature = "mlx")]
+    providers.push("mlx");
+    #[cfg(feature = "sherpa-onnx")]
+    providers.push("sherpa-onnx");
+    #[cfg(feature = "apple-speech")]
+    providers.push("apple-speech");
+    providers
+}
+
+/// Build the `AsrConfig` and provider instance for `provider_name`.
 ///
-/// Kept in its own module so that adding ASR providers (the part of the codebase
-/// upstream changes most frequently) does not collide with translation-related
-/// edits in `lib.rs`.
-pub fn build_asr_provider(
+/// Unknown names — including local providers not compiled into this build —
+/// fall back to the Doubao WebSocket provider, mirroring the historical
+/// session-start behaviour. Callers that want an explicit error instead
+/// should validate against [`supported_providers`] first.
+///
+/// `dictionary` feeds provider-side hotword biasing where supported
+/// (doubao hotwords, sherpa-onnx hotwords, Apple Speech contextual strings).
+pub fn create_asr_provider(
     cfg: &Config,
+    provider_name: &str,
     dictionary: &[String],
 ) -> (AsrConfig, Box<dyn AsrProvider>) {
-    let asr_provider_name = cfg.asr.provider.clone();
-    match asr_provider_name.as_str() {
+    match provider_name {
         "doubaoime" => {
             let ime = &cfg.asr.doubaoime;
             let credential_path = if std::path::Path::new(&ime.credential_path).is_absolute() {

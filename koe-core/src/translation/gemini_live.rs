@@ -1,7 +1,7 @@
 use crate::errors::{KoeError, Result};
 use crate::translation::config::GeminiLiveConfig;
-use crate::translation::output_bridge::{AudioFrame, SharedOutputBuffer};
 use crate::translation::engine::{now_timestamp_ns, resample_linear};
+use crate::translation::output_bridge::{AudioFrame, SharedOutputBuffer};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::connect_async;
 
 const GEMINI_WS_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
@@ -66,7 +66,11 @@ impl GeminiLiveClient {
             .map_err(|e| KoeError::LlmFailed(format!("setup send failed: {e}")))?;
 
         // Wait for setup acknowledgement.
-        match timeout(Duration::from_millis(self.config.setup_timeout_ms), ws_stream.next()).await
+        match timeout(
+            Duration::from_millis(self.config.setup_timeout_ms),
+            ws_stream.next(),
+        )
+        .await
         {
             Ok(Some(Ok(Message::Text(text)))) => {
                 log::debug!("[gemini-live] setup response: {text}");
@@ -379,9 +383,15 @@ struct SetupConfig {
 struct GenerationConfig {
     #[serde(rename = "responseModalities")]
     response_modalities: Vec<String>,
-    #[serde(rename = "inputAudioTranscription", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "inputAudioTranscription",
+        skip_serializing_if = "Option::is_none"
+    )]
     input_audio_transcription: Option<serde_json::Value>,
-    #[serde(rename = "outputAudioTranscription", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "outputAudioTranscription",
+        skip_serializing_if = "Option::is_none"
+    )]
     output_audio_transcription: Option<serde_json::Value>,
     #[serde(rename = "translationConfig")]
     translation_config: TranslationConfigGemini,

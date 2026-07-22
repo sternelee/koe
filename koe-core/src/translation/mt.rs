@@ -202,7 +202,11 @@ impl MtClient {
         let source_text = CString::new(text)
             .map_err(|_| KoeError::LlmFailed("MT input contains NUL byte".to_string()))?;
         let source_lang_cstring = normalized_source
-            .map(|s| CString::new(s).map_err(|_| KoeError::LlmFailed("source language contains NUL byte".to_string())))
+            .map(|s| {
+                CString::new(s).map_err(|_| {
+                    KoeError::LlmFailed("source language contains NUL byte".to_string())
+                })
+            })
             .transpose()?;
         let target_lang_cstring = CString::new(normalized_target)
             .map_err(|_| KoeError::LlmFailed("target language contains NUL byte".to_string()))?;
@@ -286,10 +290,22 @@ mod tests {
 
     #[test]
     fn normalize_language_for_apple_passes_through_iso_codes() {
-        assert_eq!(MtClient::normalize_language_for_apple("en").as_deref(), Some("en"));
-        assert_eq!(MtClient::normalize_language_for_apple("zh-Hans").as_deref(), Some("zh-Hans"));
-        assert_eq!(MtClient::normalize_language_for_apple("zh_CN").as_deref(), Some("zh-CN"));
-        assert_eq!(MtClient::normalize_language_for_apple("ja").as_deref(), Some("ja"));
+        assert_eq!(
+            MtClient::normalize_language_for_apple("en").as_deref(),
+            Some("en")
+        );
+        assert_eq!(
+            MtClient::normalize_language_for_apple("zh-Hans").as_deref(),
+            Some("zh-Hans")
+        );
+        assert_eq!(
+            MtClient::normalize_language_for_apple("zh_CN").as_deref(),
+            Some("zh-CN")
+        );
+        assert_eq!(
+            MtClient::normalize_language_for_apple("ja").as_deref(),
+            Some("ja")
+        );
     }
 
     #[test]

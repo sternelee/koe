@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub dictionary: DictionarySection,
     #[serde(default)]
+    pub clipboard: ClipboardSection,
+    #[serde(default)]
     pub hotkey: HotkeySection,
     #[serde(default)]
     pub overlay: OverlaySection,
@@ -349,6 +351,8 @@ pub struct LlmSection {
     pub prompt_templates_enabled: bool,
     #[serde(default)]
     pub output_translation: OutputTranslationConfig,
+    #[serde(default = "default_true")]
+    pub auto_paste_processed_text: bool,
     /// Active LLM profile id.
     #[serde(default = "default_llm_active_profile")]
     pub active_profile: String,
@@ -389,23 +393,47 @@ pub struct OutputTranslationConfig {
     pub profile: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmApiProtocol {
+    #[default]
+    OpenaiChat,
+    OpenaiResponses,
+    AnthropicMessages,
+}
+
+impl LlmApiProtocol {
+    pub fn default_endpoint_path(self) -> &'static str {
+        match self {
+            Self::OpenaiChat => "/chat/completions",
+            Self::OpenaiResponses => "/responses",
+            Self::AnthropicMessages => "/messages",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LlmProfileConfig {
     #[serde(default)]
     pub name: String,
-    /// LLM provider: "openai", "apfel", or "mlx". "apfel" is treated as an
-    /// OpenAI-compatible provider at runtime but tracked separately so the UI
-    /// can show it as a distinct option with Apple Foundation Models defaults.
+    /// LLM provider: "openai", "anthropic", "apfel", or "mlx". "apfel" is
+    /// tracked separately so the UI can show Apple Foundation Models defaults.
     #[serde(default = "default_llm_provider")]
     pub provider: String,
+    /// Wire protocol used by this remote profile. Existing profiles without
+    /// this field continue to use OpenAI Chat Completions.
+    #[serde(default)]
+    pub api_protocol: LlmApiProtocol,
     #[serde(default)]
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
     pub model: String,
-    #[serde(default = "default_llm_chat_completions_path")]
-    pub chat_completions_path: String,
+    /// Relative API path appended to `base_url`. The legacy
+    /// `chat_completions_path` key is accepted for migration.
+    #[serde(default, alias = "chat_completions_path")]
+    pub endpoint_path: String,
     #[serde(default = "default_llm_max_token_parameter")]
     pub max_token_parameter: LlmMaxTokenParameter,
     #[serde(default)]
@@ -420,11 +448,13 @@ pub struct LlmProfileRuntimeConfig {
     pub id: String,
     pub name: String,
     pub provider: String,
+    #[serde(default)]
+    pub api_protocol: LlmApiProtocol,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
-    #[serde(default = "default_llm_chat_completions_path")]
-    pub chat_completions_path: String,
+    #[serde(default, alias = "chat_completions_path")]
+    pub endpoint_path: String,
     pub max_token_parameter: LlmMaxTokenParameter,
     pub no_reasoning_control: LlmNoReasoningControl,
     pub mlx: MlxLlmConfig,
@@ -470,10 +500,11 @@ impl LlmProfileConfig {
                 self.name.clone()
             },
             provider: self.provider.clone(),
+            api_protocol: self.api_protocol,
             base_url: self.base_url.clone(),
             api_key: self.api_key.clone(),
             model: self.model.clone(),
-            chat_completions_path: self.chat_completions_path.clone(),
+            endpoint_path: self.endpoint_path.clone(),
             max_token_parameter: self.max_token_parameter,
             no_reasoning_control: self.no_reasoning_control,
             mlx: self.mlx.clone(),
@@ -482,6 +513,23 @@ impl LlmProfileConfig {
 }
 
 impl LlmProfileRuntimeConfig {
+    pub fn effective_api_protocol(&self) -> LlmApiProtocol {
+        match self.provider.as_str() {
+            "anthropic" => LlmApiProtocol::AnthropicMessages,
+            "apfel" => LlmApiProtocol::OpenaiChat,
+            _ => self.api_protocol,
+        }
+    }
+
+    pub fn effective_endpoint_path(&self) -> &str {
+        let configured = self.endpoint_path.trim();
+        if configured.is_empty() {
+            self.effective_api_protocol().default_endpoint_path()
+        } else {
+            configured
+        }
+    }
+
     pub fn is_ready(&self) -> bool {
         match self.provider.as_str() {
             "mlx" => !self.mlx.model.is_empty(),
@@ -510,10 +558,11 @@ impl Default for LlmProfileConfig {
         Self {
             name: String::new(),
             provider: default_llm_provider(),
+            api_protocol: LlmApiProtocol::default(),
             base_url: String::new(),
             api_key: String::new(),
             model: String::new(),
-            chat_completions_path: default_llm_chat_completions_path(),
+            endpoint_path: String::new(),
             max_token_parameter: default_llm_max_token_parameter(),
             no_reasoning_control: LlmNoReasoningControl::default(),
             mlx: MlxLlmConfig::default(),
@@ -545,12 +594,254 @@ pub struct FeedbackSection {
     pub stop_sound: bool,
     #[serde(default)]
     pub error_sound: bool,
+    /// Mute system audio output for the duration of a recording (opt-in, default off).
+    #[serde(default)]
+    pub mute_system_output: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DictionarySection {
     #[serde(default = "default_dictionary_path")]
     pub path: String,
+}
+
+// ─── Clipboard Configuration ────────────────────────────────────────
+
+pub const DEFAULT_CLIPBOARD_RESTORE_DELAY_MS: u32 = 1500;
+pub const MAX_CLIPBOARD_RESTORE_DELAY_MS: u32 = 60_000;
+
+/// Clipboard behavior for automatic paste.
+#[derive(Debug, Clone)]
+pub struct ClipboardSection {
+    /// How long to wait after the automatic-paste completion callback before
+    /// restoring the pre-session clipboard contents, in milliseconds.
+    /// Valid range 0..=60000. 0 schedules restoration immediately after the
+    /// paste completion callback; it does not disable restoration.
+    pub restore_delay_ms: u32,
+}
+
+impl Default for ClipboardSection {
+    fn default() -> Self {
+        Self {
+            restore_delay_ms: DEFAULT_CLIPBOARD_RESTORE_DELAY_MS,
+        }
+    }
+}
+
+/// Tolerant deserialization: an invalid `clipboard` section or
+/// `restore_delay_ms` value falls back to the default with a warning instead
+/// of failing the whole config load, so a clipboard typo cannot poison
+/// unrelated ASR/LLM/hotkey settings. The warning never includes clipboard
+/// contents — only the key name and the accepted range. Custom visitors are
+/// required (rather than deserializing into `serde_yaml::Value`) because
+/// serde_yaml hard-errors on integers wider than u64 unless the visitor
+/// accepts i128/u128.
+impl<'de> Deserialize<'de> for ClipboardSection {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct SectionVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SectionVisitor {
+            type Value = ClipboardSection;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a clipboard config mapping")
+            }
+
+            // `clipboard:` with no value.
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(ClipboardSection::default())
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(ClipboardSection::default())
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut section = ClipboardSection::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "restore_delay_ms" {
+                        section.restore_delay_ms = map.next_value::<TolerantRestoreDelay>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(section)
+            }
+
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                _: bool,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_i128<E: serde::de::Error>(
+                self,
+                _: i128,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_u128<E: serde::de::Error>(
+                self,
+                _: u128,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                _: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(warn_clipboard_section_not_mapping())
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(warn_clipboard_section_not_mapping())
+            }
+        }
+
+        deserializer.deserialize_any(SectionVisitor)
+    }
+}
+
+fn warn_clipboard_section_not_mapping() -> ClipboardSection {
+    log::warn!("config: `clipboard` section is not a mapping; using defaults");
+    ClipboardSection::default()
+}
+
+/// A `restore_delay_ms` value that never fails deserialization: any
+/// non-integer or out-of-range value becomes the default with a warning.
+struct TolerantRestoreDelay(u32);
+
+fn validate_restore_delay(value: Option<u64>) -> u32 {
+    match value {
+        Some(v) if v <= MAX_CLIPBOARD_RESTORE_DELAY_MS as u64 => v as u32,
+        _ => {
+            log::warn!(
+                "config: `clipboard.restore_delay_ms` must be an integer between 0 and \
+                 {MAX_CLIPBOARD_RESTORE_DELAY_MS}; falling back to \
+                 {DEFAULT_CLIPBOARD_RESTORE_DELAY_MS}"
+            );
+            DEFAULT_CLIPBOARD_RESTORE_DELAY_MS
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TolerantRestoreDelay {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DelayVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DelayVisitor {
+            type Value = TolerantRestoreDelay;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an integer between 0 and 60000")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(Some(v))))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(
+                    u64::try_from(v).ok(),
+                )))
+            }
+
+            fn visit_u128<E: serde::de::Error>(
+                self,
+                v: u128,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(
+                    u64::try_from(v).ok(),
+                )))
+            }
+
+            fn visit_i128<E: serde::de::Error>(
+                self,
+                v: i128,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(
+                    u64::try_from(v).ok(),
+                )))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(None)))
+            }
+
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                _: bool,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(None)))
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                _: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(validate_restore_delay(None)))
+            }
+
+            // A missing value (`restore_delay_ms:` with nothing after it) is
+            // treated like an absent field, not an invalid one — no warning.
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(DEFAULT_CLIPBOARD_RESTORE_DELAY_MS))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(TolerantRestoreDelay(DEFAULT_CLIPBOARD_RESTORE_DELAY_MS))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(TolerantRestoreDelay(validate_restore_delay(None)))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(TolerantRestoreDelay(validate_restore_delay(None)))
+            }
+        }
+
+        deserializer.deserialize_any(DelayVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -610,7 +901,8 @@ pub struct HotkeySection {
     #[serde(default, deserialize_with = "deserialize_string_or_int")]
     pub cancel_key: String,
 
-    /// Trigger mode: "hold" (press-and-hold, default) or "toggle" (tap to start/stop).
+    /// Trigger mode: "hold" (press-and-hold, default), "toggle" (tap to
+    /// start/stop), or "double_tap" (double-tap to start, single-tap to stop).
     #[serde(default = "default_trigger_mode")]
     pub trigger_mode: String,
 }
@@ -698,9 +990,7 @@ impl HotkeySection {
                 return None;
             }
             key_code = Self::parse_raw_keycode(&token);
-            if key_code.is_none() {
-                return None;
-            }
+            key_code?;
         }
 
         let key_code = key_code?;
@@ -949,9 +1239,6 @@ fn default_llm_max_token_parameter() -> LlmMaxTokenParameter {
 fn default_llm_provider() -> String {
     "openai".into()
 }
-fn default_llm_chat_completions_path() -> String {
-    "/chat/completions".into()
-}
 fn default_llm_active_profile() -> String {
     "openai".into()
 }
@@ -969,10 +1256,11 @@ fn default_llm_profiles() -> BTreeMap<String, LlmProfileConfig> {
         LlmProfileConfig {
             name: "APFEL".into(),
             provider: "apfel".into(),
+            api_protocol: LlmApiProtocol::OpenaiChat,
             base_url: "http://127.0.0.1:11434/v1".into(),
             api_key: String::new(),
             model: "apple-foundationmodel".into(),
-            chat_completions_path: default_llm_chat_completions_path(),
+            endpoint_path: "/chat/completions".into(),
             max_token_parameter: LlmMaxTokenParameter::MaxTokens,
             no_reasoning_control: LlmNoReasoningControl::None,
             mlx: MlxLlmConfig::default(),
@@ -983,10 +1271,11 @@ fn default_llm_profiles() -> BTreeMap<String, LlmProfileConfig> {
         LlmProfileConfig {
             name: "MLX (Apple Silicon)".into(),
             provider: "mlx".into(),
+            api_protocol: LlmApiProtocol::OpenaiChat,
             base_url: String::new(),
             api_key: String::new(),
             model: String::new(),
-            chat_completions_path: default_llm_chat_completions_path(),
+            endpoint_path: String::new(),
             max_token_parameter: LlmMaxTokenParameter::MaxTokens,
             no_reasoning_control: LlmNoReasoningControl::None,
             mlx: MlxLlmConfig::default(),
@@ -995,14 +1284,45 @@ fn default_llm_profiles() -> BTreeMap<String, LlmProfileConfig> {
     profiles.insert(
         "openai".into(),
         LlmProfileConfig {
-            name: "OpenAI Compatible".into(),
+            name: "OpenAI Chat Completions".into(),
             provider: "openai".into(),
+            api_protocol: LlmApiProtocol::OpenaiChat,
             base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
             model: "gpt-5.4-nano".into(),
-            chat_completions_path: default_llm_chat_completions_path(),
+            endpoint_path: "/chat/completions".into(),
             max_token_parameter: LlmMaxTokenParameter::MaxCompletionTokens,
-            no_reasoning_control: LlmNoReasoningControl::ReasoningEffort,
+            no_reasoning_control: LlmNoReasoningControl::None,
+            mlx: MlxLlmConfig::default(),
+        },
+    );
+    profiles.insert(
+        "openai-responses".into(),
+        LlmProfileConfig {
+            name: "OpenAI Responses".into(),
+            provider: "openai".into(),
+            api_protocol: LlmApiProtocol::OpenaiResponses,
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: String::new(),
+            model: "gpt-5.4-nano".into(),
+            endpoint_path: "/responses".into(),
+            max_token_parameter: LlmMaxTokenParameter::MaxCompletionTokens,
+            no_reasoning_control: LlmNoReasoningControl::None,
+            mlx: MlxLlmConfig::default(),
+        },
+    );
+    profiles.insert(
+        "anthropic".into(),
+        LlmProfileConfig {
+            name: "Anthropic Messages".into(),
+            provider: "anthropic".into(),
+            api_protocol: LlmApiProtocol::AnthropicMessages,
+            base_url: "https://api.anthropic.com/v1".into(),
+            api_key: String::new(),
+            model: String::new(),
+            endpoint_path: "/messages".into(),
+            max_token_parameter: LlmMaxTokenParameter::MaxTokens,
+            no_reasoning_control: LlmNoReasoningControl::None,
             mlx: MlxLlmConfig::default(),
         },
     );
@@ -1231,18 +1551,27 @@ pub fn resolve_user_prompt_path(config: &Config) -> PathBuf {
 // ─── Environment Variable Substitution ──────────────────────────────
 
 /// Replace ${VAR_NAME} patterns with environment variable values.
+///
+/// Performs a single, non-recursive pass: each `${VAR}` token in the
+/// *original* input is replaced exactly once.  Substituted values are
+/// appended verbatim and never re-scanned, which prevents:
+/// - infinite loops when a value contains `${...}` (including self-references)
+/// - silent corruption of API keys or paths that happen to contain `${`
 fn substitute_env_vars(input: &str) -> String {
-    let mut result = input.to_string();
-    // Simple regex-free approach
-    while let Some(start) = result.find("${") {
-        let end = match result[start + 2..].find('}') {
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        let end = match rest[start + 2..].find('}') {
             Some(pos) => start + 2 + pos,
-            None => break,
+            None => break, // no closing brace; copy remainder verbatim below
         };
-        let var_name = &result[start + 2..end];
+        let var_name = &rest[start + 2..end];
         let value = std::env::var(var_name).unwrap_or_default();
-        result = format!("{}{}{}", &result[..start], value, &result[end + 1..]);
+        result.push_str(&rest[..start]);
+        result.push_str(&value); // value is NOT rescanned
+        rest = &rest[end + 1..];
     }
+    result.push_str(rest);
     result
 }
 
@@ -1711,17 +2040,17 @@ pub fn save_llm_profiles_payload(payload: &LlmProfilesPayload) -> Result<()> {
             serde_yaml::Value::String(active_profile.model.clone()),
         );
         llm_map.insert(
-            serde_yaml::Value::String("chat_completions_path".into()),
-            serde_yaml::Value::String(active_profile.chat_completions_path.clone()),
+            serde_yaml::Value::String("endpoint_path".into()),
+            serde_yaml::Value::String(active_profile.endpoint_path.clone()),
         );
         llm_map.insert(
             serde_yaml::Value::String("max_token_parameter".into()),
-            serde_yaml::to_value(&active_profile.max_token_parameter)
+            serde_yaml::to_value(active_profile.max_token_parameter)
                 .map_err(|e| KoeError::Config(format!("serialize max token parameter: {e}")))?,
         );
         llm_map.insert(
             serde_yaml::Value::String("no_reasoning_control".into()),
-            serde_yaml::to_value(&active_profile.no_reasoning_control)
+            serde_yaml::to_value(active_profile.no_reasoning_control)
                 .map_err(|e| KoeError::Config(format!("serialize reasoning control: {e}")))?,
         );
         llm_map.insert(
@@ -1861,6 +2190,7 @@ llm:
     provider: "llm"                # "llm" or "local_mt" (uses translation.mt Local MT settings)
     target_language: "English"    # e.g. English, Japanese, 简体中文
     profile: ""                    # empty = reuse active_profile
+  auto_paste_processed_text: true  # paste the first LLM-processed result into the active input immediately
   active_profile: "openai"
   temperature: 0
   top_p: 1
@@ -1871,21 +2201,43 @@ llm:
   user_prompt_path: "user_prompt.txt"      # relative to ~/.koe/
   profiles:
     openai:
-      name: "OpenAI Compatible"
+      name: "OpenAI Chat Completions"
       provider: "openai"
+      api_protocol: "openai_chat"
       base_url: "https://api.openai.com/v1"
       api_key: ""          # or use ${LLM_API_KEY}
       model: "gpt-5.4-nano"
-      chat_completions_path: "/chat/completions"  # relative path appended to base_url
+      endpoint_path: "/chat/completions"  # relative path appended to base_url
       max_token_parameter: "max_completion_tokens"
-      no_reasoning_control: "reasoning_effort"
+      no_reasoning_control: "none"
+    openai-responses:
+      name: "OpenAI Responses"
+      provider: "openai"
+      api_protocol: "openai_responses"
+      base_url: "https://api.openai.com/v1"
+      api_key: ""          # or use ${LLM_API_KEY}
+      model: "gpt-5.4-nano"
+      endpoint_path: "/responses"
+      max_token_parameter: "max_completion_tokens"
+      no_reasoning_control: "none"
+    anthropic:
+      name: "Anthropic Messages"
+      provider: "anthropic"
+      api_protocol: "anthropic_messages"
+      base_url: "https://api.anthropic.com/v1"
+      api_key: ""          # or use ${ANTHROPIC_API_KEY}
+      model: ""            # choose any text-capable model from /models
+      endpoint_path: "/messages"
+      max_token_parameter: "max_tokens"
+      no_reasoning_control: "none"
     apfel:
       name: "APFEL"
       provider: "apfel"
+      api_protocol: "openai_chat"
       base_url: "http://127.0.0.1:11434/v1"
       api_key: ""           # optional; leave blank to send no Authorization header
       model: "apple-foundationmodel"
-      chat_completions_path: "/chat/completions"  # customize for non-standard OpenAI-compatible endpoints
+      endpoint_path: "/chat/completions"  # customize for non-standard OpenAI-compatible endpoints
       max_token_parameter: "max_tokens"
       no_reasoning_control: "none"
     mlx:
@@ -1898,15 +2250,24 @@ feedback:
   start_sound: false
   stop_sound: false
   error_sound: false
+  mute_system_output: false
 
 dictionary:
   path: "dictionary.txt"  # relative to ~/.koe/
+
+clipboard:
+  # 自动粘贴完成后，恢复原剪贴板内容前的等待时间（毫秒）。
+  # 取值范围 0-60000；0 表示粘贴完成后立即恢复（并非禁用恢复）。
+  # 值太小可能导致慢速应用还没读取剪贴板就被恢复；值太大则旧剪贴板内容回来得更晚。
+  # 仅影响自动粘贴流程；主动保留在剪贴板中的结果（如模板改写、无辅助功能权限时）不会被恢复。
+  # 无效值会回退到 1500 并记录警告，不影响其他配置项。
+  restore_delay_ms: 1500
 
 hotkey:
   # 触发键：fn | left_option | right_option | left_command | right_command | left_control | right_control
   # 也可以填 macOS keycode 数字来使用非修饰键，例如 122 (F1)、120 (F2)、99 (F3) 等
   trigger_key: "fn"
-  trigger_mode: "hold"                 # hold | toggle
+  trigger_mode: "hold"                 # hold | toggle | double_tap
 
 overlay:
   font_family: "system"
@@ -1963,6 +2324,13 @@ prompt_templates:
     enabled: true
     shortcut: 1
     system_prompt: "将用户的语音输入翻译为流畅的英文。保持原意，不要添加额外内容。只输出翻译结果。"
+
+# 实验性功能（默认全部关闭）
+experimental:
+  # ASR 识别完成后立即粘贴原始文本，LLM 修正返回后再原位替换。
+  # 仅在焦点、光标和已粘贴文本均未变化、且目标应用支持辅助功能文本替换时
+  # 才会替换；无法安全替换时保留原文，修正版进入剪贴板。
+  paste_asr_first: false
 "#;
 
 const DEFAULT_DICTIONARY_TXT: &str = r#"# Koe User Dictionary
@@ -2010,6 +2378,7 @@ const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2090,6 +2459,7 @@ mod tests {
     fn config_default_includes_single_translation_template() {
         let config = Config::default();
         assert_eq!(config.prompt_templates, default_prompt_templates());
+        assert!(config.llm.auto_paste_processed_text);
         assert_eq!(config.overlay.font_family, "system");
         assert_eq!(config.overlay.font_size, 13);
         assert_eq!(config.overlay.bottom_margin, 10);
@@ -2129,11 +2499,13 @@ mod tests {
     }
 
     #[test]
-    fn default_llm_config_includes_openai_apfel_and_mlx_profiles() {
+    fn default_llm_config_includes_all_remote_protocols_and_local_profiles() {
         let llm = LlmSection::default();
 
         assert_eq!(llm.active_profile, "openai");
         assert!(llm.profiles.contains_key("openai"));
+        assert!(llm.profiles.contains_key("openai-responses"));
+        assert!(llm.profiles.contains_key("anthropic"));
         assert!(llm.profiles.contains_key("apfel"));
         assert!(llm.profiles.contains_key("mlx"));
 
@@ -2142,7 +2514,8 @@ mod tests {
         assert_eq!(apfel.base_url, "http://127.0.0.1:11434/v1");
         assert_eq!(apfel.api_key, "");
         assert_eq!(apfel.model, "apple-foundationmodel");
-        assert_eq!(apfel.chat_completions_path, "/chat/completions");
+        assert_eq!(apfel.endpoint_path, "/chat/completions");
+        assert_eq!(apfel.api_protocol, LlmApiProtocol::OpenaiChat);
         assert!(matches!(
             apfel.max_token_parameter,
             LlmMaxTokenParameter::MaxTokens
@@ -2167,12 +2540,13 @@ mod tests {
         assert_eq!(active.base_url, "http://127.0.0.1:11434/v1");
         assert_eq!(active.api_key, "");
         assert_eq!(active.model, "apple-foundationmodel");
-        assert_eq!(active.chat_completions_path, "/chat/completions");
+        assert_eq!(active.endpoint_path, "/chat/completions");
+        assert_eq!(active.effective_api_protocol(), LlmApiProtocol::OpenaiChat);
         assert!(active.is_ready());
     }
 
     #[test]
-    fn llm_profile_runtime_config_missing_chat_path_defaults_to_chat_completions() {
+    fn legacy_profile_defaults_to_chat_and_accepts_legacy_path_key() {
         let profile: LlmProfileRuntimeConfig = serde_json::from_value(serde_json::json!({
             "id": "openai",
             "name": "OpenAI",
@@ -2180,13 +2554,39 @@ mod tests {
             "base_url": "https://api.openai.com/v1",
             "api_key": "",
             "model": "gpt-5.4-nano",
+            "chat_completions_path": "/custom/chat",
             "max_token_parameter": "max_completion_tokens",
             "no_reasoning_control": "reasoning_effort",
             "mlx": {"model": "mlx/Qwen3-0.6B-4bit"}
         }))
         .unwrap();
 
-        assert_eq!(profile.chat_completions_path, "/chat/completions");
+        assert_eq!(profile.effective_api_protocol(), LlmApiProtocol::OpenaiChat);
+        assert_eq!(profile.effective_endpoint_path(), "/custom/chat");
+    }
+
+    #[test]
+    fn empty_endpoint_uses_each_protocol_default() {
+        for (protocol, expected) in [
+            (LlmApiProtocol::OpenaiChat, "/chat/completions"),
+            (LlmApiProtocol::OpenaiResponses, "/responses"),
+            (LlmApiProtocol::AnthropicMessages, "/messages"),
+        ] {
+            let profile = LlmProfileRuntimeConfig {
+                id: "test".into(),
+                name: "Test".into(),
+                provider: "openai".into(),
+                api_protocol: protocol,
+                base_url: "https://example.com/v1".into(),
+                api_key: String::new(),
+                model: "model".into(),
+                endpoint_path: String::new(),
+                max_token_parameter: LlmMaxTokenParameter::MaxCompletionTokens,
+                no_reasoning_control: LlmNoReasoningControl::None,
+                mlx: Default::default(),
+            };
+            assert_eq!(profile.effective_endpoint_path(), expected);
+        }
     }
 
     #[test]
@@ -2203,11 +2603,53 @@ mod tests {
         assert!(!active.is_ready());
     }
 
-    // config_set tests are combined into one function because they mutate
-    // the HOME env var, which is process-global and races with parallel tests.
+    // Environment variables are process-global, so every test that mutates one
+    // shares this lock for its full duration. Poison-tolerant so one failing
+    // test does not cascade into the others.
+    static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var_os(key),
+            }
+        }
+
+        fn set(&self, value: impl AsRef<OsStr>) {
+            // SAFETY: process-global environment mutation is serialized by
+            // PROCESS_ENV_LOCK in every test that creates this guard.
+            unsafe { std::env::set_var(self.key, value) };
+        }
+
+        fn remove(&self) {
+            // SAFETY: see set().
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: the lock guard outlives this value in each test, so the
+            // original value is restored while mutation remains serialized.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     #[test]
     fn config_set_error_and_success() {
-        let orig_home = std::env::var("HOME").unwrap();
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = EnvVarGuard::new("HOME");
 
         // --- corrupted YAML should fail ---
         let tmp1 = std::env::temp_dir().join(format!(
@@ -2221,9 +2663,8 @@ mod tests {
         fs::create_dir_all(&koe_dir1).unwrap();
         fs::write(koe_dir1.join("config.yaml"), "{{{{invalid yaml").unwrap();
 
-        unsafe { std::env::set_var("HOME", &tmp1) };
+        home.set(&tmp1);
         let bad_result = config_set("test.key", "value");
-        unsafe { std::env::set_var("HOME", &orig_home) };
         let _ = fs::remove_dir_all(&tmp1);
         assert!(
             bad_result.is_err(),
@@ -2242,14 +2683,75 @@ mod tests {
         fs::create_dir_all(&koe_dir2).unwrap();
         fs::write(koe_dir2.join("config.yaml"), "asr:\n  provider: doubao\n").unwrap();
 
-        unsafe { std::env::set_var("HOME", &tmp2) };
+        home.set(&tmp2);
         let ok_result = config_set("llm.enabled", "true");
-        unsafe { std::env::set_var("HOME", &orig_home) };
 
         assert!(ok_result.is_ok(), "config_set should succeed on valid YAML");
         let content = fs::read_to_string(koe_dir2.join("config.yaml")).unwrap();
         assert!(content.contains("enabled: true"));
         let _ = fs::remove_dir_all(&tmp2);
+    }
+
+    // ─── substitute_env_vars tests ────────────────────────────────────
+
+    #[test]
+    fn substitute_env_vars_replaces_known_var() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_API_KEY");
+        variable.set("sk-test-123");
+        let result = substitute_env_vars("api_key: ${KOE_TEST_API_KEY}");
+        assert_eq!(result, "api_key: sk-test-123");
+    }
+
+    #[test]
+    fn substitute_env_vars_no_rescan_prevents_infinite_loop() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_SELF_REF");
+        // If the value itself contains "${...}", it must NOT be re-expanded.
+        variable.set("${KOE_TEST_SELF_REF}");
+        // Should return quickly and produce the literal value, not loop forever.
+        let result = substitute_env_vars("key: ${KOE_TEST_SELF_REF}");
+        assert_eq!(result, "key: ${KOE_TEST_SELF_REF}");
+    }
+
+    #[test]
+    fn substitute_env_vars_value_with_dollar_brace_not_re_expanded() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = EnvVarGuard::new("KOE_TEST_INNER");
+        let outer = EnvVarGuard::new("KOE_TEST_OUTER");
+        // A value that contains a different ${VAR} reference must not be resolved.
+        inner.set("hello");
+        outer.set("${KOE_TEST_INNER}");
+        let result = substitute_env_vars("v: ${KOE_TEST_OUTER}");
+        // Should equal the literal value of OUTER, not the expanded inner.
+        assert_eq!(result, "v: ${KOE_TEST_INNER}");
+    }
+
+    #[test]
+    fn substitute_env_vars_missing_var_becomes_empty() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let variable = EnvVarGuard::new("KOE_TEST_MISSING_VAR_XYZ");
+        // Ensure an unset var is replaced with ""
+        variable.remove();
+        let result = substitute_env_vars("key: ${KOE_TEST_MISSING_VAR_XYZ}");
+        assert_eq!(result, "key: ");
+    }
+
+    #[test]
+    fn substitute_env_vars_no_closing_brace_left_verbatim() {
+        let result = substitute_env_vars("key: ${UNCLOSED");
+        assert_eq!(result, "key: ${UNCLOSED");
+    }
+
+    #[test]
+    fn substitute_env_vars_multiple_vars_in_one_string() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let host = EnvVarGuard::new("KOE_TEST_HOST");
+        let port = EnvVarGuard::new("KOE_TEST_PORT");
+        host.set("localhost");
+        port.set("8080");
+        let result = substitute_env_vars("url: http://${KOE_TEST_HOST}:${KOE_TEST_PORT}/v1");
+        assert_eq!(result, "url: http://localhost:8080/v1");
     }
 
     #[test]
@@ -2276,6 +2778,58 @@ mod tests {
 
         let changed_again = sync_default_manifests(&models_dir).unwrap();
         assert!(!changed_again);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // Mutates HOME; serialized with every other environment-mutating test.
+    #[test]
+    fn config_bool_round_trip_and_isolation() {
+        let _env_lock = PROCESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = EnvVarGuard::new("HOME");
+
+        let tmp = std::env::temp_dir().join(format!(
+            "koe-test-bool-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let koe_dir = tmp.join(".koe");
+        fs::create_dir_all(&koe_dir).unwrap();
+        fs::write(koe_dir.join("config.yaml"), "").unwrap();
+
+        home.set(&tmp);
+
+        // Write two bool keys.
+        config_set("asr.doubao.enable_accelerate_text", "true").unwrap();
+        config_set("llm.prompt_templates_enabled", "true").unwrap();
+
+        // Both round-trip as the exact string "true".
+        assert_eq!(
+            config_get("asr.doubao.enable_accelerate_text").unwrap(),
+            "true",
+            "asr.doubao.enable_accelerate_text should be \"true\""
+        );
+        assert_eq!(
+            config_get("llm.prompt_templates_enabled").unwrap(),
+            "true",
+            "llm.prompt_templates_enabled should be \"true\""
+        );
+
+        // Setting an unrelated third key must not clobber the first two.
+        config_set("asr.provider", "doubao").unwrap();
+
+        assert_eq!(
+            config_get("asr.doubao.enable_accelerate_text").unwrap(),
+            "true",
+            "asr.doubao.enable_accelerate_text should still be \"true\" after sibling write"
+        );
+        assert_eq!(
+            config_get("llm.prompt_templates_enabled").unwrap(),
+            "true",
+            "llm.prompt_templates_enabled should still be \"true\" after sibling write"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -2350,5 +2904,85 @@ translation:
             config.translation.tts.provider,
             crate::translation::config::TtsProvider::MiniMax
         ));
+    }
+
+    // ─── Clipboard Section ──────────────────────────────────────────
+
+    fn clipboard_delay_from_yaml(yaml: &str) -> u32 {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.clipboard.restore_delay_ms
+    }
+
+    #[test]
+    fn clipboard_defaults_when_section_absent() {
+        assert_eq!(clipboard_delay_from_yaml("{}"), 1500);
+        assert_eq!(Config::default().clipboard.restore_delay_ms, 1500);
+    }
+
+    #[test]
+    fn clipboard_defaults_when_field_absent_or_null() {
+        assert_eq!(clipboard_delay_from_yaml("clipboard: {}"), 1500);
+        assert_eq!(clipboard_delay_from_yaml("clipboard:\n"), 1500);
+        assert_eq!(
+            clipboard_delay_from_yaml("clipboard:\n  restore_delay_ms:\n"),
+            1500
+        );
+    }
+
+    #[test]
+    fn clipboard_accepts_valid_range() {
+        assert_eq!(
+            clipboard_delay_from_yaml("clipboard:\n  restore_delay_ms: 0"),
+            0
+        );
+        assert_eq!(
+            clipboard_delay_from_yaml("clipboard:\n  restore_delay_ms: 1500"),
+            1500
+        );
+        assert_eq!(
+            clipboard_delay_from_yaml("clipboard:\n  restore_delay_ms: 60000"),
+            60000
+        );
+    }
+
+    #[test]
+    fn clipboard_invalid_values_fall_back_to_default() {
+        for invalid in [
+            "-1",
+            "1.5",
+            "\"fast\"",
+            "true",
+            "60001",
+            "99999999999999999999999999", // overflows any integer type
+            "[1500]",
+        ] {
+            assert_eq!(
+                clipboard_delay_from_yaml(&format!("clipboard:\n  restore_delay_ms: {invalid}")),
+                1500,
+                "restore_delay_ms {invalid} should fall back to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_section_with_invalid_shape_falls_back() {
+        assert_eq!(clipboard_delay_from_yaml("clipboard: fast"), 1500);
+        assert_eq!(clipboard_delay_from_yaml("clipboard: 1500"), 1500);
+    }
+
+    #[test]
+    fn clipboard_invalid_value_preserves_unrelated_sections() {
+        let yaml = r#"
+asr:
+  provider: "qwen"
+llm:
+  timeout_ms: 1234
+clipboard:
+  restore_delay_ms: "not-a-number"
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.clipboard.restore_delay_ms, 1500);
+        assert_eq!(config.asr.provider, "qwen");
+        assert_eq!(config.llm.timeout_ms, 1234);
     }
 }

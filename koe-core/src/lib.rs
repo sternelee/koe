@@ -14,14 +14,15 @@ pub mod translation;
 use crate::config::Config;
 use crate::ffi::{
     cstr_to_str, invoke_asr_final_text, invoke_final_text_ready, invoke_interim_text,
-    invoke_rewrite_text_ready, invoke_session_error, invoke_session_ready, invoke_session_warning,
-    invoke_state_changed, SPCallbacks, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext,
-    SPSessionMode,
+    invoke_rewrite_text_ready, invoke_session_error, invoke_session_ready,
+    invoke_session_result_meta, invoke_session_warning, invoke_state_changed, SPCallbacks,
+    SPClipboardConfig, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext, SPSessionMode,
 };
 #[cfg(feature = "mlx")]
 use crate::llm::mlx::MlxLlmProvider;
 use crate::llm::openai_compatible::{
-    build_http_client, list_models as llm_list_models, OpenAiCompatibleProvider,
+    build_http_client, list_models as llm_list_models,
+    list_models_for_profile as llm_list_models_for_profile, OpenAiCompatibleProvider,
     LLM_HTTP_POOL_IDLE_TIMEOUT,
 };
 use crate::llm::{CorrectionRequest, LlmProvider};
@@ -38,7 +39,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{timeout, Duration};
 
 const LLM_WARMUP_SAFETY_MARGIN: Duration = Duration::from_secs(20);
@@ -58,6 +59,7 @@ struct LlmWarmupState {
 struct Core {
     runtime: Runtime,
     audio_tx: Option<mpsc::Sender<Vec<u8>>>,
+    accept_asr_tx: Option<watch::Sender<bool>>,
     session: Arc<Mutex<Option<Session>>>,
     cancelled: Arc<AtomicBool>,
     config: Config,
@@ -149,6 +151,7 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
     let core = Core {
         runtime,
         audio_tx: None,
+        accept_asr_tx: None,
         session: Arc::new(Mutex::new(None)),
         cancelled: Arc::new(AtomicBool::new(false)),
         config: cfg,
@@ -301,6 +304,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // cancellation; its cleanup_session writes to the OLD Arc, not the new one.
     core.cancelled.store(true, Ordering::SeqCst);
     core.audio_tx = None;
+    core.accept_asr_tx = None;
 
     // Create fresh per-session Arcs so old and new tasks are fully isolated
     core.cancelled = Arc::new(AtomicBool::new(false));
@@ -309,6 +313,8 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // Audio channel for new session
     let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1024);
     core.audio_tx = Some(audio_tx);
+    let (accept_asr_tx, accept_asr_rx) = watch::channel(false);
+    core.accept_asr_tx = Some(accept_asr_tx);
 
     let cancelled = core.cancelled.clone();
     let session_arc = core.session.clone();
@@ -321,45 +327,14 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let cfg = &core.config;
     let asr_provider_name = cfg.asr.provider.clone();
 
-    // Build provider-specific AsrConfig and create the provider instance.
-    //
-    // Previously, the provider was created inside run_session. It is now
-    // created here so that local providers (e.g. mlx) can receive their
-    // typed config via the constructor, while cloud providers (doubao, qwen)
-    // continue to receive config via connect(&AsrConfig).
-    //
-    // Provider lifecycle is unchanged:
-    //
-    //   Before:
-    //     sp_core_session_begin()
-    //       → runtime.spawn(async move {
-    //           run_session(...)
-    //             → new()              // created here
-    //             → connect()
-    //             → send_audio() ...
-    //             → close()
-    //             → function returns, provider dropped
-    //         })
-    //
-    //   After:
-    //     sp_core_session_begin()
-    //       → new()                    // created here (moved earlier)
-    //       → runtime.spawn(async move {  // ownership transferred via move
-    //           run_session(..., asr)
-    //             → connect()
-    //             → send_audio() ...
-    //             → close()
-    //             → function returns, provider dropped (same as before)
-    //         })
-    //
-    // - Created once per session: sp_core_session_begin is called once per
-    //   voice input session, so the provider is created exactly once.
-    // - Drop timing unchanged: ownership moves into the async closure, then
-    //   into run_session; the provider is dropped when run_session returns.
-    // - The only difference: new() now runs in a sync context instead of an
-    //   async context, but new() only initializes struct fields with no async
-    //   operations, so this has no effect.
-    let (asr_config, asr) = asr_factory::build_asr_provider(cfg, &core.dictionary);
+    // Build the provider outside the async task so that local providers
+    // (e.g. mlx) receive their typed config via the constructor, while cloud
+    // providers continue to receive config via connect(&AsrConfig). Provider
+    // construction lives in asr_factory so koe-cli can reuse it. Ownership
+    // moves into the async closure below; the provider is dropped when
+    // run_session returns — created exactly once per session.
+    let (asr_config, asr): (AsrConfig, Box<dyn AsrProvider>) =
+        asr_factory::create_asr_provider(cfg, &asr_provider_name, &core.dictionary);
     let llm_config = cfg.llm.clone();
     let output_translation_mt_config = cfg.translation.mt.clone();
     let output_translation_source_language = effective_translation_source_language(cfg);
@@ -386,6 +361,7 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             session_token,
             mode,
             audio_rx,
+            accept_asr_rx,
             asr_config,
             asr_provider_name,
             asr,
@@ -453,8 +429,26 @@ pub extern "C" fn sp_core_session_cancel() -> i32 {
         core.cancelled.store(true, Ordering::SeqCst);
         // Drop the audio sender to unblock the session task
         core.audio_tx = None;
+        core.accept_asr_tx = None;
     }
     0
+}
+
+/// Request that the current session skip LLM correction and use the raw ASR text.
+///
+/// This is only meaningful after ASR finalization has produced text and while
+/// the LLM correction future is still in progress.
+#[no_mangle]
+pub extern "C" fn sp_core_accept_asr_result() -> i32 {
+    log::info!("sp_core_accept_asr_result called");
+
+    let global = CORE.lock().unwrap();
+    if let Some(ref core) = *global {
+        if let Some(ref tx) = core.accept_asr_tx {
+            return if tx.send(true).is_ok() { 0 } else { -1 };
+        }
+    }
+    -1
 }
 
 fn validate_prompt_templates(
@@ -640,6 +634,15 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
 
     drop(global); // Release lock before spawning
 
+    // Trim-aware empty guard: a whitespace-only input carries no content, and
+    // feeding it to the LLM makes the model regurgitate the prompt's dictionary
+    // section instead of rewriting. Echo the original back and skip the call.
+    if asr_text.trim().is_empty() {
+        log::info!("sp_core_rewrite_with_template: empty ASR text, skipping LLM");
+        invoke_rewrite_text_ready(session_token, &asr_text);
+        return 0;
+    }
+
     runtime_handle.spawn(async move {
         log::info!(
             "rewrite: using template '{}' with {} chars of ASR text",
@@ -671,17 +674,12 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
                     llm_config.timeout_ms,
                 ))
             }
-            _ => Box::new(OpenAiCompatibleProvider::new(
+            _ => Box::new(OpenAiCompatibleProvider::from_profile(
                 llm_http_client,
-                active_profile.base_url.clone(),
-                active_profile.chat_completions_path.clone(),
-                active_profile.api_key.clone(),
-                active_profile.model.clone(),
+                active_profile.clone(),
                 llm_config.temperature,
                 llm_config.top_p,
                 llm_config.max_output_tokens,
-                active_profile.max_token_parameter,
-                active_profile.no_reasoning_control,
             )),
         };
 
@@ -692,22 +690,38 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
         );
         let user_prompt =
             prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, &[]);
+        let user_prompt_stable_prefix_len =
+            prompt::stable_user_prompt_prefix_len(&user_prompt_template, &user_prompt, &candidates);
 
         let request = CorrectionRequest {
             asr_text: asr_text.clone(),
             dictionary_entries: candidates,
             system_prompt: template_system_prompt,
             user_prompt,
+            user_prompt_stable_prefix_len,
         };
 
         match llm.correct(&request).await {
             Ok(result) => {
-                log::info!(
-                    "rewrite: template '{}' produced {} chars",
-                    template.name,
-                    result.len()
-                );
-                invoke_rewrite_text_ready(session_token, &result);
+                if prompt::looks_like_degenerate_rewrite(
+                    &result,
+                    &request.asr_text,
+                    &request.dictionary_entries,
+                ) {
+                    log::warn!(
+                        "rewrite: template '{}' output looks degenerate ({} chars); falling back to ASR text",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &asr_text);
+                } else {
+                    log::info!(
+                        "rewrite: template '{}' produced {} chars",
+                        template.name,
+                        result.len()
+                    );
+                    invoke_rewrite_text_ready(session_token, &result);
+                }
             }
             Err(e) => {
                 log::error!("rewrite: template '{}' failed: {e}", template.name);
@@ -730,12 +744,32 @@ pub extern "C" fn sp_core_get_feedback_config() -> SPFeedbackConfig {
             start_sound: core.config.feedback.start_sound,
             stop_sound: core.config.feedback.stop_sound,
             error_sound: core.config.feedback.error_sound,
+            mute_system_output: core.config.feedback.mute_system_output,
         }
     } else {
         SPFeedbackConfig {
             start_sound: false,
             stop_sound: false,
             error_sound: false,
+            mute_system_output: false,
+        }
+    }
+}
+
+/// Query current clipboard configuration.
+/// Returns the validated restoration delay from the cached config — never the
+/// raw YAML scalar — so field validation, defaults, and session snapshot
+/// semantics apply. Callers snapshot this once per session.
+#[no_mangle]
+pub extern "C" fn sp_core_get_clipboard_config() -> SPClipboardConfig {
+    let global = CORE.lock().unwrap();
+    if let Some(ref core) = *global {
+        SPClipboardConfig {
+            restore_delay_ms: core.config.clipboard.restore_delay_ms,
+        }
+    } else {
+        SPClipboardConfig {
+            restore_delay_ms: config::DEFAULT_CLIPBOARD_RESTORE_DELAY_MS,
         }
     }
 }
@@ -758,16 +792,20 @@ pub extern "C" fn sp_core_should_paste_final_text() -> i32 {
 
 /// Query current hotkey configuration.
 /// Returns key codes and modifier flags for the configured trigger key.
+fn hotkey_trigger_mode_code(trigger_mode: &str) -> u8 {
+    match trigger_mode {
+        "toggle" => 1,
+        "double_tap" => 2,
+        _ => 0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn sp_core_get_hotkey_config() -> SPHotkeyConfig {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
         let params = core.config.hotkey.resolve();
-        let trigger_mode: u8 = if core.config.hotkey.trigger_mode == "toggle" {
-            1
-        } else {
-            0
-        };
+        let trigger_mode = hotkey_trigger_mode_code(&core.config.hotkey.trigger_mode);
         SPHotkeyConfig {
             trigger_key_code: params.key_code,
             trigger_alt_key_code: params.alt_key_code,
@@ -795,6 +833,7 @@ async fn run_session(
     session_token: u64,
     mode: SPSessionMode,
     mut audio_rx: mpsc::Receiver<Vec<u8>>,
+    mut accept_asr_rx: watch::Receiver<bool>,
     asr_config: AsrConfig,
     asr_provider: String,
     mut asr: Box<dyn AsrProvider>,
@@ -985,9 +1024,12 @@ async fn run_session(
         invoke_state_changed(session_token, "idle");
         return;
     };
-    if asr_text.is_empty() {
+    if asr_text.trim().is_empty() {
         // A silent recording is a valid no-op, not a user-visible failure.
         // Exit quietly so the app returns to idle without error sounds or alerts.
+        // NOTE: must be trim-aware — a whitespace-only ASR result is non-empty
+        // but carries no content, and feeding it to the LLM makes the model
+        // regurgitate the prompt's dictionary section instead of producing text.
         log::info!(
             "[{session_id}] no ASR text available: treating silent recording as empty result"
         );
@@ -1039,7 +1081,7 @@ async fn run_session(
         output_translation_source_language.as_deref(),
     );
 
-    let corrected_text = if llm_enabled {
+    let (corrected_text, llm_applied) = if llm_enabled {
         {
             let mut s = session_arc.lock().unwrap();
             if let Some(ref mut session) = *s {
@@ -1086,24 +1128,55 @@ async fn run_session(
         let user_prompt =
             prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, history);
         log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
+        let user_prompt_stable_prefix_len =
+            prompt::stable_user_prompt_prefix_len(&user_prompt_template, &user_prompt, &candidates);
 
         let request = CorrectionRequest {
             asr_text: asr_text.clone(),
             dictionary_entries: candidates,
             system_prompt,
             user_prompt,
+            user_prompt_stable_prefix_len,
         };
 
-        match llm.correct(&request).await {
-            Ok(corrected) => {
-                mark_llm_connection_touched(&llm_warmup_state);
-                log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
-                corrected
+        let correction = llm.correct(&request);
+        tokio::pin!(correction);
+
+        tokio::select! {
+            result = &mut correction => {
+                match result {
+                    Ok(corrected) => {
+                        mark_llm_connection_touched(&llm_warmup_state);
+                        if prompt::looks_like_degenerate_rewrite(
+                            &corrected,
+                            &request.asr_text,
+                            &request.dictionary_entries,
+                        ) {
+                            log::warn!(
+                                "[{session_id}] LLM output looks degenerate ({} chars from {} chars ASR); falling back to raw ASR text",
+                                corrected.len(),
+                                request.asr_text.len()
+                            );
+                            (asr_text.clone(), false)
+                        } else {
+                            log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
+                            (corrected, true)
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
+                        invoke_session_warning(session_token, &format!("LLM correction failed: {e}"));
+                        (asr_text.clone(), false)
+                    }
+                }
             }
-            Err(e) => {
-                log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
-                invoke_session_warning(session_token, &format!("LLM correction failed: {e}"));
-                asr_text
+            accepted = wait_for_asr_accept(&mut accept_asr_rx) => {
+                if accepted {
+                    log::info!("[{session_id}] user accepted raw ASR text; aborting LLM correction");
+                } else {
+                    log::debug!("[{session_id}] ASR accept channel closed; falling back to raw ASR text");
+                }
+                (asr_text.clone(), false)
             }
         }
     } else {
@@ -1112,7 +1185,7 @@ async fn run_session(
         } else {
             log::info!("[{session_id}] LLM not configured, using raw ASR text");
         }
-        asr_text
+        (asr_text.clone(), false)
     };
 
     let final_text = if output_translation_enabled {
@@ -1124,13 +1197,16 @@ async fn run_session(
             .trim()
             .eq_ignore_ascii_case("local_mt")
         {
-            let source_language = output_translation_source_language.as_deref().unwrap_or("auto");
+            let source_language = output_translation_source_language
+                .as_deref()
+                .unwrap_or("auto");
             let mt = crate::translation::mt::MtClient::new(
                 llm_http_client.clone(),
                 output_translation_mt_config,
                 output_translation_source_language.as_deref(),
             );
-            mt.translate(&corrected_text, source_language, &target_language).await
+            mt.translate(&corrected_text, source_language, &target_language)
+                .await
         } else if llm_config
             .output_translation
             .provider
@@ -1141,7 +1217,9 @@ async fn run_session(
             // framework. It does not use an LLM profile, so build a dedicated
             // MT client with the Apple provider regardless of the root-level
             // `translation.mt` config (which is for the virtual-mic pipeline).
-            let source_language = output_translation_source_language.as_deref().unwrap_or("auto");
+            let source_language = output_translation_source_language
+                .as_deref()
+                .unwrap_or("auto");
             let apple_mt_config = crate::translation::config::MtConfig {
                 provider: crate::translation::config::MtProvider::Apple,
                 enabled: true,
@@ -1152,11 +1230,12 @@ async fn run_session(
                 apple_mt_config,
                 output_translation_source_language.as_deref(),
             );
-            mt.translate(&corrected_text, source_language, &target_language).await
+            mt.translate(&corrected_text, source_language, &target_language)
+                .await
         } else {
-            let translation_profile = llm_config
-                .output_translation_profile_config()
-                .expect("llm_output_translation_enabled_for_session checked the translation profile");
+            let translation_profile = llm_config.output_translation_profile_config().expect(
+                "llm_output_translation_enabled_for_session checked the translation profile",
+            );
             let translation_llm = build_llm_provider(
                 &session_id,
                 &llm_config,
@@ -1217,6 +1296,11 @@ async fn run_session(
     invoke_state_changed(session_token, "preparing_paste");
 
     // --- Deliver result to Obj-C ---
+    // Metadata must go out before the final text: the Obj-C side records
+    // history (raw ASR text, provider, LLM outcome) when the final text
+    // arrives, using the metadata delivered here.
+    invoke_session_result_meta(session_token, &asr_text, &asr_provider, llm_applied);
+
     // The Obj-C side owns all state transitions from here (pasting → idle).
     // Rust must NOT emit completed/idle state changes — they would be
     // dispatched to the main queue and overwrite the pasting state that
@@ -1284,6 +1368,20 @@ fn format_unexpected_asr_close_error(reason: Option<&str>) -> String {
 fn cleanup_session(session_arc: &Arc<Mutex<Option<Session>>>) {
     let mut s = session_arc.lock().unwrap();
     *s = None;
+}
+
+async fn wait_for_asr_accept(rx: &mut watch::Receiver<bool>) -> bool {
+    if *rx.borrow() {
+        return true;
+    }
+
+    while rx.changed().await.is_ok() {
+        if *rx.borrow_and_update() {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn llm_enabled_for_session(cfg: &config::LlmSection) -> bool {
@@ -1531,17 +1629,12 @@ fn build_llm_provider(
                 llm_config.timeout_ms,
             ))
         }
-        _ => Box::new(OpenAiCompatibleProvider::new(
+        _ => Box::new(OpenAiCompatibleProvider::from_profile(
             llm_http_client,
-            profile.base_url,
-            profile.chat_completions_path,
-            profile.api_key,
-            profile.model,
+            profile,
             llm_config.temperature,
             llm_config.top_p,
             llm_config.max_output_tokens,
-            profile.max_token_parameter,
-            profile.no_reasoning_control,
         )),
     }
 }
@@ -1554,6 +1647,7 @@ fn build_output_translation_request(source_text: &str, target_language: &str) ->
             "You are a professional translator. Translate the user's text into {target_language}. Preserve meaning, tone, punctuation, paragraph breaks, formatting, and proper nouns where appropriate. Output ONLY the translated text with no explanation."
         ),
         user_prompt: source_text.to_string(),
+        user_prompt_stable_prefix_len: 0,
     }
 }
 
@@ -1609,17 +1703,12 @@ fn start_llm_warmup_if_needed(
                 return;
             }
         };
-        let llm = OpenAiCompatibleProvider::new(
+        let llm = OpenAiCompatibleProvider::from_profile(
             llm_http_client,
-            warmup_profile.base_url,
-            warmup_profile.chat_completions_path,
-            warmup_profile.api_key,
-            warmup_profile.model,
+            warmup_profile,
             warmup_cfg.temperature,
             warmup_cfg.top_p,
             warmup_cfg.max_output_tokens,
-            warmup_profile.max_token_parameter,
-            warmup_profile.no_reasoning_control,
         );
 
         let warmup_ok = match llm.warmup().await {
@@ -1843,12 +1932,13 @@ pub unsafe extern "C" fn sp_llm_test(
         id: "test".into(),
         name: "Test".into(),
         provider: "openai".into(),
+        api_protocol: config::LlmApiProtocol::OpenaiChat,
         base_url,
         api_key,
         model,
-        chat_completions_path: "/chat/completions".into(),
+        endpoint_path: "/chat/completions".into(),
         max_token_parameter,
-        no_reasoning_control: config::LlmNoReasoningControl::ReasoningEffort,
+        no_reasoning_control: config::LlmNoReasoningControl::None,
         mlx: Default::default(),
     };
 
@@ -2012,6 +2102,106 @@ pub unsafe extern "C" fn sp_llm_list_models_json(
         .into_raw()
 }
 
+/// List remote models using the authentication rules from a complete LLM
+/// profile. This supports both OpenAI-compatible and Anthropic `/models`
+/// endpoints while preserving `sp_llm_list_models_json` for older clients.
+///
+/// # Safety
+/// `profile_json` must be a valid null-terminated C string.
+/// Caller must free the returned pointer with `sp_core_free_string()`.
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_list_models_for_profile_json(
+    profile_json: *const c_char,
+) -> *mut c_char {
+    let Some(profile_json) = (unsafe { cstr_to_str(profile_json) }) else {
+        return CString::new(
+            serde_json::json!({
+                "success": false,
+                "models": [],
+                "message": "Missing profile JSON",
+            })
+            .to_string(),
+        )
+        .unwrap_or_default()
+        .into_raw();
+    };
+    let profile: config::LlmProfileRuntimeConfig = match serde_json::from_str(profile_json) {
+        Ok(profile) => profile,
+        Err(e) => {
+            return CString::new(
+                serde_json::json!({
+                    "success": false,
+                    "models": [],
+                    "message": format!("Invalid profile JSON: {e}"),
+                })
+                .to_string(),
+            )
+            .unwrap_or_default()
+            .into_raw();
+        }
+    };
+    if profile.base_url.trim().is_empty() {
+        return CString::new(
+            serde_json::json!({
+                "success": false,
+                "models": [],
+                "message": "Base URL is required",
+            })
+            .to_string(),
+        )
+        .unwrap_or_default()
+        .into_raw();
+    }
+
+    let cfg = config::load_config().unwrap_or_default();
+    let client = match build_http_client(cfg.llm.timeout_ms) {
+        Ok(client) => client,
+        Err(e) => {
+            return CString::new(
+                serde_json::json!({
+                    "success": false,
+                    "models": [],
+                    "message": format!("Failed to create HTTP client: {e}"),
+                })
+                .to_string(),
+            )
+            .unwrap_or_default()
+            .into_raw();
+        }
+    };
+    let runtime = match Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            return CString::new(
+                serde_json::json!({
+                    "success": false,
+                    "models": [],
+                    "message": format!("Failed to create async runtime: {e}"),
+                })
+                .to_string(),
+            )
+            .unwrap_or_default()
+            .into_raw();
+        }
+    };
+    let result = runtime.block_on(llm_list_models_for_profile(client, &profile));
+    let json = match result {
+        Ok(models) => serde_json::json!({
+            "success": true,
+            "models": models,
+            "message": "Models fetched",
+        }),
+        Err(e) => serde_json::json!({
+            "success": false,
+            "models": [],
+            "message": format!("{e}"),
+        }),
+    };
+    CString::new(json.to_string())
+        .unwrap_or_default()
+        .into_raw()
+}
+
 /// Return the active LLM profile id and saved profile map as JSON.
 #[no_mangle]
 pub extern "C" fn sp_llm_profiles_json() -> *mut c_char {
@@ -2114,11 +2304,14 @@ pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -
         }
     };
 
+    let user_prompt_stable_prefix_len =
+        prompt::stable_user_prompt_prefix_len(&user_prompt_template, &user_prompt, &candidates);
     let request = CorrectionRequest {
         asr_text: String::new(),
         dictionary_entries: candidates,
         system_prompt,
         user_prompt,
+        user_prompt_stable_prefix_len,
     };
     let start = Instant::now();
     let result = match profile.provider.as_str() {
@@ -2156,17 +2349,12 @@ pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -
                     .into_raw();
                 }
             };
-            let llm = OpenAiCompatibleProvider::new(
+            let llm = OpenAiCompatibleProvider::from_profile(
                 client,
-                profile.base_url,
-                profile.chat_completions_path,
-                profile.api_key,
-                profile.model,
+                profile,
                 cfg.llm.temperature,
                 cfg.llm.top_p,
                 cfg.llm.max_output_tokens,
-                profile.max_token_parameter,
-                profile.no_reasoning_control,
             );
             rt.block_on(llm.correct(&request))
         }
@@ -2215,7 +2403,7 @@ fn write_f32_pcm_to_wav(path: &str, samples: &[f32], sample_rate: u32) -> std::i
     let bits_per_sample: u16 = 32;
     let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
     let block_align = num_channels * (bits_per_sample / 8);
-    let data_size = (samples.len() * std::mem::size_of::<f32>()) as u32;
+    let data_size = std::mem::size_of_val(samples) as u32;
     let chunk_size = 36 + data_size;
 
     file.write_all(b"RIFF")?;
@@ -2723,7 +2911,10 @@ pub extern "C" fn sp_core_translation_start() -> i32 {
         translation_config.tts.model,
     );
 
-    let factory: AsrFactory = Arc::new(move || asr_factory::build_asr_provider(&cfg, &dictionary));
+    let factory: AsrFactory = Arc::new(move || {
+        let provider_name = cfg.asr.provider.clone();
+        asr_factory::create_asr_provider(&cfg, &provider_name, &dictionary)
+    });
     let engine = TranslationEngine::new(translation_config, http_client, factory, translation_mode);
 
     let handle = core.runtime.spawn(async move {
@@ -2838,6 +3029,14 @@ mod tests {
     use koe_asr::{AsrError, AsrEvent, AsrProvider, TranscriptAggregator};
     use std::collections::VecDeque;
 
+    #[test]
+    fn hotkey_trigger_modes_map_to_native_codes() {
+        assert_eq!(hotkey_trigger_mode_code("hold"), 0);
+        assert_eq!(hotkey_trigger_mode_code("toggle"), 1);
+        assert_eq!(hotkey_trigger_mode_code("double_tap"), 2);
+        assert_eq!(hotkey_trigger_mode_code("unknown"), 0);
+    }
+
     /// Mock ASR provider that yields a pre-configured sequence of events.
     struct MockAsrProvider {
         events: VecDeque<koe_asr::error::Result<AsrEvent>>,
@@ -2913,6 +3112,24 @@ mod tests {
         let result = wait_for_final(0, &mut mock, &mut agg).await;
         assert!(result.is_some());
         assert!(result.unwrap().contains("connection"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_asr_accept_returns_true_after_signal() {
+        let (tx, mut rx) = watch::channel(false);
+
+        tx.send(true).unwrap();
+
+        assert!(wait_for_asr_accept(&mut rx).await);
+    }
+
+    #[tokio::test]
+    async fn wait_for_asr_accept_returns_false_when_channel_closes() {
+        let (tx, mut rx) = watch::channel(false);
+
+        drop(tx);
+
+        assert!(!wait_for_asr_accept(&mut rx).await);
     }
 
     // ── Main loop error-with-partial-text tests ─────────────────────────
