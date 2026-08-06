@@ -1441,20 +1441,22 @@ static void ensureCustomHotkeyInPopup(NSPopUpButton *popup, NSString *value) {
     }
   }
   // Add local providers supported by this build (model-based)
-    NSDictionary *localProviderLabels = @{
-        @"mlx": KoeLocalizedString(@"setupWizard.llm.profile.mlx"),
-        @"sherpa-onnx": KoeLocalizedString(@"setupWizard.asr.provider.sherpaOnnx"),
-        @"whisper": KoeLocalizedString(@"setupWizard.asr.provider.whisper"),
-    };
-    for (NSString *provider in supportedLocalProviders) {
-        NSString *label = localProviderLabels[provider];
-        if (!label) continue;  // apple-speech handled above
-        [self.asrProviderPopup addItemWithTitle:label];
-        [self.asrProviderPopup lastItem].representedObject = provider;
-    }
-    [self.asrProviderPopup setTarget:self];
-    [self.asrProviderPopup setAction:@selector(asrProviderChanged:)];
-    [pane addSubview:self.asrProviderPopup];
+  NSDictionary *localProviderLabels = @{
+    @"mlx" : KoeLocalizedString(@"setupWizard.llm.profile.mlx"),
+    @"sherpa-onnx" : KoeLocalizedString(@"setupWizard.asr.provider.sherpaOnnx"),
+    @"whisper" : KoeLocalizedString(@"setupWizard.asr.provider.whisper"),
+    @"wetype" : @"WeType (On-Device)",
+  };
+  for (NSString *provider in supportedLocalProviders) {
+    NSString *label = localProviderLabels[provider];
+    if (!label)
+      continue; // apple-speech handled above
+    [self.asrProviderPopup addItemWithTitle:label];
+    [self.asrProviderPopup lastItem].representedObject = provider;
+  }
+  [self.asrProviderPopup setTarget:self];
+  [self.asrProviderPopup setAction:@selector(asrProviderChanged:)];
+  [pane addSubview:self.asrProviderPopup];
 
     // Test button next to Provider
     self.asrTestButton = [NSButton buttonWithTitle:KoeLocalizedString(@"setupWizard.common.test") target:self action:@selector(testAsrConnection:)];
@@ -6898,7 +6900,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         } else {
             [self.asrAuthModeControl setSelectedSegment:0];
         }
-
         NSString *doubaoLang = configGet(@"asr.doubao.language");
         if (doubaoLang.length > 0) {
             BOOL found = NO;
@@ -6984,6 +6985,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             currentModel = configGet(@"asr.sherpa-onnx.model");
         } else if ([provider isEqualToString:@"whisper"]) {
             currentModel = configGet(@"asr.whisper.model");
+        } else if ([provider isEqualToString:@"wetype"]) {
+            currentModel = configGet(@"asr.wetype.model");
         }
         if (currentModel.length > 0) {
             for (NSInteger i = 0; i < self.localModelPopup.numberOfItems; i++) {
@@ -7265,6 +7268,136 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
             return;
         }
         serializedTemplates = [self serializedTemplatesData];
+    }
+
+    NSString *configPath = configFilePath();
+  BOOL configExisted =
+      [[NSFileManager defaultManager] fileExistsAtPath:configPath];
+  NSString *originalConfigSnapshot =
+      [NSString stringWithContentsOfFile:configPath
+                                encoding:NSUTF8StringEncoding
+                                   error:nil]
+          ?: @"";
+  __block BOOL shouldRollbackConfig = NO;
+  void (^rollbackConfigIfNeeded)(void) = ^{
+    if (!shouldRollbackConfig)
+      return;
+
+    NSError *rollbackError = nil;
+    if (!restoreConfigSnapshot(originalConfigSnapshot, configExisted,
+                               &rollbackError)) {
+      NSLog(@"[Koe] Failed to restore config snapshot: %@",
+            rollbackError.localizedDescription);
+    }
+    [self.rustBridge reloadConfig];
+  };
+
+  // Track whether any config write fails
+  shouldRollbackConfig = YES;
+  BOOL saveOk = YES;
+
+  // Update ASR fields (always save — fields may be nil if pane not visited,
+  // check first)
+  if (self.asrAppKeyField) {
+    NSString *selectedProvider =
+        self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
+    saveOk &= configSet(@"asr.provider", selectedProvider);
+    // Save Doubao fields based on auth mode
+    BOOL isNewConsoleMode = (self.asrAuthModeControl.selectedSegment == 0);
+    if (isNewConsoleMode) {
+      NSString *apiKey = self.asrApiKeyToggle.tag == 1
+                             ? self.asrApiKeyField.stringValue
+                             : self.asrApiKeySecureField.stringValue;
+      saveOk &= configSet(@"asr.doubao.api_key", apiKey);
+      saveOk &= configSet(@"asr.doubao.app_key", @"");
+      saveOk &= configSet(@"asr.doubao.access_key", @"");
+    } else {
+      saveOk &= configSet(@"asr.doubao.api_key", @"");
+      saveOk &=
+          configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
+      NSString *accessKey = self.asrAccessKeyToggle.tag == 1
+                                ? self.asrAccessKeyField.stringValue
+                                : self.asrAccessKeySecureField.stringValue;
+      saveOk &= configSet(@"asr.doubao.access_key", accessKey);
+    }
+    // Save language only when Doubao is selected (DoubaoIME server ignores it)
+    if ([selectedProvider isEqualToString:@"doubao"]) {
+      NSString *langValue =
+          self.asrLanguagePopup.selectedItem.representedObject ?: @"";
+      saveOk &= configSet(@"asr.doubao.language", langValue);
+    }
+    // Save Doubao advanced settings only when Doubao is selected
+    if ([selectedProvider isEqualToString:@"doubao"]) {
+      NSString *endWindowValue = self.asrEndWindowField.stringValue;
+      saveOk &= configSet(@"asr.doubao.end_window_size",
+                          endWindowValue.length > 0 ? endWindowValue : @"");
+      NSString *variantValue =
+          self.asrOutputVariantPopup.selectedItem.representedObject ?: @"";
+      saveOk &= configSet(@"asr.doubao.output_zh_variant", variantValue);
+      NSString *accelerateValue =
+          (self.asrAccelerateCheckbox.state == NSControlStateValueOn)
+              ? @"true"
+              : @"false";
+      if ([self shouldPersistBooleanValue:
+                    self.asrAccelerateCheckbox.state == NSControlStateValueOn
+                                  forKey:@"asr.doubao.enable_accelerate_text"]) {
+        saveOk &=
+            configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
+      }
+    }
+    // Save Qwen fields
+    NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
+                               ? self.asrQwenApiKeyField.stringValue
+                               : self.asrQwenApiKeySecureField.stringValue;
+    saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
+    // Save GLM fields
+    NSString *glmApiKey = self.asrGlmApiKeyToggle.tag == 1
+                              ? self.asrGlmApiKeyField.stringValue
+                              : self.asrGlmApiKeySecureField.stringValue;
+    saveOk &= configSet(@"asr.glm.api_key", glmApiKey);
+    // Save MiMo fields
+    NSString *mimoApiKey = self.asrMimoApiKeyToggle.tag == 1
+                               ? self.asrMimoApiKeyField.stringValue
+                               : self.asrMimoApiKeySecureField.stringValue;
+    saveOk &= configSet(@"asr.mimo.api_key", mimoApiKey);
+    // Save Apple Speech locale
+    if ([selectedProvider isEqualToString:@"apple-speech"]) {
+      NSString *locale =
+          self.appleSpeechLocalePopup.selectedItem.representedObject;
+      saveOk &= configSet(@"asr.apple-speech.locale", locale);
+    }
+    // Save local model selection
+    if ([selectedProvider isEqualToString:@"mlx"]) {
+      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+      if (modelPath)
+        saveOk &= configSet(@"asr.mlx.model", modelPath);
+    } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
+      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+      if (modelPath)
+        saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
+    } else if ([selectedProvider isEqualToString:@"wetype"]) {
+      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
+      if (modelPath)
+        saveOk &= configSet(@"asr.wetype.model", modelPath);
+    }
+  }
+
+  // Update LLM fields
+  if (self.llmEnabledCheckbox) {
+    NSString *enabledStr =
+        (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true"
+                                                                 : @"false";
+    if ([self shouldPersistBooleanValue:
+                  self.llmEnabledCheckbox.state == NSControlStateValueOn
+                                forKey:@"llm.enabled"]) {
+      saveOk &= configSet(@"llm.enabled", enabledStr);
+    }
+    BOOL autoPasteProcessedText =
+        self.llmAutoPasteProcessedTextSwitch.state == NSControlStateValueOn;
+    if ([self shouldPersistBooleanValue:autoPasteProcessedText
+                                 forKey:@"llm.auto_paste_processed_text"]) {
+      saveOk &= configSet(@"llm.auto_paste_processed_text",
+                          autoPasteProcessedText ? @"true" : @"false");
     }
 
     NSString *configPath = configFilePath();
@@ -7566,6 +7699,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
     [self hideRuntimeOverlayPreview];
     [self.window close];
+}
 }
 
 - (void)cancelSetup:(id)sender {

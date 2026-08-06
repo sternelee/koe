@@ -120,6 +120,8 @@ pub fn supported_providers() -> &'static [&'static str] {
         "whisper",
         #[cfg(feature = "local-mt")]
         "mt-local",
+        #[cfg(feature = "wetype-offline")]
+        "wetype",
     ]
 }
 

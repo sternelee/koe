@@ -5,6 +5,57 @@
     <description>Updates for the standard app (Apple Silicon).</description>
     <language>en</language>
     <item>
+      <title>Version 1.0.26</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.26</link>
+      <description><![CDATA[
+<h3>Improved</h3>
+<ul>
+<li><strong>WeType (On-Device) now streams live, low-latency results.</strong> The offline model previously showed its transcript only after you stopped talking. It now uses the model's native KV-cache streaming to emit interim results while you speak (a fast, low-latency pass), then finalizes a full-quality transcript when you stop — so the overlay pill updates live like the cloud providers.</li>
+</ul>
+      ]]></description>
+      <sparkle:version>27</sparkle:version>
+      <sparkle:shortVersionString>1.0.26</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 05 Aug 2026 14:44:37 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.26/Koe-macOS-arm64.zip"
+        sparkle:edSignature="DXrOo1EC17uHeHfwGHE0ux0I47iAMjMT8cF5ci6Gl1vOYpYsJP40X45OL0+jRjMg4KeLMRArFgSvU/A2p66wCA=="
+        length="12200114"
+        type="application/octet-stream" />
+    </item>
+    <item>
+      <title>Version 1.0.25</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.25</link>
+      <description><![CDATA[
+<h3>New</h3>
+<ul>
+<li><strong>WeType (On-Device) — 微信输入法离线语音.</strong> A fully on-device Chinese speech-to-text engine, reverse-engineered from WeChat Input Method's offline voice model. Everything runs locally — no network, no account, no server round-trip. About 180&nbsp;MB, faster than real-time on Apple Silicon. Pick <em>WeType (On-Device)</em> as your ASR provider and download the model once from Settings.</li>
+</ul>
+      ]]></description>
+      <sparkle:version>26</sparkle:version>
+      <sparkle:shortVersionString>1.0.25</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 05 Aug 2026 13:33:27 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.25/Koe-macOS-arm64.zip"
+        sparkle:edSignature="rHaddSp4lhpesFspe7R/4Z1l0l73L0vhsA5LT0ybjmd5NlbRvUS8OvXmbWlJJdoErZyUUnIYPC8qNZAnGEqYBg=="
+        length="12188845"
+        type="application/octet-stream" />
+    </item>
+    <item>
+      <title>Version 1.0.24</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.24</link>
+      <description><![CDATA[
+<p>See the <a href="https://github.com/missuo/koe/releases/tag/v1.0.24">full release notes</a>.</p>
+      ]]></description>
+      <sparkle:version>25</sparkle:version>
+      <sparkle:shortVersionString>1.0.24</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 05 Aug 2026 13:03:52 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.24/Koe-macOS-arm64.zip"
+        sparkle:edSignature="a9VIK7vJngUNKt6f0oARPE2V9b9T2x+SwzZZF7TkwYlws/3DSC9nwdMfVMkmLtMKi65pe1v0ubGcupedCVl0DQ=="
+        length="12187294"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Version 1.0.23</title>
       <link>https://github.com/missuo/koe/releases/tag/v1.0.23</link>
       <description><![CDATA[

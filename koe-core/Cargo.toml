@@ -15,14 +15,13 @@ name = "koe_core"
 crate-type = ["staticlib", "lib"]
 
 [features]
-default = ["mlx", "apple-speech", "sherpa-onnx", "local-mt", "kitten-onnx"]
+default = ["mlx", "apple-speech", "sherpa-onnx", "local-mt", "kitten-onnx", "wetype-offline"]
 mlx = ["koe-asr/mlx"]
 apple-speech = ["koe-asr/apple-speech"]
 sherpa-onnx = ["koe-asr/sherpa-onnx", "dep:sherpa-onnx"]
 local-mt = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
 kitten-onnx = ["dep:ndarray", "dep:ndarray-npy", "dep:ort", "dep:misaki-rs"]
-
-
+wetype-offline = ["koe-asr/wetype-offline"]
 
 [dependencies]
 async-trait.workspace = true
