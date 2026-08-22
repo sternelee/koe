@@ -43,6 +43,7 @@ pub mod apple_speech;
 pub mod config;
 pub mod doubao;
 pub mod doubaoime;
+pub mod endpoint;
 pub mod error;
 pub mod event;
 pub mod glm;
@@ -51,11 +52,11 @@ pub mod mimo;
 pub mod mlx;
 pub mod provider;
 pub mod qwen;
-#[cfg(feature = "wetype-offline")]
-pub mod wetype;
 #[cfg(feature = "sherpa-onnx")]
 pub mod sherpa_onnx;
 pub mod transcript;
+#[cfg(feature = "wetype-offline")]
+pub mod wetype;
 pub mod whisper;
 
 #[cfg(feature = "apple-speech")]
@@ -73,7 +74,7 @@ pub use provider::AsrProvider;
 pub use qwen::QwenAsrProvider;
 #[cfg(feature = "sherpa-onnx")]
 pub use sherpa_onnx::{SherpaOnnxConfig, SherpaOnnxProvider};
+pub use transcript::TranscriptAggregator;
 #[cfg(feature = "wetype-offline")]
 pub use wetype::{ensure_model, model_present, ModelAsset, WeTypeModelSpec, WeTypeOfflineProvider};
-pub use transcript::TranscriptAggregator;
 pub use whisper::{WhisperConfig, WhisperProvider};

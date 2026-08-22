@@ -2,6 +2,36 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.30 - 2026-08-08
+
+### Fixed
+
+- **The phantom key presses at quit are actually fixed this time — root cause found and proven.** Since the earliest releases, Koe's Input Monitoring permission check probed by creating a system event tap and then failed to destroy it properly, leaking one orphaned, enabled tap into WindowServer at every launch **and every time the status-bar menu was opened**. When Koe exited, WindowServer's cleanup of each orphaned tap emitted one synthetic modifier-key event indistinguishable from real hardware input — which other apps' hotkey detectors (dictation tools, screenshot utilities) treated as real presses. Live capture confirmed the mechanism exactly: an instance with four leaked taps emitted four phantom Fn events in the same millisecond at quit, and a build with the corrected teardown emitted none. The probe now invalidates its tap port, so no orphans are ever left behind. (The 1.0.29 change was aimed at the same symptom but at the wrong mechanism; its passive-listener architecture remains, as it is good hygiene regardless.)
+
+## 1.0.29 - 2026-08-08
+
+### Fixed
+
+- **Quitting Koe should no longer trigger phantom key presses in other apps.** After long dictation sessions, quitting (or restarting for an update) could make other apps see key presses nobody made — a phantom Fn tap, or even another app's shortcut like a screenshot hotkey firing. The 1.0.21 mitigation kept Koe's keyboard listener in a passive mode that cannot cause this, but two features added in 1.0.22 — accepting the raw transcript with Return during LLM correction, and the template number shortcuts — quietly switched it back to an intercepting mode around every correction and every template window. Those keys are now captured through the system's hotkey facility instead, so the keyboard listener stays passive for its entire lifetime when the trigger is a modifier key (Fn, Option, …). The Return accept and number shortcuts work exactly as before.
+
+## 1.0.28 - 2026-08-07
+
+### Changed
+
+- **The settings window has been redesigned.** Navigation moved from the top toolbar to a sidebar that groups the panes by what they configure (Recognition, Input, Text), and everything now sits on translucent cards floating over a soft diagonal gradient, in both light and dark. The window is also a fixed size instead of resizing itself to every pane, so the content no longer jumps when you switch sections — longer panes scroll — and Save/Cancel stay pinned at the bottom instead of scrolling away.
+- **LLM correction is now off by default for new installs.** A fresh install had it switched on with no API key configured, so every dictation ended in an error until you set up a profile. Turn it on in Settings → LLM once a profile has credentials. Existing installs are untouched and keep whatever the setting was.
+
+### Fixed
+
+- The ASR connection test result is visible again for the providers with a short settings form (DoubaoIME, Apple Speech, WeType). The result line was positioned for the tallest form, so for these it was drawn past the bottom of the window and a failed test appeared to do nothing.
+- The LLM profile list no longer clips the protocol subtitle under each profile name.
+
+## 1.0.27 - 2026-08-07
+
+### Added
+
+- **Start and stop voice input from the status bar menu.** The menu's status section now has a toggle item, so dictation still works when the global hotkey is unavailable (another app grabbed the trigger key, Accessibility permission not granted yet, …). A menu-started session behaves exactly like a hotkey-started one — same overlay, ASR, correction and paste — and either input can end it: the trigger key stops a session the menu started, and the menu stops one the trigger key started.
+
 ## 1.0.26 - 2026-08-05
 
 ### Improved

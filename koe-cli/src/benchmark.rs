@@ -318,7 +318,9 @@ pub fn render_markdown(reports: &[ProviderReport]) -> String {
     let mut out = String::new();
     out.push_str("# Koe ASR Benchmark\n\n");
     out.push_str("## Summary\n\n");
-    out.push_str("| Provider | Token error rate | Mean audio-end → final | Mean RTF | Files | Failures |\n");
+    out.push_str(
+        "| Provider | Token error rate | Mean audio-end → final | Mean RTF | Files | Failures |\n",
+    );
     out.push_str("|---|---|---|---|---|---|\n");
     for r in reports {
         out.push_str(&format!(

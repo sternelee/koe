@@ -4,6 +4,35 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
+// Everything one tap thread owns, handed to it at creation. The thread never
+// reads the monitor's shared tap properties: after a teardown that timed out,
+// those may already belong to a replacement thread, and a late worker reading
+// them could disable the new tap or signal the wrong semaphore. The monitor
+// publishes the live context under @synchronized(self) and only ever clears
+// state belonging to the context it still considers current.
+@class SPHotkeyMonitor;
+
+@interface SPTapContext : NSObject
+// The monitor this generation belongs to. Weak: the context outlives a
+// timed-out teardown, and a late callback must not resurrect the monitor.
+@property (nonatomic, weak) SPHotkeyMonitor *monitor;
+@property (nonatomic, strong) dispatch_semaphore_t ready;
+@property (nonatomic, strong) dispatch_semaphore_t shutdown;
+// Set by stopTapThread. A thread that is still starting up checks this
+// before installing its tap, so a stop that raced the launch cannot leave a
+// live tap behind.
+@property (atomic, assign) BOOL stopRequested;
+@property (atomic, assign) CFRunLoopRef runLoop;
+// The tap this thread created, published so a stop can disable it promptly.
+// Only ever released by the owning thread.
+@property (atomic, assign) CFMachPortRef tap;
+
+/// The monitor, but only while this context is still its live generation and
+/// no stop has been requested. nil otherwise, so callbacks from a superseded
+/// tap become no-ops.
+- (SPHotkeyMonitor *)currentMonitor;
+@end
+
 typedef NS_ENUM(NSInteger, SPHotkeyState) {
     SPHotkeyStateIdle,
     SPHotkeyStatePending,        // Trigger key pressed, waiting to determine tap vs hold
@@ -28,27 +57,36 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
 @property (nonatomic, strong) id globalMonitorRef;
 @property (nonatomic, strong) id localMonitorRef;
 @property (nonatomic, assign) BOOL running;
-// The CGEventTap lives on this dedicated thread. Its callback gates every
-// keyboard event in the session, so it must never run on the main thread:
-// when the main thread stalls (ASR finalization, paste, overlay work —
-// exactly when the user releases the trigger key), a main-thread tap
-// swallows in-flight modifier events. WindowServer then accumulates stale
-// modifier state for downstream consumers and emits corrective FlagsChanged
-// events (keycode 63/Fn) when the tap is destroyed at quit — other apps'
-// Fn-hotkey detectors see those as real presses (issues #57/#65).
+// The CGEventTap lives on this dedicated thread. A consuming tap's callback
+// gates every keyboard event in the session, so it must never share the
+// main thread: when the main thread stalls (ASR finalization, paste,
+// overlay work — exactly when the user releases the trigger key), a
+// main-thread tap would delay or swallow in-flight events for the whole
+// system. A dedicated thread also keeps trigger latency independent of
+// main-thread load for listen-only taps.
+// (History: the phantom-keys-at-quit bug, issues #57/#65, was long blamed
+// on tap behavior here; the actual culprit was SPPermissionManager leaking
+// its permission-probe taps — see isInputMonitoringGranted.)
 @property (nonatomic, strong) NSThread *tapThread;
-@property (nonatomic, assign) CFRunLoopRef tapRunLoop;
-@property (nonatomic, strong) dispatch_semaphore_t tapShutdownSemaphore;
-// Whether the current tap thread was started asking for an ACTIVE
-// (consuming) tap. An active tap is only requested while something actually
-// needs to swallow events: a non-modifier trigger key, or the template
-// selector's number shortcuts. The rest of the time a LISTEN-ONLY tap is
-// used: quitting Koe after long real-world use with a long-lived ACTIVE tap
-// makes WindowServer emit phantom Fn FlagsChanged events at tap teardown
-// (issues #57/#65) — a mechanism we could reproduce with Koe but never with
-// short-lived or listen-only taps.
-@property (nonatomic, assign) BOOL tapWantsActive;
-@property (nonatomic, assign, readwrite) BOOL canConsumeGlobalKeyEvents;
+// The context of the tap thread the monitor currently considers live. Read
+// and written under @synchronized(self); a worker compares its own context
+// against this before touching any shared state.
+@property (nonatomic, strong) SPTapContext *tapContext;
+// Whether the tap can consume events (an ACTIVE/filtering tap was created).
+// Internal only — callers consult canConsumeHandlerKeyEvents, which also
+// covers the Carbon capture used for modifier-only triggers.
+@property (nonatomic, assign) BOOL canConsumeGlobalKeyEvents;
+// Carbon RegisterEventHotKey capture for the template number shortcuts and
+// the raw-ASR Return accept, used whenever the trigger is modifier-only.
+// Rationale: a consuming CGEventTap gates every keystroke in the session,
+// so a busy Koe adds latency to all typing system-wide; Carbon hotkeys
+// swallow exactly the wanted keys inside WindowServer with no tap at all,
+// letting the tap stay listen-only for its entire life on modifier-only
+// triggers. Non-modifier triggers still need the consuming tap.
+// `carbonCaptureActive` is atomic: read from the tap thread.
+@property (assign) BOOL carbonCaptureActive;
+@property (nonatomic, assign) EventHandlerRef carbonHotKeyHandler;
+@property (nonatomic, strong) NSMutableArray<NSValue *> *carbonHotKeyRefs;
 // Key codes whose keyUp must also be swallowed after a handled keyDown
 // (template number shortcuts and the raw-ASR-accept Return key).
 @property (nonatomic, strong) NSMutableSet<NSNumber *> *suppressedKeyCodes;
@@ -68,11 +106,14 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
 - (BOOL)isSuppressedHotkeyKeyCode:(NSNumber *)keyCodeNumber;
 - (void)addSuppressedHotkeyKeyCode:(NSNumber *)keyCodeNumber;
 - (BOOL)removeSuppressedHotkeyKeyCodeIfPresent:(NSNumber *)keyCodeNumber;
-- (void)tapThreadMain:(dispatch_semaphore_t)readySemaphore;
+- (void)tapThreadMain:(SPTapContext *)context;
 - (BOOL)needsEventConsumption;
 - (void)startTapThread;
 - (void)stopTapThread;
-- (void)updateTapModeIfNeeded;
+- (void)updateCarbonKeyCaptureIfNeeded;
+- (void)unregisterCarbonHotKeys;
+- (void)handleCarbonHotKeyID:(UInt32)identifier;
+- (BOOL)isCarbonCapturedKeyCode:(NSInteger)keyCode;
 - (NSUInteger)currentModifierFlags;
 - (void)cancelPendingModifierRelease;
 - (void)scheduleModifierRelease;
@@ -80,6 +121,22 @@ typedef NS_ENUM(NSInteger, SPHotkeyState) {
 - (void)cancelDoubleTapCandidateForInterveningInput;
 - (void)handleTriggerDown;
 - (void)handleTriggerUp;
+
+@end
+
+@implementation SPTapContext
+
+- (SPHotkeyMonitor *)currentMonitor {
+    if (self.stopRequested) return nil;
+    SPHotkeyMonitor *monitor = self.monitor;
+    if (!monitor) return nil;
+    @synchronized (monitor) {
+        // `tapContext` is the monitor's live generation; anything else is a
+        // tap whose teardown has already been ordered.
+        if (monitor.tapContext != self) return nil;
+    }
+    return monitor;
+}
 
 @end
 
@@ -100,6 +157,33 @@ static NSInteger numberForKeyCode(NSInteger keyCode) {
 
 static BOOL isReturnKeyCode(NSInteger keyCode) {
     return keyCode == 36 || keyCode == 76; // Return or keypad Enter
+}
+
+
+// ANSI key codes for digits 1-9, indexed by the digit itself (index 0 unused).
+static const UInt32 SPDigitKeyCodeForNumber[10] = {0, 18, 19, 20, 21, 23, 22, 26, 28, 25};
+
+static const OSType SPCarbonHotKeySignature = 'KOEH';
+enum {
+    // IDs 1-9 are the template digits; Return/Enter get their own IDs.
+    SPCarbonHotKeyIDReturn = 100,
+    SPCarbonHotKeyIDKeypadEnter = 101,
+};
+
+// Carbon delivers hotkey events through the main event dispatcher, so this
+// runs on the main thread — no tap, no gating of the session key stream.
+static OSStatus SPCarbonHotKeyPressed(EventHandlerCallRef nextHandler,
+                                      EventRef event,
+                                      void *userInfo) {
+    SPHotkeyMonitor *monitor = (__bridge SPHotkeyMonitor *)userInfo;
+    EventHotKeyID hotKeyID = { 0, 0 };
+    OSStatus err = GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID,
+                                     NULL, sizeof(hotKeyID), NULL, &hotKeyID);
+    if (err != noErr || hotKeyID.signature != SPCarbonHotKeySignature) {
+        return eventNotHandledErr;
+    }
+    [monitor handleCarbonHotKeyID:hotKeyID.id];
+    return noErr;
 }
 
 // Run a block on the main thread in kCFRunLoopCommonModes. Unlike
@@ -130,7 +214,13 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
                                        CGEventType type,
                                        CGEventRef event,
                                        void *userInfo) {
-    SPHotkeyMonitor *monitor = (__bridge SPHotkeyMonitor *)userInfo;
+    // userInfo is the generation's context, not the monitor: after a
+    // teardown that timed out, this callback can still fire for a tap the
+    // monitor no longer considers live, and acting on it would drive the
+    // state machine from a stale generation.
+    SPTapContext *context = (__bridge SPTapContext *)userInfo;
+    SPHotkeyMonitor *monitor = [context currentMonitor];
+    if (!monitor) return event;
 
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
         // Only re-enable the tap if we are still running.  During teardown
@@ -167,6 +257,15 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
             SPPerformOnMainRunLoop(^{
                 [monitor cancelDoubleTapCandidateForInterveningInput];
             });
+        }
+
+        // Keys owned by the Carbon hotkey capture (template digits, raw-ASR
+        // Return) are swallowed inside WindowServer AFTER taps observe them
+        // and are delivered to Koe as kEventHotKeyPressed. The listen-only
+        // tap must leave them alone: neither invoke the handlers (that would
+        // double-fire) nor treat them as overlay-dismissing input.
+        if ([monitor isCarbonCapturedKeyCode:keyCode]) {
+            return event;
         }
 
         // Forward number keys 1-9 if handler is set.
@@ -254,6 +353,8 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         _canConsumeGlobalKeyEvents = NO;
         _suppressedKeyCodes = [NSMutableSet set];
         _suppressedHotkeyKeyCodes = [NSMutableSet set];
+        _numberKeyCaptureLimit = 9;
+        _carbonHotKeyRefs = [NSMutableArray array];
     }
     return self;
 }
@@ -287,34 +388,42 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     // Also try CGEventTap as additional source, hosted on a dedicated thread
     // (see tapThread property for why it must never share the main thread).
     [self startTapThread];
+
+    // Handlers may already be installed (e.g. monitor restart after a config
+    // reload mid-session); rebuild the Carbon capture to match them.
+    [self updateCarbonKeyCaptureIfNeeded];
 }
 
 - (BOOL)needsEventConsumption {
-    // Modifier-only triggers (Fn, Option, …) never consume the trigger
-    // events; only the template selector's number shortcuts and the raw-ASR
-    // fallback's Enter accept need swallowing.
+    // Modifier-only triggers (Fn, Option, …) NEVER consume via the tap: the
+    // template number shortcuts and the raw-ASR Enter accept are swallowed
+    // with Carbon RegisterEventHotKey instead (see carbonCaptureActive), so
+    // the tap stays listen-only for its entire life — created once at start,
+    // destroyed once at stop, never upgraded or cycled mid-run.
     // Non-modifier triggers consume their keyDown/keyUp so the trigger key
     // does not leak into the focused app.
-    return ![self isModifierOnlyMatchKind:self.targetMatchKind] ||
-           self.numberKeyHandler != nil ||
-           self.enterKeyHandler != nil;
+    return ![self isModifierOnlyMatchKind:self.targetMatchKind];
 }
 
 - (void)startTapThread {
     if (self.tapThread) return;
-    self.tapWantsActive = [self needsEventConsumption];
-    dispatch_semaphore_t ready = dispatch_semaphore_create(0);
-    self.tapShutdownSemaphore = dispatch_semaphore_create(0);
+    SPTapContext *context = [[SPTapContext alloc] init];
+    context.monitor = self;
+    context.ready = dispatch_semaphore_create(0);
+    context.shutdown = dispatch_semaphore_create(0);
+    @synchronized (self) {
+        self.tapContext = context;
+    }
     NSThread *thread = [[NSThread alloc] initWithTarget:self
                                                selector:@selector(tapThreadMain:)
-                                                 object:ready];
+                                                 object:context];
     thread.name = @"im.koe.hotkey-tap";
     thread.qualityOfService = NSQualityOfServiceUserInteractive;
     self.tapThread = thread;
     [thread start];
     // Wait for the tap to be installed so canConsumeGlobalKeyEvents is
     // accurate for callers that read it right after this returns.
-    dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
+    dispatch_semaphore_wait(context.ready, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
 
     if (!self.eventTap) {
         NSLog(@"[Koe] CGEventTap unavailable (ok, NSEvent monitors active)");
@@ -323,39 +432,164 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 
 - (void)stopTapThread {
     if (!self.tapThread) return;
-    // Disable first so the tap stops gating the session event stream
-    // immediately, then stop the tap thread's run loop and wait for it to
-    // finish tearing the tap down on its own thread.
-    if (self.eventTap) {
-        CGEventTapEnable(self.eventTap, false);
+    SPTapContext *context;
+    @synchronized (self) {
+        context = self.tapContext;
+        // Unpublish first: from here on the worker owns its teardown alone
+        // and can no longer touch the monitor's shared tap state, so a
+        // replacement thread started right after this is safe from it.
+        self.tapContext = nil;
+        self.eventTap = NULL;
+        self.runLoopSource = NULL;
     }
-    CFRunLoopRef tapRunLoop = self.tapRunLoop;
+    // Tell a thread that has not finished starting up not to install a tap,
+    // and disable one that already exists so it stops gating the session
+    // event stream immediately.
+    context.stopRequested = YES;
+    CFMachPortRef tap = context.tap;
+    if (tap) {
+        CGEventTapEnable(tap, false);
+    }
+    CFRunLoopRef tapRunLoop = context.runLoop;
     if (tapRunLoop) {
         CFRunLoopStop(tapRunLoop);
     }
-    if (self.tapShutdownSemaphore) {
-        dispatch_semaphore_wait(self.tapShutdownSemaphore,
-                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
+    if (context.shutdown &&
+        dispatch_semaphore_wait(context.shutdown,
+                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC))) != 0) {
+        // The worker did not exit in time. Everything it still has to tear
+        // down belongs to its own context, so a replacement thread cannot be
+        // clobbered by its late cleanup.
+        NSLog(@"[Koe] Tap thread teardown timed out; late cleanup is context-owned");
     }
     self.tapThread = nil;
-    self.tapShutdownSemaphore = nil;
     self.canConsumeGlobalKeyEvents = NO;
 }
 
-- (void)updateTapModeIfNeeded {
-    if (!self.running) return;
-    if (self.tapWantsActive == [self needsEventConsumption]) return;
-    [self stopTapThread];
-    [self startTapThread];
+#pragma mark - Carbon hotkey capture
+
+- (void)installCarbonHotKeyHandlerIfNeeded {
+    if (self.carbonHotKeyHandler) return;
+    EventTypeSpec spec = { kEventClassKeyboard, kEventHotKeyPressed };
+    EventHandlerRef handler = NULL;
+    OSStatus err = InstallEventHandler(GetEventDispatcherTarget(),
+                                       SPCarbonHotKeyPressed,
+                                       1, &spec,
+                                       (__bridge void *)self,
+                                       &handler);
+    if (err == noErr) {
+        self.carbonHotKeyHandler = handler;
+    } else {
+        NSLog(@"[Koe] InstallEventHandler for hotkey capture failed (err=%d)", (int)err);
+    }
 }
 
-- (void)tapThreadMain:(dispatch_semaphore_t)readySemaphore {
+- (void)registerCarbonHotKeyForKeyCode:(UInt32)keyCode identifier:(UInt32)identifier {
+    EventHotKeyID hotKeyID = { SPCarbonHotKeySignature, identifier };
+    EventHotKeyRef ref = NULL;
+    OSStatus err = RegisterEventHotKey(keyCode, 0, hotKeyID,
+                                       GetEventDispatcherTarget(), 0, &ref);
+    if (err == noErr && ref) {
+        [self.carbonHotKeyRefs addObject:[NSValue valueWithPointer:ref]];
+    } else {
+        NSLog(@"[Koe] RegisterEventHotKey failed for keyCode=%u (err=%d)", keyCode, (int)err);
+    }
+}
+
+- (void)unregisterCarbonHotKeys {
+    for (NSValue *value in self.carbonHotKeyRefs) {
+        EventHotKeyRef ref = (EventHotKeyRef)value.pointerValue;
+        if (ref) UnregisterEventHotKey(ref);
+    }
+    [self.carbonHotKeyRefs removeAllObjects];
+    self.carbonCaptureActive = NO;
+}
+
+// (Re)build the Carbon hotkey registrations from the current handler state.
+// Main thread only: Carbon registration and the handler setters both live
+// there, so carbonCaptureActive is accurate as soon as a setter returns.
+- (void)updateCarbonKeyCaptureIfNeeded {
+    if (![NSThread isMainThread]) {
+        SPPerformOnMainRunLoop(^{ [self updateCarbonKeyCaptureIfNeeded]; });
+        return;
+    }
+    [self unregisterCarbonHotKeys];
+    if (!self.running) return;
+    if (![self isModifierOnlyMatchKind:self.targetMatchKind]) return;
+
+    BOOL wantsNumbers = (self.numberKeyHandler != nil);
+    BOOL wantsEnter = (self.enterKeyHandler != nil);
+    if (!wantsNumbers && !wantsEnter) return;
+
+    [self installCarbonHotKeyHandlerIfNeeded];
+    if (!self.carbonHotKeyHandler) return;
+
+    if (wantsNumbers) {
+        NSInteger limit = MIN(MAX(self.numberKeyCaptureLimit, (NSInteger)0), (NSInteger)9);
+        for (NSInteger number = 1; number <= limit; number++) {
+            [self registerCarbonHotKeyForKeyCode:SPDigitKeyCodeForNumber[number]
+                                      identifier:(UInt32)number];
+        }
+    }
+    if (wantsEnter) {
+        [self registerCarbonHotKeyForKeyCode:36 identifier:SPCarbonHotKeyIDReturn];
+        [self registerCarbonHotKeyForKeyCode:76 identifier:SPCarbonHotKeyIDKeypadEnter];
+    }
+    self.carbonCaptureActive = (self.carbonHotKeyRefs.count > 0);
+    NSLog(@"[Koe] Carbon key capture %@ (numbers=%d enter=%d registered=%lu)",
+          self.carbonCaptureActive ? @"active" : @"unavailable",
+          wantsNumbers, wantsEnter, (unsigned long)self.carbonHotKeyRefs.count);
+}
+
+- (BOOL)isCarbonCapturedKeyCode:(NSInteger)keyCode {
+    if (!self.carbonCaptureActive) return NO;
+    if (self.numberKeyHandler) {
+        NSInteger number = numberForKeyCode(keyCode);
+        NSInteger limit = MIN(MAX(self.numberKeyCaptureLimit, (NSInteger)0), (NSInteger)9);
+        if (number >= 1 && number <= limit) return YES;
+    }
+    if (self.enterKeyHandler && isReturnKeyCode(keyCode)) return YES;
+    return NO;
+}
+
+- (void)handleCarbonHotKeyID:(UInt32)identifier {
+    if (!self.running || self.suspended) return;
+    if (identifier >= 1 && identifier <= 9) {
+        BOOL (^numberHandler)(NSInteger) = self.numberKeyHandler;
+        if (numberHandler && numberHandler((NSInteger)identifier)) {
+            NSLog(@"[Koe] Carbon capture consumed digit %u", identifier);
+        }
+        return;
+    }
+    if (identifier == SPCarbonHotKeyIDReturn || identifier == SPCarbonHotKeyIDKeypadEnter) {
+        BOOL (^enterHandler)(void) = self.enterKeyHandler;
+        if (enterHandler) {
+            enterHandler();
+        }
+    }
+}
+
+- (BOOL)canConsumeHandlerKeyEvents {
+    if ([self isModifierOnlyMatchKind:self.targetMatchKind]) {
+        return self.carbonCaptureActive;
+    }
+    return self.canConsumeGlobalKeyEvents;
+}
+
+- (void)tapThreadMain:(SPTapContext *)context {
     @autoreleasepool {
+        // Everything this thread owns lives in `context` and in locals. The
+        // monitor's shared properties are published for the callback and for
+        // a prompt disable, but are never read back here: after a timed-out
+        // stop they may already belong to a replacement thread, and touching
+        // them would let this worker disable or release the NEW tap.
+        CFMachPortRef ownTap = NULL;
+        CFRunLoopSourceRef ownSource = NULL;
         // When consumption is needed, prefer active taps that can swallow
         // handled events so they do not leak into the user's focused app;
         // some systems reject one tap location but allow another, so try
         // both before degrading to listen-only. When nothing needs to be
-        // consumed, go straight to listen-only (see tapWantsActive).
+        // consumed, go straight to listen-only (see needsEventConsumption).
         CGEventMask mask = CGEventMaskBit(kCGEventFlagsChanged)
                          | CGEventMaskBit(kCGEventKeyDown)
                          | CGEventMaskBit(kCGEventKeyUp);
@@ -372,55 +606,89 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
             { kCGSessionEventTap, kCGEventTapOptionListenOnly, @"[Koe] CGEventTap listening on session stream (no event consumption needed)" },
             { kCGHIDEventTap, kCGEventTapOptionListenOnly, @"[Koe] CGEventTap listening on HID stream (no event consumption needed)" },
         };
-        BOOL wantActive = self.tapWantsActive;
+        BOOL wantActive = [self needsEventConsumption];
         __typeof__(activeAttempts[0]) *attempts = wantActive ? activeAttempts : listenAttempts;
         NSUInteger attemptCount = wantActive
             ? sizeof(activeAttempts) / sizeof(activeAttempts[0])
             : sizeof(listenAttempts) / sizeof(listenAttempts[0]);
 
-        self.canConsumeGlobalKeyEvents = NO;
+        context.runLoop = CFRunLoopGetCurrent();
+        BOOL consumes = NO;
         for (NSUInteger i = 0; i < attemptCount; i++) {
-            self.eventTap = CGEventTapCreate(attempts[i].location,
-                                             kCGHeadInsertEventTap,
-                                             attempts[i].options,
-                                             mask,
-                                             hotkeyEventCallback,
-                                             (__bridge void *)self);
-            if (!self.eventTap) {
+            // A stop that raced this launch must not leave a live tap behind.
+            if (context.stopRequested) break;
+
+            ownTap = CGEventTapCreate(attempts[i].location,
+                                      kCGHeadInsertEventTap,
+                                      attempts[i].options,
+                                      mask,
+                                      hotkeyEventCallback,
+                                      (__bridge void *)context);
+            if (!ownTap) {
                 continue;
             }
 
-            self.runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, self.eventTap, 0);
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), self.runLoopSource, kCFRunLoopCommonModes);
-            CGEventTapEnable(self.eventTap, true);
-            self.canConsumeGlobalKeyEvents = (attempts[i].options == kCGEventTapOptionDefault);
+            ownSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, ownTap, 0);
+            if (!ownSource) {
+                NSLog(@"[Koe] CFMachPortCreateRunLoopSource failed; trying next tap location");
+                CFRelease(ownTap);
+                ownTap = NULL;
+                continue;
+            }
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), ownSource, kCFRunLoopCommonModes);
+            CGEventTapEnable(ownTap, true);
+            context.tap = ownTap;
+            consumes = (attempts[i].options == kCGEventTapOptionDefault);
             NSLog(@"%@", attempts[i].logMessage);
             break;
         }
 
-        self.tapRunLoop = CFRunLoopGetCurrent();
-        dispatch_semaphore_signal(readySemaphore);
+        // Publish for the callback and for a prompt disable, but only while
+        // this thread is still the live one — and re-check stopRequested
+        // under the lock so a stop that ran between the loop and here does
+        // not leave a live tap published.
+        BOOL abandoned = NO;
+        @synchronized (self) {
+            if (self.tapContext == context && !context.stopRequested) {
+                self.eventTap = ownTap;
+                self.runLoopSource = ownSource;
+                self.canConsumeGlobalKeyEvents = consumes;
+            } else {
+                abandoned = YES;
+            }
+        }
+        dispatch_semaphore_signal(context.ready);
 
-        if (self.runLoopSource) {
+        if (ownSource && !abandoned) {
             CFRunLoopRun(); // exits via CFRunLoopStop from -stop
         }
 
         // Tear the tap down on the thread that owns it, so the callback can
-        // never race the release.
-        if (self.eventTap) {
-            CGEventTapEnable(self.eventTap, false);
+        // never race the release. The shared properties are unpublished under
+        // the lock, and only while this thread is still the live one — after
+        // a timed-out stop they belong to a replacement thread.
+        @synchronized (self) {
+            if (self.tapContext == context) {
+                self.eventTap = NULL;
+                self.runLoopSource = NULL;
+                self.canConsumeGlobalKeyEvents = NO;
+            }
         }
-        if (self.runLoopSource) {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), self.runLoopSource, kCFRunLoopCommonModes);
-            CFRelease(self.runLoopSource);
-            self.runLoopSource = NULL;
+        if (ownTap) {
+            CGEventTapEnable(ownTap, false);
         }
-        if (self.eventTap) {
-            CFRelease(self.eventTap);
-            self.eventTap = NULL;
+        if (ownSource) {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), ownSource, kCFRunLoopCommonModes);
+            CFRelease(ownSource);
         }
-        self.tapRunLoop = NULL;
-        dispatch_semaphore_signal(self.tapShutdownSemaphore);
+        if (ownTap) {
+            context.tap = NULL;
+            CFRelease(ownTap);
+        }
+        context.runLoop = NULL;
+        if (context.shutdown) {
+            dispatch_semaphore_signal(context.shutdown);
+        }
     }
 }
 
@@ -446,7 +714,13 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         [self cancelDoubleTapTimer];
         [self cancelPendingModifierRelease];
         self.triggerDown = NO;
-        self.state = SPHotkeyStateIdle;
+        // A confirmed toggle recording is hands-free: no key is held, so
+        // nothing about it can be stale. It must survive the menu round-trip,
+        // otherwise the next trigger press starts a second session on top of
+        // the running one instead of stopping it.
+        if (self.state != SPHotkeyStateRecordingToggle) {
+            self.state = SPHotkeyStateIdle;
+        }
     }
 }
 
@@ -488,15 +762,18 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         _numberKeyHandler = [handler copy];
         hasHandler = (_numberKeyHandler != nil);
     }
-    // Number-key capture is the only reason a modifier-only trigger needs an
-    // ACTIVE tap. Upgrade while the template selector is visible; downgrade
-    // back to listen-only as soon as it goes away.
+    // For modifier-only triggers the digits are captured with Carbon
+    // hotkeys while the template selector is visible — the tap itself
+    // stays listen-only and is never cycled.
     if (hadHandler != hasHandler) {
-        [self updateTapModeIfNeeded];
+        [self updateCarbonKeyCaptureIfNeeded];
     }
 }
 
 - (BOOL)handleNumberKeyWithKeyCode:(NSInteger)keyCode {
+    // While the Carbon capture owns the digits, the tap/NSEvent copies of the
+    // same keystrokes must not invoke the handler a second time.
+    if (self.carbonCaptureActive) return NO;
     if (!self.numberKeyHandler) return NO;
 
     NSInteger number = numberForKeyCode(keyCode);
@@ -506,7 +783,7 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     // thread, and the tap callback needs the consume decision synchronously.
     // Wait with a short timeout: if the main thread is too busy to answer,
     // let the key pass through rather than stall the session event stream
-    // (a stalled tap swallows events — the root cause of issues #57/#65).
+    // (a stalled consuming tap delays every keystroke in the session).
     BOOL (^handler)(NSInteger) = self.numberKeyHandler;
     __block BOOL handled = NO;
     if ([NSThread isMainThread]) {
@@ -548,16 +825,17 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         _enterKeyHandler = [handler copy];
         hasHandler = (_enterKeyHandler != nil);
     }
-    // Like number-key capture, the Enter accept needs an ACTIVE tap on
-    // modifier-only triggers. Upgrade while the raw-ASR fallback is armed;
-    // downgrade back to listen-only as soon as it goes away.
+    // Like number-key capture, the Enter accept is a Carbon hotkey while the
+    // raw-ASR fallback is armed — never a tap upgrade.
     if (hadHandler != hasHandler) {
-        [self updateTapModeIfNeeded];
+        [self updateCarbonKeyCaptureIfNeeded];
     }
 }
 
 - (BOOL)handleEnterKeyWithKeyCode:(NSInteger)keyCode {
     if (!isReturnKeyCode(keyCode)) return NO;
+    // See handleNumberKeyWithKeyCode: Carbon owns the key while active.
+    if (self.carbonCaptureActive) return NO;
     if (!self.enterKeyHandler) return NO;
 
     // Same main-thread contract and timeout rationale as
@@ -726,6 +1004,7 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
         [NSEvent removeMonitor:self.localMonitorRef];
         self.localMonitorRef = nil;
     }
+    [self unregisterCarbonHotKeys];
     [self stopTapThread];
 
     BOOL hadPendingTrigger = [self hasUnconfirmedPreCapture];
@@ -1008,6 +1287,22 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
     if (hadPendingTrigger) {
         [self.delegate hotkeyMonitorDidCancelTrigger];
     }
+}
+
+- (void)dealloc {
+    [self unregisterCarbonHotKeys];
+    if (_carbonHotKeyHandler) {
+        RemoveEventHandler(_carbonHotKeyHandler);
+        _carbonHotKeyHandler = NULL;
+    }
+}
+
+- (void)markExternalToggleRecording {
+    [self cancelHoldTimer];
+    [self cancelDoubleTapTimer];
+    [self cancelPendingModifierRelease];
+    self.triggerDown = NO;
+    self.state = SPHotkeyStateRecordingToggle;
 }
 
 @end

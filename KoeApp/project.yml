@@ -31,6 +31,9 @@ targetTemplates:
         excludes:
           - "*.entitlements"
           - "**/*Tests.m"
+          - "Settings/SPSettingsSidebar.*"
+          - "Settings/SPSettingsViews.*"
+          - "Settings/SPTheme.*"
     settings:
       base:
         INFOPLIST_FILE: Koe/Info.plist

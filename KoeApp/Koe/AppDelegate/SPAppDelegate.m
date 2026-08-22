@@ -56,6 +56,16 @@
 @property (nonatomic, assign) uint64_t translationAudioFrameCount;
 @property (nonatomic, assign) uint64_t translationAudioByteCount;
 @property (nonatomic, assign) NSTimeInterval translationAudioLastLogAt;
+// PID of the app that was frontmost when the session began — the app the
+// user was dictating into. Synthetic pastes are only posted while that app
+// is still frontmost; otherwise the text stays on the clipboard (focus can
+// move during ASR/LLM processing, and pasting into whichever app happens to
+// be focused leaks the dictation).
+@property (nonatomic, assign) pid_t pasteTargetPid;
+// YES when the session deliberately has no destination app yet: it began
+// while Koe itself was frontmost (a status-bar-started dictation). Distinct
+// from "the frontmost app could not be determined", which fails closed.
+@property (nonatomic, assign) BOOL pasteTargetUnbound;
 @end
 
 static float SPTranslationPCM16PeakLevel(const void *buffer, uint32_t length) {
@@ -103,6 +113,43 @@ static BOOL configFlagEnabled(const char *keyPath) {
            [value isEqualToString:@"on"];
 }
 
+// YES when `targetPid` is still the frontmost app, i.e. the injection would
+// land in the app this dictation was started from.
+//
+// Fails CLOSED for a bound session: a frontmost app that cannot be
+// identified, or a different one, blocks injection and the text stays on the
+// clipboard. Injecting into the wrong app is the failure mode worth avoiding
+// (dictation leaking elsewhere, or an auto-Return executing text in a
+// terminal).
+//
+// `unbound` sessions began with Koe itself frontmost (status-bar dictation),
+// so they have no destination to compare against and inject as they always
+// have — blocking those would break that flow entirely.
+- (BOOL)frontmostAppMatchesTargetPid:(pid_t)targetPid unbound:(BOOL)unbound {
+    if (unbound) return YES;
+    NSRunningApplication *frontApp = [NSWorkspace sharedWorkspace].frontmostApplication;
+    if (!frontApp) return NO;
+    pid_t front = frontApp.processIdentifier;
+    return front != 0 && front == targetPid;
+}
+
+// A guard bound to ONE session's identity: the destination it captured and
+// the session token it belongs to. Injections scheduled by an older session
+// carry that session's guard, so a newer session (which overwrites the
+// delegate's target properties) can neither authorize nor be hijacked by
+// them.
+- (SPPasteInjectionGuard)injectionGuardForSessionToken:(uint64_t)token {
+    __weak typeof(self) weakSelf = self;
+    pid_t targetPid = self.pasteTargetPid;
+    BOOL unbound = self.pasteTargetUnbound;
+    return ^BOOL{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.quitting) return NO;
+        if (token != strongSelf.rustBridge.currentSessionToken) return NO;
+        return [strongSelf frontmostAppMatchesTargetPid:targetPid unbound:unbound];
+    };
+}
+
 - (BOOL)prepareAudioQueueForResolvedDevice {
     if (!self.audioPreparationEnabled) return NO;
     [self.audioCaptureManager setInputDeviceID:[self.audioDeviceManager resolvedDeviceID]];
@@ -121,6 +168,16 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     }
     sp_core_free_string(rawValue);
     return enabled;
+}
+
+// Phantom-key lab switches (issues #57/#65): env flags that disable whole
+// subsystems so the arming source can be bisected with real-usage rounds.
+// KOE_LAB_NO_HOTKEY=1  -> no SPHotkeyMonitor at all (no tap/monitors/Carbon)
+// KOE_LAB_NO_AUDIO=1   -> no prepared AudioQueue (mic device not held)
+// KOE_LAB_NO_SPARKLE=1 -> no Sparkle updater
+static BOOL SPLabFlag(const char *name) {
+    const char *value = getenv(name);
+    return value && value[0] == '1';
 }
 
 - (BOOL)shouldShowPromptTemplateButtons {
@@ -161,7 +218,7 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     NSLog(@"[Koe] Prompt templates visible: %lu / %lu", (unsigned long)visibleTemplates.count, (unsigned long)templates.count);
     if (visibleTemplates.count > 0 && self.lastAsrText.length > 0) {
         [self.overlayPanel showTemplateButtons:visibleTemplates lingerDuration:lingerDuration];
-        [self startNumberKeyMonitoring];
+        [self startNumberKeyMonitoringWithVisibleCount:(NSInteger)visibleTemplates.count];
     } else {
         [self.overlayPanel lingerAndDismissWithDuration:lingerDuration];
     }
@@ -271,9 +328,13 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     self.overlayPanel.delegate = self;
 
     // Initialize Sparkle updater (feed URL and public key come from Info.plist)
-    self.updaterController = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
-                                                                           updaterDelegate:nil
-                                                                        userDriverDelegate:nil];
+    if (SPLabFlag("KOE_LAB_NO_SPARKLE")) {
+        NSLog(@"[Koe] LAB: Sparkle updater disabled");
+    } else {
+        self.updaterController = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
+                                                                               updaterDelegate:nil
+                                                                            userDriverDelegate:nil];
+    }
 
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
@@ -319,24 +380,33 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
 
         // Build the queue after TCC confirms microphone access, but do not
         // start hardware yet. The trigger-down path starts this prepared queue.
-        self.audioPreparationEnabled = YES;
-        if (![self prepareAudioQueueForResolvedDevice]) {
-            NSLog(@"[Koe] Initial audio queue preparation failed; trigger-down will retry");
+        if (SPLabFlag("KOE_LAB_NO_AUDIO")) {
+            NSLog(@"[Koe] LAB: audio queue preparation disabled");
+        } else {
+            self.audioPreparationEnabled = YES;
+            if (![self prepareAudioQueueForResolvedDevice]) {
+                NSLog(@"[Koe] Initial audio queue preparation failed; trigger-down will retry");
+            }
         }
 
         // Start hotkey monitor (let it try CGEventTap directly — the probe may give false negatives)
-        self.hotkeyMonitor = [[SPHotkeyMonitor alloc] initWithDelegate:self];
+        if (SPLabFlag("KOE_LAB_NO_HOTKEY")) {
+            NSLog(@"[Koe] LAB: hotkey stack disabled (no tap, no NSEvent monitors, no Carbon)");
+        } else {
+            self.hotkeyMonitor = [[SPHotkeyMonitor alloc] initWithDelegate:self];
 
-        // Apply hotkey configuration from config.yaml
-        struct SPHotkeyConfig hotkeyConfig = sp_core_get_hotkey_config();
-        [self applyHotkeyConfig:hotkeyConfig restartMonitorIfNeeded:NO];
+            // Apply hotkey configuration from config.yaml
+            struct SPHotkeyConfig hotkeyConfig = sp_core_get_hotkey_config();
+            [self applyHotkeyConfig:hotkeyConfig restartMonitorIfNeeded:NO];
 
-        [self.hotkeyMonitor start];
-        NSLog(@"[Koe] Ready — hotkey monitor active");
+            [self.hotkeyMonitor start];
+            NSLog(@"[Koe] Ready — hotkey monitor active");
+        }
 
         // Start watching config file for hotkey changes
         [self startConfigWatcher];
     }];
+
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -481,6 +551,15 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     // value governing this session; edits apply from the next session.
     [self.clipboardRestorePolicy
         captureSessionRestoreDelayMs:sp_core_get_clipboard_config().restore_delay_ms];
+    // Koe itself is never a paste target: a session begun while Koe is
+    // frontmost (status-bar menu) has no destination yet, so mark it
+    // explicitly unbound rather than recording a PID that can never match.
+    // A frontmost app that cannot be identified at all is NOT unbound — it
+    // stays a bound session with an unknown target, which fails closed.
+    NSRunningApplication *frontApp = [NSWorkspace sharedWorkspace].frontmostApplication;
+    pid_t front = frontApp ? frontApp.processIdentifier : 0;
+    self.pasteTargetUnbound = (frontApp != nil && front == getpid());
+    self.pasteTargetPid = self.pasteTargetUnbound ? 0 : front;
     self.loggedFirstRecognitionForActivation = NO;
     self.recognitionMetricActivationSequence = self.audioCaptureManager.activationSequence;
     self.recognitionMetricSessionToken = self.rustBridge.currentSessionToken;
@@ -675,9 +754,12 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     if ([self finishInstantPasteWithFinalText:text]) return;
 
     token = self.rustBridge.currentSessionToken;
+    SPPasteInjectionGuard guard = [self injectionGuardForSessionToken:token];
     BOOL shouldAutoPaste = [self shouldAutoPasteProcessedText];
     BOOL accessOK = [self.permissionManager isAccessibilityGranted];
-    BOOL canAutoPaste = shouldAutoPaste && accessOK;
+    BOOL targetOK = [self frontmostAppMatchesTargetPid:self.pasteTargetPid
+                                               unbound:self.pasteTargetUnbound];
+    BOOL canAutoPaste = shouldAutoPaste && accessOK && targetOK;
     NSLog(@"[Koe] Accessibility granted: %@", accessOK ? @"YES" : @"NO");
 
     if (canAutoPaste) {
@@ -691,13 +773,27 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
         [self.clipboardManager writeText:text];
 
         BOOL autoReturn = configFlagEnabled("paste.auto_return");
-        [self.pasteManager simulatePasteWithValidator:^BOOL { return YES; } completion:^{
-            NSLog(@"[Koe] Paste completion callback fired");
-            if (autoReturn) {
-                [self.pasteManager simulateReturnKey];
-            }
-            [self.clipboardRestorePolicy scheduleRestoreForCurrentSession];
+        [self.pasteManager simulatePasteWithGuard:guard completion:^(BOOL posted) {
+            // A newer session owns the clipboard and the UI now; this
+            // callback must not touch either. Checked BEFORE any side
+            // effect, not just before the UI updates.
             if (token != self.rustBridge.currentSessionToken) return;
+            NSLog(@"[Koe] Paste completion callback fired (posted=%d)", posted);
+            if (posted) {
+                // Return is only meaningful after the paste was actually
+                // injected — otherwise it would submit whatever was already
+                // in the target app's input field.
+                if (autoReturn) {
+                    [self.pasteManager simulateReturnKeyWithGuard:guard];
+                }
+                [self.clipboardRestorePolicy scheduleRestoreForCurrentSession];
+            } else {
+                // Nothing was injected. Leave the text on the clipboard so
+                // the user can paste manually; restoring the backup over it
+                // would throw the transcript away.
+                [self.clipboardManager cancelPendingRestore];
+                [self.overlayPanel showResultBadge:@"✓ Copied"];
+            }
             [self.statusBarManager updateState:@"idle"];
             [self showPromptTemplateButtonsIfNeededOrDismiss];
         }];
@@ -709,6 +805,10 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
         NSTimeInterval lingerDuration = 0;
         if (!shouldAutoPaste) {
             NSLog(@"[Koe] Auto-paste disabled — processed text copied to clipboard only");
+            showCopiedBadge = YES;
+            lingerDuration = kManualPasteResultLingerDuration;
+        } else if (!targetOK) {
+            NSLog(@"[Koe] Frontmost app changed since dictation started — text copied to clipboard only");
             showCopiedBadge = YES;
             lingerDuration = kManualPasteResultLingerDuration;
         } else {
@@ -856,6 +956,11 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     if (self.quitting || text.length == 0) return;
     if (!configFlagEnabled("experimental.paste_asr_first")) return;
     if (![self.permissionManager isAccessibilityGranted]) return;
+    if (![self frontmostAppMatchesTargetPid:self.pasteTargetPid
+                                    unbound:self.pasteTargetUnbound]) {
+        NSLog(@"[Koe] InstantPaste: frontmost app changed since dictation started — skipping");
+        return;
+    }
 
     NSLog(@"[Koe] InstantPaste: pasting raw ASR text (%lu chars)", (unsigned long)text.length);
     self.instantPastedText = text;
@@ -866,13 +971,26 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     [self.clipboardManager writeText:text];
 
     uint64_t token = self.rustBridge.currentSessionToken;
-    [self.pasteManager simulatePasteWithValidator:^BOOL { return YES; } completion:^{
+    [self.pasteManager simulatePasteWithGuard:[self injectionGuardForSessionToken:token]
+                                   completion:^(BOOL posted) {
+        // A newer session owns this state now — checked before any mutation
+        // so a stale callback cannot clear the new session's instant-paste
+        // bookkeeping or cancel its clipboard restore.
+        if (token != self.rustBridge.currentSessionToken) return;
+        if (!posted) {
+            // Nothing was pasted. Clear the instant-paste state so the
+            // normal final-text flow (which would otherwise treat the raw
+            // text as already delivered) performs the paste instead.
+            self.instantPastedText = nil;
+            [self.instantPasteGuard reset];
+            [self.clipboardManager cancelPendingRestore];
+            return;
+        }
         // The correction may have replaced the clipboard content already
         // (fast LLM); in that case the backup must not be restored over it.
         if (!self.instantPasteKeepClipboard) {
             [self.clipboardRestorePolicy scheduleRestoreForCurrentSession];
         }
-        if (token != self.rustBridge.currentSessionToken) return;
         // Only capture when the correction hasn't been handled yet.
         if ([text isEqualToString:self.instantPastedText]) {
             [self.instantPasteGuard captureAfterPasteWithRawText:text];
@@ -969,17 +1087,17 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     self.rawAsrFallbackInteractionActive = YES;
     [self.overlayPanel setRawAsrFallbackClickEnabled:YES];
 
-    // Assign the handler first: for modifier-only triggers the monitor runs
-    // a listen-only tap and only upgrades to a consuming tap while an Enter
-    // handler is installed, so canConsumeGlobalKeyEvents is meaningful only
-    // after this assignment.
+    // Assign the handler first: installing it arms the capture backend
+    // (Carbon hotkeys for modifier-only triggers, the consuming tap
+    // otherwise), so canConsumeHandlerKeyEvents is meaningful only after
+    // this assignment.
     __weak typeof(self) weakSelf = self;
     self.hotkeyMonitor.enterKeyHandler = ^BOOL{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return NO;
         return [strongSelf requestRawAsrFallbackFromUserAction:@"enter"];
     };
-    if (!self.hotkeyMonitor.canConsumeGlobalKeyEvents) {
+    if (!self.hotkeyMonitor.canConsumeHandlerKeyEvents) {
         self.hotkeyMonitor.enterKeyHandler = nil;
     }
 }
@@ -1084,11 +1202,11 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     self.sessionWantsAudioCapture = NO;
     self.hotkeyMonitor.suspended = YES;
 
-    // Stop the hotkey monitor FIRST, before any slow teardown (audio, Rust).
-    // While the monitor's event tap is alive, a blocked process stalls the
-    // session's keyboard stream: keystrokes get swallowed and WindowServer
-    // accumulates stale modifier state that it flushes as phantom
-    // FlagsChanged events when the tap dies (issues #57/#65).
+    // Stop the hotkey monitor FIRST, before any slow teardown (audio, Rust):
+    // while a CONSUMING tap is alive (non-modifier triggers), a blocked
+    // process would stall the session's keyboard stream for every app.
+    // (The historical phantom-keys-at-quit bug, issues #57/#65, turned out
+    // to be SPPermissionManager's leaked probe taps, not this teardown.)
     [self.hotkeyMonitor stop];
 
     // Cancel any pending session-end block so it cannot trigger a paste
@@ -1100,6 +1218,25 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
     [self.audioCaptureManager shutdown];
     [self.rustBridge cancelSession];
     [NSApp terminate:nil];
+}
+
+- (void)statusBarDidSelectToggleVoiceInput {
+    // Reuse the hotkey toggle path verbatim so a menu-driven session is
+    // indistinguishable from a tap-started one, and keep the hotkey state
+    // machine in sync so the trigger key stops (not restarts) this session.
+    if ([self.sessionState hasPrefix:@"recording"]) {
+        NSLog(@"[Koe] Voice input stopped from menu");
+        [self hotkeyMonitorDidDetectTapEnd];
+        [self.hotkeyMonitor resetToIdle];
+        return;
+    }
+    NSLog(@"[Koe] Voice input started from menu");
+    [self hotkeyMonitorDidBeginTrigger];
+    // Arm before starting: if the session fails to begin, the resetToIdle
+    // inside handleAudioCaptureError must be the last write to the state
+    // machine, otherwise it is left in a recording state with no session.
+    [self.hotkeyMonitor markExternalToggleRecording];
+    [self hotkeyMonitorDidDetectTapStart];
 }
 
 - (void)statusBarDidSelectAudioDeviceWithUID:(NSString *)uid {
@@ -1444,12 +1581,14 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
 
 #pragma mark - Number Key Monitoring
 
-- (void)startNumberKeyMonitoring {
+- (void)startNumberKeyMonitoringWithVisibleCount:(NSInteger)visibleCount {
     __weak typeof(self) weakSelf = self;
-    // Assign the handler first: for modifier-only triggers the monitor runs
-    // a listen-only tap and only upgrades to a consuming tap while a number
-    // handler is installed, so canConsumeGlobalKeyEvents is meaningful only
-    // after this assignment.
+    // Limit the capture to digits that actually map to a visible template so
+    // unassigned digits are never swallowed globally. Set BEFORE the handler:
+    // assigning the handler arms the capture backend (Carbon hotkeys for
+    // modifier-only triggers, the consuming tap otherwise), so
+    // canConsumeHandlerKeyEvents is meaningful only after that assignment.
+    self.hotkeyMonitor.numberKeyCaptureLimit = visibleCount;
     self.hotkeyMonitor.numberKeyHandler = ^BOOL(NSInteger number) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return NO;
@@ -1461,9 +1600,9 @@ static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue)
         return handled;
     };
 
-    if (!self.hotkeyMonitor.canConsumeGlobalKeyEvents) {
+    if (!self.hotkeyMonitor.canConsumeHandlerKeyEvents) {
         self.hotkeyMonitor.numberKeyHandler = nil;
-        NSLog(@"[Koe] Template selector visible (click-only; global number shortcuts unavailable without an active suppressing event tap)");
+        NSLog(@"[Koe] Template selector visible (click-only; global number shortcuts unavailable)");
         return;
     }
     NSLog(@"[Koe] Template selector visible (global number shortcuts active)");

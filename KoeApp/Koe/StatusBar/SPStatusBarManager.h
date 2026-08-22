@@ -13,6 +13,8 @@
 - (void)statusBarMenuDidClose;
 - (void)statusBarDidSelectAudioDeviceWithUID:(nullable NSString *)uid;
 - (void)statusBarDidToggleTranslationMode:(BOOL)enabled;
+/// Start a hands-free session when idle, end the running one while recording.
+- (void)statusBarDidSelectToggleVoiceInput;
 @end
 
 NS_ASSUME_NONNULL_BEGIN

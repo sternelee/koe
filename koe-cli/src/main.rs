@@ -362,7 +362,10 @@ async fn pull(model: &str) -> Result<(), String> {
 
 /// Resolve a provider-name argument against what this build supports.
 /// `None` falls back to the provider configured in ~/.koe/config.yaml.
-fn resolve_provider(cfg: &koe_core::config::Config, requested: Option<&str>) -> Result<String, String> {
+fn resolve_provider(
+    cfg: &koe_core::config::Config,
+    requested: Option<&str>,
+) -> Result<String, String> {
     let name = requested.unwrap_or(&cfg.asr.provider).to_string();
     let supported = asr_factory::supported_providers();
     if supported.contains(&name.as_str()) {
@@ -477,7 +480,12 @@ async fn transcribe(
 
 // ─── Dictionary ─────────────────────────────────────────────────────
 
-fn dict_suggest(min_count: usize, limit: usize, db: Option<&str>, json: bool) -> Result<(), String> {
+fn dict_suggest(
+    min_count: usize,
+    limit: usize,
+    db: Option<&str>,
+    json: bool,
+) -> Result<(), String> {
     let db_path = match db {
         Some(p) => std::path::PathBuf::from(p),
         None => koe_core::config::config_dir().join("history.db"),
@@ -540,7 +548,10 @@ fn dict_suggest(min_count: usize, limit: usize, db: Option<&str>, json: bool) ->
         println!("    example:  {}\n", s.example);
     }
     if total > suggestions.len() {
-        println!("  … and {} more (raise --limit)\n", total - suggestions.len());
+        println!(
+            "  … and {} more (raise --limit)\n",
+            total - suggestions.len()
+        );
     }
     println!("Add with: koe dict add <term> …  (nothing is added automatically)");
     Ok(())

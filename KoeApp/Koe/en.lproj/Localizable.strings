@@ -34,6 +34,9 @@
 "statusBar.permission.speechRecognition" = "  Speech Recognition: %@";
 "statusBar.permission.screenRecording" = "Screen Recording";
 
+"statusBar.menu.startVoiceInput" = "Start Voice Input";
+"statusBar.menu.stopVoiceInput" = "Stop Voice Input";
+
 "statusBar.menu.microphone" = "Microphone";
 "statusBar.menu.systemDefault" = "System Default";
 "statusBar.menu.unavailable" = "%@ (Unavailable)";

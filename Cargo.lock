@@ -1352,6 +1352,7 @@ dependencies = [
  "sherpa-onnx",
  "tokio",
  "tokio-tungstenite",
+ "url",
  "uuid",
  "whisper-rs",
 ]

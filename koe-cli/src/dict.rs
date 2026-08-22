@@ -142,8 +142,8 @@ pub fn is_candidate(r: &Replacement) -> bool {
 /// acronyms, or mixed CJK/Latin phrases. These rank above plain terms.
 pub fn is_distinctive(term: &str) -> bool {
     let has_upper = term.chars().any(|c| c.is_uppercase());
-    let has_digit_and_alpha = term.chars().any(|c| c.is_ascii_digit())
-        && term.chars().any(|c| c.is_alphabetic());
+    let has_digit_and_alpha =
+        term.chars().any(|c| c.is_ascii_digit()) && term.chars().any(|c| c.is_alphabetic());
     let has_cjk = term.chars().any(is_cjk);
     let has_latin = term.chars().any(|c| c.is_ascii_alphabetic());
     let has_hyphen_word = term.contains('-') && has_latin;
@@ -215,11 +215,9 @@ pub fn load_history_pairs(db_path: &Path) -> Result<Vec<(String, String)>, Strin
     if !db_path.exists() {
         return Err(format!("history database not found: {}", db_path.display()));
     }
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| format!("open {}: {e}", db_path.display()))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("open {}: {e}", db_path.display()))?;
 
     let mut stmt = conn
         .prepare(
@@ -291,7 +289,11 @@ mod tests {
 
     #[test]
     fn case_only_change_is_not_a_replacement() {
-        assert!(rep("deploy with cloudflare workers", "Deploy with Cloudflare Workers").is_empty());
+        assert!(rep(
+            "deploy with cloudflare workers",
+            "Deploy with Cloudflare Workers"
+        )
+        .is_empty());
     }
 
     #[test]
@@ -328,10 +330,26 @@ mod tests {
     #[test]
     fn aggregate_counts_and_filters_existing() {
         let reps = vec![
-            Replacement { asr: "安色皮克".into(), corrected: "Anthropic".into(), example: "Anthropic 发布".into() },
-            Replacement { asr: "安瑟皮克".into(), corrected: "Anthropic".into(), example: "用 Anthropic".into() },
-            Replacement { asr: "踹了".into(), corrected: "Trae".into(), example: "Trae 编辑器".into() },
-            Replacement { asr: "库背".into(), corrected: "Kube".into(), example: "Kube 部署".into() },
+            Replacement {
+                asr: "安色皮克".into(),
+                corrected: "Anthropic".into(),
+                example: "Anthropic 发布".into(),
+            },
+            Replacement {
+                asr: "安瑟皮克".into(),
+                corrected: "Anthropic".into(),
+                example: "用 Anthropic".into(),
+            },
+            Replacement {
+                asr: "踹了".into(),
+                corrected: "Trae".into(),
+                example: "Trae 编辑器".into(),
+            },
+            Replacement {
+                asr: "库背".into(),
+                corrected: "Kube".into(),
+                example: "Kube 部署".into(),
+            },
         ];
         let existing = vec!["Kube".to_string()];
         let suggestions = aggregate(reps, &existing, 2);
