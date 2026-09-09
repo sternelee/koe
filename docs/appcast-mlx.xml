@@ -5,6 +5,46 @@
     <description>Updates for the app with on-device MLX model support (Apple Silicon).</description>
     <language>en</language>
     <item>
+      <title>Version 1.0.32</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.32</link>
+      <description><![CDATA[
+<h3>Fixed</h3>
+<ul>
+<li><strong>Doubao IME no longer types everything twice.</strong> 1.0.31's reconnection fix switched to the official IME app's identity, and under that identity the server reports each result in two parallel tracks — the full transcript so far, plus per-segment entries the IME app uses for its own display. Koe still parsed the reply the old way and joined both tracks together, so saying "你好" pasted "你好，你好". Koe now reads just the full-transcript track. This also handles the server retroactively fixing punctuation across sentence boundaries (an early "你好。" becomes "你好，" once you keep talking), which could have duplicated text a second way. If you use Doubao IME, this update is required: 1.0.30 and earlier can no longer connect at all, and 1.0.31 duplicates every utterance.</li>
+</ul>
+      ]]></description>
+      <sparkle:version>33</sparkle:version>
+      <sparkle:shortVersionString>1.0.32</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 31 Aug 2026 12:35:53 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.32/Koe-MLX-macOS-arm64.zip"
+        sparkle:edSignature="2sgRZs8Wsos0Nm/x1BBcTE6pU72fYs56KVX13UrLN2Wm1VNYsoydmdfO8KeC2EHZZvxbtZHC16UJq6T5TKaBCg=="
+        length="33034421"
+        type="application/octet-stream" />
+    </item>
+    <item>
+      <title>Version 1.0.31</title>
+      <link>https://github.com/missuo/koe/releases/tag/v1.0.31</link>
+      <description><![CDATA[
+<h3>Fixed</h3>
+<ul>
+<li><strong>The built-in Doubao IME speech recognizer works again.</strong> It had stopped connecting. Device registration and the token fetch went through ByteDance hosts on the <code>snssdk.com</code> domain, which ad/tracking blocklists — and proxy rules like Surge or Clash — reject outright; and even when those hosts were reachable, recognition failed to start because the app key Koe used had been retired on the server. Koe now registers through the same endpoint the current Doubao IME app uses and authenticates with that app's current key, so it connects without needing any blocklist or proxy changes.</li>
+</ul>
+<h3>Changed</h3>
+<ul>
+<li><strong>Dictation can now be pasted into a different app than the one you started it in.</strong> Before, if the frontmost app changed between starting dictation and the text being ready — for example, you triggered it from a terminal but wanted the result in a chat box — Koe left the text on the clipboard instead of pasting. It now pastes into whichever app is frontmost when the text is ready. (A leftover paste from an earlier session still cannot fire into a newer one.)</li>
+</ul>
+      ]]></description>
+      <sparkle:version>32</sparkle:version>
+      <sparkle:shortVersionString>1.0.31</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sat, 29 Aug 2026 14:23:56 GMT</pubDate>
+      <enclosure url="https://github.com/missuo/koe/releases/download/v1.0.31/Koe-MLX-macOS-arm64.zip"
+        sparkle:edSignature="wRofM9pHRqiCPxZUhc462PtUX+rsZulwry/sr/4SjJe3Hle9VNt4Tr2c+cWNLYPdHSKmkrRFftZtC3YuvejWAg=="
+        length="33034424"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Version 1.0.30</title>
       <link>https://github.com/missuo/koe/releases/tag/v1.0.30</link>
       <description><![CDATA[

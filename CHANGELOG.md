@@ -2,6 +2,22 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.32 - 2026-08-31
+
+### Fixed
+
+- **Doubao IME no longer types everything twice.** 1.0.31's reconnection fix switched to the official IME app's identity, and under that identity the server reports each result in two parallel tracks — the full transcript so far, plus per-segment entries the IME app uses for its own display. Koe still parsed the reply the old way and joined both tracks together, so saying "你好" pasted "你好，你好". Koe now reads just the full-transcript track. This also handles the server retroactively fixing punctuation across sentence boundaries (an early "你好。" becomes "你好，" once you keep talking), which could have duplicated text a second way. If you use Doubao IME, this update is required: 1.0.30 and earlier can no longer connect at all, and 1.0.31 duplicates every utterance.
+
+## 1.0.31 - 2026-08-29
+
+### Fixed
+
+- **The built-in Doubao IME speech recognizer works again.** It had stopped connecting. Device registration and the token fetch went through ByteDance hosts on the `snssdk.com` domain, which ad/tracking blocklists — and proxy rules like Surge or Clash — reject outright; and even when those hosts were reachable, recognition failed to start because the app key Koe used had been retired on the server. Koe now registers through the same endpoint the current Doubao IME app uses and authenticates with that app's current key, so it connects without needing any blocklist or proxy changes.
+
+### Changed
+
+- **Dictation can now be pasted into a different app than the one you started it in.** Before, if the frontmost app changed between starting dictation and the text being ready — for example, you triggered it from a terminal but wanted the result in a chat box — Koe left the text on the clipboard instead of pasting. It now pastes into whichever app is frontmost when the text is ready. (A leftover paste from an earlier session still cannot fire into a newer one.)
+
 ## 1.0.30 - 2026-08-08
 
 ### Fixed

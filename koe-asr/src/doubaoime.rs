@@ -17,16 +17,26 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 // ─── Constants ─────────────────────────────────────────────────────
 
 const WEBSOCKET_URL: &str = "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws";
-const REGISTER_URL: &str = "https://log.snssdk.com/service/2/device_register/";
-const SETTINGS_URL: &str = "https://is.snssdk.com/service/settings/v3/";
+// Device registration endpoint. The official IME (1.3.7) moved this off
+// `log.snssdk.com` to `log-klink.zijieapi.com`; the old snssdk host is also on
+// common ad/tracking blocklists (e.g. Surge/Clash reject rules), so registration
+// there fails outright for many users. This host is not on those lists.
+const REGISTER_URL: &str = "https://log-klink.zijieapi.com/service/2/device_register/";
 const AID: u32 = 401734;
-const USER_AGENT: &str = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)";
+// Fixed ASR app key baked into the official Doubao IME (com.bytedance.android
+// .input.common.asr.api.IAsr). The IME sends this as the ASR WebSocket app key;
+// it is NOT the per-install `asr_config.app_key` that the settings endpoint
+// returns (that value is only a config default, and routing with it now fails
+// with "service discovery failure"). Kept in sync with the shipped app.
+const ASR_APP_KEY: &str = "OrnqKvSSrs";
+const APP_VERSION_CODE: &str = "100307013";
+const APP_VERSION_NAME: &str = "1.3.7";
+const USER_AGENT: &str = "com.bytedance.android.doubaoime/100307013 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)";
 
 const SAMPLE_RATE: u32 = 16000;
 const FRAME_DURATION_MS: u32 = 20;
 const SAMPLES_PER_FRAME: usize = (SAMPLE_RATE * FRAME_DURATION_MS / 1000) as usize; // 320
 const BYTES_PER_FRAME: usize = SAMPLES_PER_FRAME * 2; // 640
-const TOKEN_REFRESH_INTERVAL_MS: u64 = 12 * 60 * 60 * 1000;
 
 // ─── Protobuf Encoding/Decoding ────────────────────────────────────
 
@@ -224,21 +234,6 @@ struct DeviceCredentials {
     token_updated_at_ms: u64,
 }
 
-fn unix_timestamp_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn should_refresh_token(creds: &DeviceCredentials) -> bool {
-    if creds.token.is_empty() || creds.token_updated_at_ms == 0 {
-        return true;
-    }
-
-    unix_timestamp_ms().saturating_sub(creds.token_updated_at_ms) >= TOKEN_REFRESH_INTERVAL_MS
-}
-
 fn generate_cdid() -> String {
     Uuid::new_v4().to_string()
 }
@@ -355,10 +350,10 @@ fn build_register_body(cdid: &str, openudid: &str, clientudid: &str) -> serde_js
             "install_id": 0,
             "aid": AID,
             "app_name": "oime",
-            "version_code": 100102018,
-            "version_name": "1.1.2",
-            "manifest_version_code": 100102018,
-            "update_version_code": 100102018,
+            "version_code": 100307013,
+            "version_name": APP_VERSION_NAME,
+            "manifest_version_code": 100307013,
+            "update_version_code": 100307013,
             "channel": "official",
             "package": "com.bytedance.android.doubaoime",
             "device_platform": "android",
@@ -417,10 +412,10 @@ fn build_register_params(cdid: &str) -> Vec<(&'static str, String)> {
         ("channel", "official".into()),
         ("aid", AID.to_string()),
         ("app_name", "oime".into()),
-        ("version_code", "100102018".into()),
-        ("version_name", "1.1.2".into()),
-        ("manifest_version_code", "100102018".into()),
-        ("update_version_code", "100102018".into()),
+        ("version_code", APP_VERSION_CODE.into()),
+        ("version_name", APP_VERSION_NAME.into()),
+        ("manifest_version_code", APP_VERSION_CODE.into()),
+        ("update_version_code", APP_VERSION_CODE.into()),
         ("resolution", "1080*2400".into()),
         ("dpi", "420".into()),
         ("device_type", "Pixel 7 Pro".into()),
@@ -499,129 +494,35 @@ async fn register_device(http: &reqwest::Client) -> Result<DeviceCredentials> {
     })
 }
 
-async fn get_asr_token(http: &reqwest::Client, device_id: &str, cdid: &str) -> Result<String> {
-    use md5::{Digest, Md5};
-
-    let body_str = "body=null";
-    let mut hasher = Md5::new();
-    hasher.update(body_str.as_bytes());
-    let x_ss_stub = format!("{:X}", hasher.finalize());
-
-    let aid_str = AID.to_string();
-    let rticket = format!(
-        "{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    );
-    let params = vec![
-        ("device_platform", "android"),
-        ("os", "android"),
-        ("ssmix", "a"),
-        ("channel", "official"),
-        ("aid", aid_str.as_str()),
-        ("app_name", "oime"),
-        ("version_code", "100102018"),
-        ("version_name", "1.1.2"),
-        ("device_id", device_id),
-        ("cdid", cdid),
-        ("_rticket", rticket.as_str()),
-    ];
-
-    log::info!("[DoubaoIME] Fetching ASR token...");
-
-    let resp = http
-        .post(SETTINGS_URL)
-        .header("User-Agent", USER_AGENT)
-        .header("x-ss-stub", &x_ss_stub)
-        .query(&params)
-        .body(body_str)
-        .send()
-        .await
-        .map_err(|e| AsrError::Connection(format!("settings request: {e}")))?;
-
-    let status = resp.status();
-    let resp_text = resp
-        .text()
-        .await
-        .map_err(|e| AsrError::Connection(format!("settings read body: {e}")))?;
-
-    if !status.is_success() {
-        return Err(AsrError::Connection(format!(
-            "settings HTTP {status}: {resp_text}"
-        )));
+async fn ensure_credentials(credential_path: &Path) -> Result<DeviceCredentials> {
+    // Only a registered device_id is needed now — the ASR WebSocket authenticates
+    // with the fixed ASR_APP_KEY, so there is no per-install token to fetch or
+    // refresh (the old settings endpoint at is.snssdk.com returned only a config
+    // default and is itself on common ad/tracking blocklists). A cached device_id
+    // is reused indefinitely; registration only runs when the cache is missing.
+    if let Some(creds) = load_credentials(credential_path) {
+        if !creds.device_id.is_empty() {
+            log::info!(
+                "[DoubaoIME] Using cached device registration (device_id={})",
+                creds.device_id
+            );
+            return Ok(creds);
+        }
     }
 
-    let resp_json: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| AsrError::Connection(format!("settings parse JSON: {e}")))?;
-
-    let token = resp_json
-        .get("data")
-        .and_then(|d| d.get("settings"))
-        .and_then(|s| s.get("asr_config"))
-        .and_then(|a| a.get("app_key"))
-        .and_then(|k| k.as_str())
-        .ok_or_else(|| AsrError::Connection("settings: no asr_config.app_key".into()))?
-        .to_string();
-
-    log::info!("[DoubaoIME] ASR token acquired");
-    Ok(token)
-}
-
-async fn ensure_credentials(credential_path: &Path) -> Result<DeviceCredentials> {
-    // Device registration and token refresh carry credentials, so a redirect
-    // off the hardcoded https origin (or down to plain http) must fail rather
-    // than forward them. Same policy as the user-configurable endpoints.
+    // Registration carries device identifiers, so a redirect off the hardcoded
+    // https origin (or down to plain http) must fail rather than forward them.
     let http = reqwest::Client::builder()
         .redirect(crate::endpoint::validating_redirect_policy())
         .build()
         .map_err(|e| AsrError::Connection(format!("http client: {e}")))?;
-    let mut creds = if let Some(creds) = load_credentials(credential_path) {
-        if !creds.device_id.is_empty() {
-            creds
-        } else {
-            register_device(&http).await?
-        }
-    } else {
-        register_device(&http).await?
-    };
-
-    if !should_refresh_token(&creds) {
-        log::info!(
-            "[DoubaoIME] Using cached credentials (device_id={}, token_age={}s)",
-            creds.device_id,
-            unix_timestamp_ms().saturating_sub(creds.token_updated_at_ms) / 1000
-        );
-        return Ok(creds);
-    }
-
+    let creds = register_device(&http).await?;
+    save_credentials(credential_path, &creds)?;
     log::info!(
-        "[DoubaoIME] Refreshing ASR token for device_id={}",
-        creds.device_id
+        "[DoubaoIME] Device registered and cached to {}",
+        credential_path.display()
     );
-
-    match get_asr_token(&http, &creds.device_id, &creds.cdid).await {
-        Ok(token) => {
-            creds.token = token;
-            creds.token_updated_at_ms = unix_timestamp_ms();
-            save_credentials(credential_path, &creds)?;
-            log::info!(
-                "[DoubaoIME] Credentials saved to {}",
-                credential_path.display()
-            );
-            Ok(creds)
-        }
-        Err(err) => {
-            if !creds.token.is_empty() {
-                log::warn!("[DoubaoIME] Token refresh failed, falling back to cached token: {err}");
-                Ok(creds)
-            } else {
-                log::error!("[DoubaoIME] Token fetch failed and no cached token available: {err}");
-                Err(err)
-            }
-        }
-    }
+    Ok(creds)
 }
 
 // ─── Opus Encoder ──────────────────────────────────────────────────
@@ -841,9 +742,12 @@ impl AsrProvider for DoubaoImeProvider {
                     .join("doubaoime_credentials.json")
             });
 
-        // Ensure we have valid credentials
+        // Ensure we have a registered device (device_id is required server-side).
         let creds = ensure_credentials(&credential_path).await?;
-        self.token = creds.token.clone();
+        // The ASR WebSocket authenticates with a fixed app key baked into the
+        // official IME, not the per-install token that used to come from the
+        // settings endpoint. See ASR_APP_KEY.
+        self.token = ASR_APP_KEY.to_string();
         self.device_id = creds.device_id.clone();
 
         // Initialize Opus encoder
@@ -1116,46 +1020,53 @@ impl AsrProvider for DoubaoImeProvider {
                     return Ok(AsrEvent::Connected); // VAD start, no text yet
                 }
 
-                // Extract text from all results (segments) by concatenating,
-                // and use the LAST result's flags for event type determination.
-                // The results array may contain multiple segments: earlier ones
-                // are already confirmed, the last one is the active segment.
-                let mut text = String::new();
-                let mut is_interim = true;
-                let mut is_vad_finished = false;
-                let mut nonstream_result = false;
-
-                for r in results {
-                    if let Some(t) = r.get("text").and_then(|t| t.as_str()) {
-                        if !t.is_empty() {
-                            text.push_str(t);
-                        }
-                    }
-                    // Track flags from the last result (most recent segment)
-                    is_interim = r
-                        .get("is_interim")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
-                    is_vad_finished = r
-                        .get("is_vad_finished")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    nonstream_result = r
-                        .get("extra")
-                        .and_then(|e| e.get("nonstream_result"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                }
+                // The server sends two parallel tracks in `results`:
+                //   - results[0] is the cumulative transcript of the whole
+                //     session, re-punctuated across segment boundaries as
+                //     recognition improves (an utterance-final "。" becomes
+                //     "，" once the next sentence arrives).
+                //   - results[1..] are per-segment streaming entries tagged
+                //     with `extra.seq_id`, which the official IME uses for its
+                //     own incremental display.
+                // Concatenating the whole array therefore duplicates every
+                // utterance ("你好" pasted as "你好，你好" in v1.0.31); only
+                // results[0] carries the transcript we want, and its flags
+                // describe the message.
+                let first = match results.first() {
+                    Some(r) => r,
+                    None => return Ok(AsrEvent::Connected), // empty result
+                };
+                let text = first
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_interim = first
+                    .get("is_interim")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let is_vad_finished = first
+                    .get("is_vad_finished")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let nonstream_result = first
+                    .get("extra")
+                    .and_then(|e| e.get("nonstream_result"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
                 if text.is_empty() {
                     return Ok(AsrEvent::Connected); // empty result
                 }
 
-                // ── Segment-reset detection ──────────────────────────
-                // The API resets text when a new VAD segment begins.
-                // Detect this by checking if the text suddenly became
-                // much shorter than what we had, and isn't a prefix of
-                // the previous text (which would indicate a correction).
+                // ── Segment-reset safety net ─────────────────────────
+                // results[0] has been observed to always carry the full
+                // session transcript, so this should never fire; it is kept
+                // in case the server ever reverts to resetting the text when
+                // a new VAD segment begins (the behavior this heuristic was
+                // originally written for). Detect a reset by the text
+                // suddenly becoming much shorter than what we had while not
+                // being a prefix of it (which would indicate a correction).
                 if !self.last_segment_text.is_empty()
                     && text.len() < self.last_segment_text.len() / 2
                     && !self.last_segment_text.starts_with(&text)
@@ -1180,21 +1091,27 @@ impl AsrProvider for DoubaoImeProvider {
                     format!("{}{}", self.confirmed_text, text)
                 };
 
-                // Non-streaming (third-pass) or definite (second-pass) result
-                if nonstream_result || (!is_interim && is_vad_finished) {
+                // Session-terminal summary: sent once after input finishes,
+                // with the settled transcript. Only this message becomes
+                // Final. Mid-session three-pass (nonstream) results are NOT
+                // Final even though their text is settled for the audio so
+                // far: the server later re-punctuates across the segment
+                // boundary ("你好。" becomes "你好，" once the next sentence
+                // arrives), which defeats the aggregator's prefix-based final
+                // merge and duplicates the utterance. As Definite they are
+                // replaced wholesale by the next update instead.
+                if !is_interim && is_vad_finished {
                     log::info!("[DoubaoIME] Final: {} chars", full.chars().count());
                     log::debug!("[DoubaoIME] Final text: {full}");
                     // Do NOT bake `full` into confirmed_text here (tried in
-                    // v1.0.22, reverted): the server's results array often
-                    // still carries the earlier confirmed segments, so `text`
-                    // is already cumulative. confirmed_text must only grow via
-                    // the segment-reset heuristic above — baking finals made
-                    // every later message double the transcript
-                    // (confirmed + already-cumulative text).
+                    // v1.0.22, reverted): `text` is already cumulative, so
+                    // confirmed_text must only grow via the segment-reset
+                    // safety net above — baking finals made every later
+                    // message double the transcript.
                     return Ok(AsrEvent::Final(full));
                 }
 
-                if !is_interim {
+                if nonstream_result || !is_interim {
                     return Ok(AsrEvent::Definite(full));
                 }
 

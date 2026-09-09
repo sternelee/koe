@@ -114,6 +114,29 @@ async fn main() -> Result<(), koe_asr::AsrError> {
 
 ### Doubao IME (Free, No API Key Required)
 
+> **Compatibility note — the current provider is incompatible with older
+> releases (and vice versa).** The IME backend changed both its
+> authentication and its result format in 2026:
+>
+> - Authentication now uses the fixed app key baked into the official IME
+>   app, registered via `log-klink.zijieapi.com`. The per-install app key
+>   that older versions (≤ v1.0.30) fetched from the `snssdk.com` settings
+>   endpoint has been retired server-side, so those versions can no longer
+>   connect at all.
+> - Under the fixed app key, each `results` array carries **two parallel
+>   tracks**: `results[0]` is the cumulative transcript of the whole session
+>   (re-punctuated across segment boundaries as recognition improves), and
+>   `results[1..]` are per-segment streaming entries tagged with
+>   `extra.seq_id`, used by the official IME for incremental display.
+>   v1.0.31 authenticated with the new key but still parsed the array the
+>   old way — concatenating every entry — which duplicated each utterance
+>   ("你好" came out as "你好，你好"). The current provider reads only
+>   `results[0]` and is written for this two-track format exclusively; there
+>   is no fallback to the old single-track parsing.
+>
+> To inspect the live wire format (it has changed twice now), use the opt-in
+> harness in `tests/doubaoime_debug_test.rs`.
+
 ```rust
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoImeProvider, TranscriptAggregator};
 

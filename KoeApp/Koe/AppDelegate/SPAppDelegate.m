@@ -61,11 +61,6 @@
 // is still frontmost; otherwise the text stays on the clipboard (focus can
 // move during ASR/LLM processing, and pasting into whichever app happens to
 // be focused leaks the dictation).
-@property (nonatomic, assign) pid_t pasteTargetPid;
-// YES when the session deliberately has no destination app yet: it began
-// while Koe itself was frontmost (a status-bar-started dictation). Distinct
-// from "the frontmost app could not be determined", which fails closed.
-@property (nonatomic, assign) BOOL pasteTargetUnbound;
 @end
 
 static float SPTranslationPCM16PeakLevel(const void *buffer, uint32_t length) {
@@ -113,40 +108,21 @@ static BOOL configFlagEnabled(const char *keyPath) {
            [value isEqualToString:@"on"];
 }
 
-// YES when `targetPid` is still the frontmost app, i.e. the injection would
-// land in the app this dictation was started from.
+// A guard bound to ONE session's identity via its session token. Injections
+// scheduled by an older session carry that session's guard, so a newer session
+// (which bumps the token) can neither authorize nor be hijacked by them; the
+// guard also refuses to fire while the app is quitting.
 //
-// Fails CLOSED for a bound session: a frontmost app that cannot be
-// identified, or a different one, blocks injection and the text stays on the
-// clipboard. Injecting into the wrong app is the failure mode worth avoiding
-// (dictation leaking elsewhere, or an auto-Return executing text in a
-// terminal).
-//
-// `unbound` sessions began with Koe itself frontmost (status-bar dictation),
-// so they have no destination to compare against and inject as they always
-// have — blocking those would break that flow entirely.
-- (BOOL)frontmostAppMatchesTargetPid:(pid_t)targetPid unbound:(BOOL)unbound {
-    if (unbound) return YES;
-    NSRunningApplication *frontApp = [NSWorkspace sharedWorkspace].frontmostApplication;
-    if (!frontApp) return NO;
-    pid_t front = frontApp.processIdentifier;
-    return front != 0 && front == targetPid;
-}
-
-// A guard bound to ONE session's identity: the destination it captured and
-// the session token it belongs to. Injections scheduled by an older session
-// carry that session's guard, so a newer session (which overwrites the
-// delegate's target properties) can neither authorize nor be hijacked by
-// them.
+// Koe intentionally does NOT restrict injection to the app that was frontmost
+// when dictation began. Starting a session in one app and pasting into another
+// (dictate from a terminal, paste into a chat box) is a normal, supported
+// workflow, so the paste lands in whatever app is frontmost at injection time.
 - (SPPasteInjectionGuard)injectionGuardForSessionToken:(uint64_t)token {
     __weak typeof(self) weakSelf = self;
-    pid_t targetPid = self.pasteTargetPid;
-    BOOL unbound = self.pasteTargetUnbound;
     return ^BOOL{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || strongSelf.quitting) return NO;
-        if (token != strongSelf.rustBridge.currentSessionToken) return NO;
-        return [strongSelf frontmostAppMatchesTargetPid:targetPid unbound:unbound];
+        return token == strongSelf.rustBridge.currentSessionToken;
     };
 }
 
@@ -551,15 +527,6 @@ static BOOL SPLabFlag(const char *name) {
     // value governing this session; edits apply from the next session.
     [self.clipboardRestorePolicy
         captureSessionRestoreDelayMs:sp_core_get_clipboard_config().restore_delay_ms];
-    // Koe itself is never a paste target: a session begun while Koe is
-    // frontmost (status-bar menu) has no destination yet, so mark it
-    // explicitly unbound rather than recording a PID that can never match.
-    // A frontmost app that cannot be identified at all is NOT unbound — it
-    // stays a bound session with an unknown target, which fails closed.
-    NSRunningApplication *frontApp = [NSWorkspace sharedWorkspace].frontmostApplication;
-    pid_t front = frontApp ? frontApp.processIdentifier : 0;
-    self.pasteTargetUnbound = (frontApp != nil && front == getpid());
-    self.pasteTargetPid = self.pasteTargetUnbound ? 0 : front;
     self.loggedFirstRecognitionForActivation = NO;
     self.recognitionMetricActivationSequence = self.audioCaptureManager.activationSequence;
     self.recognitionMetricSessionToken = self.rustBridge.currentSessionToken;
@@ -757,9 +724,7 @@ static BOOL SPLabFlag(const char *name) {
     SPPasteInjectionGuard guard = [self injectionGuardForSessionToken:token];
     BOOL shouldAutoPaste = [self shouldAutoPasteProcessedText];
     BOOL accessOK = [self.permissionManager isAccessibilityGranted];
-    BOOL targetOK = [self frontmostAppMatchesTargetPid:self.pasteTargetPid
-                                               unbound:self.pasteTargetUnbound];
-    BOOL canAutoPaste = shouldAutoPaste && accessOK && targetOK;
+    BOOL canAutoPaste = shouldAutoPaste && accessOK;
     NSLog(@"[Koe] Accessibility granted: %@", accessOK ? @"YES" : @"NO");
 
     if (canAutoPaste) {
@@ -805,10 +770,6 @@ static BOOL SPLabFlag(const char *name) {
         NSTimeInterval lingerDuration = 0;
         if (!shouldAutoPaste) {
             NSLog(@"[Koe] Auto-paste disabled — processed text copied to clipboard only");
-            showCopiedBadge = YES;
-            lingerDuration = kManualPasteResultLingerDuration;
-        } else if (!targetOK) {
-            NSLog(@"[Koe] Frontmost app changed since dictation started — text copied to clipboard only");
             showCopiedBadge = YES;
             lingerDuration = kManualPasteResultLingerDuration;
         } else {
@@ -956,11 +917,6 @@ static BOOL SPLabFlag(const char *name) {
     if (self.quitting || text.length == 0) return;
     if (!configFlagEnabled("experimental.paste_asr_first")) return;
     if (![self.permissionManager isAccessibilityGranted]) return;
-    if (![self frontmostAppMatchesTargetPid:self.pasteTargetPid
-                                    unbound:self.pasteTargetUnbound]) {
-        NSLog(@"[Koe] InstantPaste: frontmost app changed since dictation started — skipping");
-        return;
-    }
 
     NSLog(@"[Koe] InstantPaste: pasting raw ASR text (%lu chars)", (unsigned long)text.length);
     self.instantPastedText = text;
