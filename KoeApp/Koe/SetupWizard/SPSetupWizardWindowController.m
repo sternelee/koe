@@ -6539,10 +6539,20 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     NSMutableDictionary *copy = [profile mutableCopy] ?: [NSMutableDictionary dictionary];
     NSDictionary *mlx = copy[@"mlx"];
     copy[@"mlx"] = [mlx isKindOfClass:[NSDictionary class]] ? [mlx mutableCopy] : [@{@"model": @"mlx/Qwen3-0.6B-4bit"} mutableCopy];
-    NSString *chatPath = [copy[@"chat_completions_path"] isKindOfClass:[NSString class]] ? copy[@"chat_completions_path"] : @"";
-    if (chatPath.length == 0) {
-        copy[@"chat_completions_path"] = kDefaultLlmChatCompletionsPath;
+    NSString *endpointPath =
+        [copy[@"endpoint_path"] isKindOfClass:[NSString class]]
+            ? copy[@"endpoint_path"]
+            : @"";
+    if (endpointPath.length == 0) {
+        endpointPath =
+            [copy[@"chat_completions_path"] isKindOfClass:[NSString class]]
+                ? copy[@"chat_completions_path"]
+                : @"";
     }
+    [copy removeObjectForKey:@"chat_completions_path"];
+    copy[@"endpoint_path"] = endpointPath.length > 0
+        ? endpointPath
+        : kDefaultLlmChatCompletionsPath;
     return copy;
 }
 
@@ -6553,7 +6563,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         @"base_url": @"https://api.openai.com/v1",
         @"api_key": @"",
         @"model": @"gpt-5.4-nano",
-        @"chat_completions_path": kDefaultLlmChatCompletionsPath,
+        @"endpoint_path": kDefaultLlmChatCompletionsPath,
         @"max_token_parameter": @"max_completion_tokens",
         @"no_reasoning_control": @"reasoning_effort",
         @"mlx": @{@"model": @"mlx/Qwen3-0.6B-4bit"},
@@ -6567,7 +6577,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         @"base_url": @"http://127.0.0.1:11434/v1",
         @"api_key": @"",
         @"model": @"apple-foundationmodel",
-        @"chat_completions_path": kDefaultLlmChatCompletionsPath,
+        @"endpoint_path": kDefaultLlmChatCompletionsPath,
         @"max_token_parameter": @"max_tokens",
         @"no_reasoning_control": @"none",
         @"mlx": @{@"model": @"mlx/Qwen3-0.6B-4bit"},
@@ -6581,7 +6591,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         @"base_url": @"",
         @"api_key": @"",
         @"model": @"",
-        @"chat_completions_path": kDefaultLlmChatCompletionsPath,
+        @"endpoint_path": kDefaultLlmChatCompletionsPath,
         @"max_token_parameter": @"max_completion_tokens",
         @"no_reasoning_control": @"none",
         @"mlx": @{@"model": @"mlx/Qwen3-0.6B-4bit"},
@@ -6698,7 +6708,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     profile[@"api_key"] = apiKey ?: @"";
     profile[@"model"] = self.llmModelField.stringValue ?: @"";
     NSString *chatPath = [[self.llmChatCompletionsPathField.stringValue ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
-    profile[@"chat_completions_path"] = (chatPath.length > 0) ? chatPath : kDefaultLlmChatCompletionsPath;
+    profile[@"endpoint_path"] = (chatPath.length > 0) ? chatPath : kDefaultLlmChatCompletionsPath;
     profile[@"max_token_parameter"] = self.maxTokenParamPopup.selectedItem.representedObject ?: @"max_completion_tokens";
     if (!profile[@"no_reasoning_control"]) {
         BOOL usesReasoningEffort = [provider isEqualToString:@"openai"];
@@ -6732,9 +6742,9 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     self.llmApiKeyToggle.image = [NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:KoeLocalizedString(@"setupWizard.common.show")];
     self.llmApiKeyToggle.tag = 0;
     self.llmModelField.stringValue = [profile[@"model"] isKindOfClass:[NSString class]] ? profile[@"model"] : @"";
-    NSString *chatPath = [profile[@"chat_completions_path"] isKindOfClass:[NSString class]]
-        ? profile[@"chat_completions_path"] : kDefaultLlmChatCompletionsPath;
-    self.llmChatCompletionsPathField.stringValue = chatPath.length > 0 ? chatPath : kDefaultLlmChatCompletionsPath;
+    NSString *endpointPath = [profile[@"endpoint_path"] isKindOfClass:[NSString class]]
+        ? profile[@"endpoint_path"] : kDefaultLlmChatCompletionsPath;
+    self.llmChatCompletionsPathField.stringValue = endpointPath.length > 0 ? endpointPath : kDefaultLlmChatCompletionsPath;
 
     NSString *maxTokenParam = [profile[@"max_token_parameter"] isKindOfClass:[NSString class]]
         ? profile[@"max_token_parameter"] : @"max_completion_tokens";
@@ -7296,130 +7306,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
   shouldRollbackConfig = YES;
   BOOL saveOk = YES;
 
-  // Update ASR fields (always save — fields may be nil if pane not visited,
-  // check first)
-  if (self.asrAppKeyField) {
-    NSString *selectedProvider =
-        self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
-    saveOk &= configSet(@"asr.provider", selectedProvider);
-    // Save Doubao fields based on auth mode
-    BOOL isNewConsoleMode = (self.asrAuthModeControl.selectedSegment == 0);
-    if (isNewConsoleMode) {
-      NSString *apiKey = self.asrApiKeyToggle.tag == 1
-                             ? self.asrApiKeyField.stringValue
-                             : self.asrApiKeySecureField.stringValue;
-      saveOk &= configSet(@"asr.doubao.api_key", apiKey);
-      saveOk &= configSet(@"asr.doubao.app_key", @"");
-      saveOk &= configSet(@"asr.doubao.access_key", @"");
-    } else {
-      saveOk &= configSet(@"asr.doubao.api_key", @"");
-      saveOk &=
-          configSet(@"asr.doubao.app_key", self.asrAppKeyField.stringValue);
-      NSString *accessKey = self.asrAccessKeyToggle.tag == 1
-                                ? self.asrAccessKeyField.stringValue
-                                : self.asrAccessKeySecureField.stringValue;
-      saveOk &= configSet(@"asr.doubao.access_key", accessKey);
-    }
-    // Save language only when Doubao is selected (DoubaoIME server ignores it)
-    if ([selectedProvider isEqualToString:@"doubao"]) {
-      NSString *langValue =
-          self.asrLanguagePopup.selectedItem.representedObject ?: @"";
-      saveOk &= configSet(@"asr.doubao.language", langValue);
-    }
-    // Save Doubao advanced settings only when Doubao is selected
-    if ([selectedProvider isEqualToString:@"doubao"]) {
-      NSString *endWindowValue = self.asrEndWindowField.stringValue;
-      saveOk &= configSet(@"asr.doubao.end_window_size",
-                          endWindowValue.length > 0 ? endWindowValue : @"");
-      NSString *variantValue =
-          self.asrOutputVariantPopup.selectedItem.representedObject ?: @"";
-      saveOk &= configSet(@"asr.doubao.output_zh_variant", variantValue);
-      NSString *accelerateValue =
-          (self.asrAccelerateCheckbox.state == NSControlStateValueOn)
-              ? @"true"
-              : @"false";
-      if ([self shouldPersistBooleanValue:
-                    self.asrAccelerateCheckbox.state == NSControlStateValueOn
-                                  forKey:@"asr.doubao.enable_accelerate_text"]) {
-        saveOk &=
-            configSet(@"asr.doubao.enable_accelerate_text", accelerateValue);
-      }
-    }
-    // Save Qwen fields
-    NSString *qwenApiKey = self.asrQwenApiKeyToggle.tag == 1
-                               ? self.asrQwenApiKeyField.stringValue
-                               : self.asrQwenApiKeySecureField.stringValue;
-    saveOk &= configSet(@"asr.qwen.api_key", qwenApiKey);
-    // Save GLM fields
-    NSString *glmApiKey = self.asrGlmApiKeyToggle.tag == 1
-                              ? self.asrGlmApiKeyField.stringValue
-                              : self.asrGlmApiKeySecureField.stringValue;
-    saveOk &= configSet(@"asr.glm.api_key", glmApiKey);
-    // Save MiMo fields
-    NSString *mimoApiKey = self.asrMimoApiKeyToggle.tag == 1
-                               ? self.asrMimoApiKeyField.stringValue
-                               : self.asrMimoApiKeySecureField.stringValue;
-    saveOk &= configSet(@"asr.mimo.api_key", mimoApiKey);
-    // Save Apple Speech locale
-    if ([selectedProvider isEqualToString:@"apple-speech"]) {
-      NSString *locale =
-          self.appleSpeechLocalePopup.selectedItem.representedObject;
-      saveOk &= configSet(@"asr.apple-speech.locale", locale);
-    }
-    // Save local model selection
-    if ([selectedProvider isEqualToString:@"mlx"]) {
-      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-      if (modelPath)
-        saveOk &= configSet(@"asr.mlx.model", modelPath);
-    } else if ([selectedProvider isEqualToString:@"sherpa-onnx"]) {
-      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-      if (modelPath)
-        saveOk &= configSet(@"asr.sherpa-onnx.model", modelPath);
-    } else if ([selectedProvider isEqualToString:@"wetype"]) {
-      NSString *modelPath = self.localModelPopup.selectedItem.representedObject;
-      if (modelPath)
-        saveOk &= configSet(@"asr.wetype.model", modelPath);
-    }
-  }
-
-  // Update LLM fields
-  if (self.llmEnabledCheckbox) {
-    NSString *enabledStr =
-        (self.llmEnabledCheckbox.state == NSControlStateValueOn) ? @"true"
-                                                                 : @"false";
-    if ([self shouldPersistBooleanValue:
-                  self.llmEnabledCheckbox.state == NSControlStateValueOn
-                                forKey:@"llm.enabled"]) {
-      saveOk &= configSet(@"llm.enabled", enabledStr);
-    }
-    BOOL autoPasteProcessedText =
-        self.llmAutoPasteProcessedTextSwitch.state == NSControlStateValueOn;
-    if ([self shouldPersistBooleanValue:autoPasteProcessedText
-                                 forKey:@"llm.auto_paste_processed_text"]) {
-      saveOk &= configSet(@"llm.auto_paste_processed_text",
-                          autoPasteProcessedText ? @"true" : @"false");
-    }
-
-    NSString *configPath = configFilePath();
-    BOOL configExisted = [[NSFileManager defaultManager] fileExistsAtPath:configPath];
-    NSString *originalConfigSnapshot = [NSString stringWithContentsOfFile:configPath
-                                                                 encoding:NSUTF8StringEncoding
-                                                                    error:nil] ?: @"";
-    __block BOOL shouldRollbackConfig = NO;
-    void (^rollbackConfigIfNeeded)(void) = ^{
-        if (!shouldRollbackConfig) {
-            return;
-        }
-
-        NSError *rollbackError = nil;
-        if (!restoreConfigSnapshot(originalConfigSnapshot, configExisted, &rollbackError)) {
-            NSLog(@"[Koe] Failed to restore config snapshot: %@", rollbackError.localizedDescription);
-        }
-        [self.rustBridge reloadConfig];
-    };
-
-    shouldRollbackConfig = YES;
-    BOOL saveOk = YES;
 
     if (self.asrAppKeyField) {
         NSString *selectedProvider = self.asrProviderPopup.selectedItem.representedObject ?: @"doubaoime";
@@ -7530,7 +7416,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
         };
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
         NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : nil;
-        if (!json || sp_llm_save_profiles_json(json.UTF8String) != 0) {
+        if (!json) {
+            NSLog(@"[Koe] Failed to serialize LLM profiles for settings save.");
+            saveOk = NO;
+        } else if (sp_llm_save_profiles_json(json.UTF8String) != 0) {
             saveOk = NO;
         }
     }
@@ -7654,7 +7543,7 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
     if (!saveOk) {
         rollbackConfigIfNeeded();
         [self showAlert:@"Some settings failed to save"
-                   info:@"Check that ~/.koe/config.yaml is writable and try again."];
+                   info:@"Could not save one or more settings. Check Console for the failing key or reason, then try again."];
         return;
     }
 
@@ -7699,7 +7588,6 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType, const char 
 
     [self hideRuntimeOverlayPreview];
     [self.window close];
-}
 }
 
 - (void)cancelSetup:(id)sender {

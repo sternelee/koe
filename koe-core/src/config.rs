@@ -2660,6 +2660,35 @@ mod tests {
     }
 
     #[test]
+    fn llm_profile_payload_round_trips_only_the_canonical_endpoint_path() {
+        let payload: LlmProfilesPayload = serde_json::from_value(serde_json::json!({
+            "active_profile": "custom",
+            "profiles": {
+                "custom": { "chat_completions_path": "/custom/chat" }
+            }
+        }))
+        .unwrap();
+        assert_eq!(payload.profiles["custom"].endpoint_path, "/custom/chat");
+
+        let serialized = serde_json::to_value(&payload).unwrap();
+        let profile = &serialized["profiles"]["custom"];
+        assert_eq!(profile["endpoint_path"], "/custom/chat");
+        assert!(profile.get("chat_completions_path").is_none());
+        serde_json::from_value::<LlmProfilesPayload>(serialized).unwrap();
+
+        let duplicate_alias = serde_json::json!({
+            "active_profile": "custom",
+            "profiles": {
+                "custom": {
+                    "endpoint_path": "/custom/chat",
+                    "chat_completions_path": "/custom/chat"
+                }
+            }
+        });
+        assert!(serde_json::from_value::<LlmProfilesPayload>(duplicate_alias).is_err());
+    }
+
+    #[test]
     fn empty_endpoint_uses_each_protocol_default() {
         for (protocol, expected) in [
             (LlmApiProtocol::OpenaiChat, "/chat/completions"),

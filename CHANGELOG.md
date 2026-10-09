@@ -7,6 +7,8 @@ All notable user-facing changes to Koe are documented here.
 ### Fixed
 
 - **The live caption now always shows up over full-screen apps.** If you switched Spaces while the caption was still on screen — for example, it was lingering after a paste and you swiped into a full-screen app — macOS could leave it stuck on the previous Space. The next time you dictated, the caption was invisible until you switched windows. Koe now moves the caption (and the template buttons) to the Space you are on before showing it, and again whenever you switch Spaces while it is visible.
+- **Settings now roll back as one transaction.** A failed save no longer restores a snapshot taken after some configuration fields had already been written, avoiding partially persisted settings alongside a failure alert.
+- **LLM profiles save their endpoint path under one canonical field.** Settings previously added the legacy `chat_completions_path` alias beside `endpoint_path`, which Rust correctly rejected as a duplicate field; the alias is now normalized away before saving.
 
 ## 1.0.32 - 2026-08-31
 
